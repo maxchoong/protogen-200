@@ -1,211 +1,115 @@
 # Progress – Granular Task List
 
-## Phase 1: Skeleton MVP ✅ COMPLETE
+## Overall Status
 
-### Phase 1 Deliverables
-- ✅ Frontend: React + TypeScript + Vite + Tailwind CSS initialized
-- ✅ Backend: Node.js + TypeScript + Express initialized
-- ✅ Home page with free-text input and preference panel
-- ✅ Results page with mock recommendation card layout
-- ✅ Basic POST /recommendations endpoint returning mock data
-- ✅ Frontend-backend wiring with API proxy
-- ✅ Both servers running successfully
-
-**Status:** Both applications running on localhost. Ready for Phase 2 integration.
+- [x] Phase 1 complete: frontend/backend skeleton and API wiring
+- [x] Phase 2 complete: OMDb catalog integration and safety filters
+- [x] Phase 3 complete: GitHub Models integration with fallback
+- [x] Phase 4 complete: availability, trailers, loading/error states, accessibility work
+- [ ] Documentation fully aligned with current implementation
+- [x] Frontend lint configuration added
+- [ ] TMDB configured locally for trailer verification
 
 ---
 
-## User Story 1 – Free‑Text Description Input
+## Phase 1 – Skeleton MVP
 
-### Frontend Tasks
-- [x] Create home page layout
-  - [x] Base page structure (header, main content, footer)
-  - [x] Responsive layout (single column mobile, centered content desktop)
-- [x] Implement free-text input
-  - [x] Add textarea/input with helpful placeholder
-  - [x] Enforce character limit (200–500)
-  - [x] Optional character counter
-  - [x] Validation for minimum length (≥ 3 chars) unless questions-only flow
-- [x] Submission UX
-  - [x] Add "Get recommendations" button
-  - [x] Disable button + show inline error if invalid
-  - [x] On submit, call `POST /recommendations` with description + preferences
-  - [x] Show loading state while waiting
-
-### Backend Tasks
-- [x] Implement `POST /recommendations` skeleton
-  - [x] Validate request body (description or preferences required)
-  - [x] Return 400 on invalid input
-  - [x] Return dummy data initially (for frontend integration)
-- [x] Logging/Telemetry
-  - [x] Log anonymized/truncated queries for debugging (no PII)
+- [x] React + TypeScript + Vite frontend initialized
+- [x] Node.js + TypeScript + Express backend initialized
+- [x] Home page with free-text input and optional preferences panel
+- [x] Results page shell implemented
+- [x] `POST /recommendations` endpoint wired to frontend
+- [x] Frontend proxy configured for local development
 
 ---
 
-## User Story 2 – Preference Questions
+## Phase 2 – Catalog Integration
 
-### Frontend Tasks
-- [x] Add "Answer quick questions" panel on home page
-  - [x] Button to expand/collapse preferences panel
-- [x] Implement preference controls
-  - [x] Genre multi-select chips
-  - [x] Mood multi-select chips
-  - [x] Type selector (Movies / TV Shows / Both)
-  - [x] Rating preference control (default excludes unrated/X)
-- [x] Interaction & state
-  - [x] All questions optional (no required validation)
-  - [x] Allow user to change answers before submit
-  - [x] Persist answers in component state
-- [x] Integrate with submission
-  - [x] Include `preferences` object in `POST /recommendations`
-  - [x] Support questions-only flow (no description)
+### Catalog
+- [x] Evaluate catalog options and move from FM-DB plan to OMDb implementation
+- [x] Implement OMDb client in `backend/src/clients/fmdb.ts`
+- [x] Search titles by query and type
+- [x] Fetch title details by IMDb ID
+- [x] Convert OMDb payloads into internal recommendation format
+- [x] Handle timeouts and upstream failures gracefully
 
-### Backend Tasks
-- [x] Define `preferences` schema
-  - [x] Genres, mood, type, max rating, etc.
-  - [x] Validate against allowed values
-- [ ] Map preferences to catalog representation
-  - [ ] Map UI genres to catalog genre IDs
-  - [ ] Map mood to tags/keywords if used
+### Recommendation Engine
+- [x] Implement rule-based preference parser
+- [x] Extract search terms from user description
+- [x] Search OMDb across multiple candidate terms
+- [x] Deduplicate by IMDb ID
+- [x] Rank results by genre fit and IMDb rating
+- [x] Return dynamic recommendations instead of mock-only data
+
+### Content Safety
+- [x] Filter adult and unsafe content
+- [x] Block unrated / X / NC-17 / TV-MA style results in backend filtering
+- [x] Log filtering behavior for debugging
 
 ---
 
-## User Story 3 – Recommendations List & "Why this?"
+## Phase 3 – LLM Integration
 
-### Backend Tasks
-- [ ] LLM integration for input parsing
-  - [ ] Choose LLM provider & SDK
-  - [ ] Implement `parseUserPreferences(description, preferences)`
-    - [ ] Build system + user prompt
-    - [ ] Call LLM, parse JSON
-    - [ ] Validate and handle errors
-  - [ ] Implement rule-based fallback if LLM fails
-- [ ] Catalog integration
-  - [ ] Get API key, configure env vars
-  - [ ] Implement catalog client: search/discover endpoints, genre/type filters, adult/unrated/X filters
-  - [ ] Implement `fetchCandidateTitles(parsedPreferences, region)`
-- [ ] Filtering & ranking
-  - [ ] Implement filter to exclude: `adult = true` titles, unrated and X-rated content
-  - [ ] Implement scoring: genre match, mood/keyword match, similarity to reference titles, popularity/ratings
-  - [ ] Implement `rankTitles(candidates)` and return top 5–10
-- [ ] "Why this?" generation
-  - [ ] Define title context object (user prefs + title metadata)
-  - [ ] Implement `generateWhyThis(titleContext)`: LLM prompt, template fallback
-  - [ ] Batch LLM calls where possible
-- [ ] Shape API response
-  - [ ] Build `RecommendationResult` objects
-  - [ ] Handle "no results" with empty list + message
+### GitHub Models
+- [x] Add GitHub Models client using `gpt-4o-mini`
+- [x] Parse natural-language preferences with LLM enhancement
+- [x] Add batch explanation generation
+- [x] Add in-memory caching for LLM outputs
+- [x] Fall back to rule-based parsing and template explanations when LLM is unavailable
 
-### Frontend Tasks
-- [ ] Results page layout
-  - [ ] Results view with query summary
-  - [ ] Buttons: "Edit description", "Edit filters"
-- [ ] Recommendation card component
-  - [ ] Poster, title, year, type
-  - [ ] Synopsis text
-  - [ ] "Why this?" text
-  - [ ] Availability chips placeholder
-  - [ ] "Watch trailer" button
-- [ ] Loading & empty states
-  - [ ] Skeleton cards or spinner while loading
-  - [ ] Empty state message + actions if no results
+### Notes
+- [x] Use GitHub Models instead of OpenAI as the active integration
+- [x] Keep spoiler-safe synopsis generation implemented but not required for v1
 
 ---
 
-## User Story 4 – Where to Watch
+## Phase 4 – Availability & Polish
 
-### Backend Tasks
-- [ ] Evaluate availability API options
-  - [ ] Check if JustWatch or similar has usable free tier
-  - [ ] Decide: real integration vs fallback
-- [ ] Implement availability integration (if feasible)
-  - [ ] Client module to fetch availability per title/region
-  - [ ] Normalize to `{platform, availability_type, deeplink_url}`
-- [ ] Fallback strategy (if no real availability API)
-  - [ ] Generate generic search URLs (e.g., Google search "<title> watch")
-  - [ ] Mark availability as unknown when appropriate
-- [ ] Integrate into recommendation pipeline
-  - [ ] Fetch availability for each selected title (parallelized)
-  - [ ] Attach `availability` array to `RecommendationResult`
-  - [ ] Handle failures gracefully
+### Availability
+- [x] Evaluate availability providers
+- [x] Select Streaming Availability API via RapidAPI
+- [x] Implement streaming client in `backend/src/clients/streaming.ts`
+- [x] Fix integration to use `GET /shows/{imdbId}`
+- [x] Parse `streamingOptions.<country>[]` into platform/type/link objects
+- [x] Pass region from request into availability lookup
+- [x] Verify live availability data returned from backend
 
-### Frontend Tasks
-- [ ] Display availability
-  - [ ] Render platform chips with availability type
-  - [ ] If none, show "Where to watch: info not available"
-- [ ] Deeplink behavior
-  - [ ] Open `deeplink_url` in new tab
-  - [ ] Use `rel="noopener noreferrer"` for security
+### Trailer Support
+- [x] Extend TMDB client to fetch trailers by IMDb ID
+- [x] Add trailer URLs to recommendation responses when available
+- [x] Implement frontend trailer modal
+- [ ] Configure `TMDB_API_KEY` locally and verify trailer flow end-to-end
 
----
+### UX and Validation
+- [x] Support description-only flow
+- [x] Support preferences-only flow
+- [x] Reject empty requests with no description and no preferences
+- [x] Reject descriptions shorter than 3 characters when provided
+- [x] Infer region from browser locale in frontend
+- [x] Render availability deep-links in new tabs
+- [x] Show explicit "Availability info not available." fallback text
+- [x] Add loading and error states on home page
 
-## User Story 5 – Brief, Spoiler‑Free Description
-
-### Backend Tasks
-- [ ] Fetch catalog synopsis
-  - [ ] Extend catalog client to include overview/synopsis
-  - [ ] Add to internal `Title` object
-- [ ] LLM synopsis summarization
-  - [ ] Implement `generateSpoilerFreeSynopsis(catalogSynopsis, titleMetadata)`
-    - [ ] Prompt for 1–3 sentence premise, no twists/endings
-    - [ ] Enforce character limit (300–400 chars)
-  - [ ] Optional heuristic: check for spoiler phrases; re-generate if needed
-- [ ] Caching
-  - [ ] Cache `synopsis_short` per title ID
-
-### Frontend Tasks
-- [ ] Display synopsis
-  - [ ] Show `synopsis_short` on each card
-  - [ ] If missing, show "Description not available"
+### Accessibility and UI
+- [x] Improve ARIA labeling across interactive controls
+- [x] Add keyboard support for trailer modal
+- [x] Add focus styling and semantic structure on results page
+- [x] Keep responsive layout working on desktop and mobile
 
 ---
 
-## User Story 6 – Watch the Trailer
+## Current Verification
 
-### Backend Tasks
-- [ ] Trailer retrieval
-  - [ ] Extend catalog client to fetch videos/trailers
-  - [ ] Choose best trailer by type, language, region
-  - [ ] Add `trailer_url` to `RecommendationResult`
-- [ ] Fallback
-  - [ ] If no trailer, set `trailer_url` to null or omit
-
-### Frontend Tasks
-- [ ] Trailer button
-  - [ ] Show "Watch trailer" only if `trailer_url` present
-  - [ ] Hide or disable button otherwise (with tooltip)
-- [ ] Trailer modal
-  - [ ] Implement modal with embedded video (YouTube iframe)
-  - [ ] Ensure responsive and full-screen on mobile
-  - [ ] Add close button
+- [x] Backend build passes
+- [x] Frontend build passes
+- [x] Backend returns localized availability data for supported titles
+- [x] Frontend can render availability links and fallback messaging
+- [x] Frontend lint runs with current config (non-blocking TypeScript support warning only)
 
 ---
 
-## Cross‑Cutting Tasks
+## Open Follow-Ups
 
-### Content Safety & Rating Filters ⚠️ CRITICAL
-- [ ] Identify catalog rating fields & adult flags
-- [ ] Implement filter to exclude: `adult = true` titles, unrated and X-rated content
-- [ ] Add unit tests ensuring adult/unrated/X titles never appear
-
-### LLM Guardrails & Fallbacks
-- [ ] Centralize LLM calls in a dedicated module
-- [ ] Implement timeouts and retries
-- [ ] On failure: rule-based parsing for preferences, template "Why this?" explanation, truncated catalog synopsis
-
-### Caching & Performance
-- [ ] Implement caching layer: title metadata by ID, LLM synopsis per title
-- [ ] Parallelize external calls in recommendation pipeline
-- [ ] Add basic performance metrics/logging
-
-### UI/UX Polish
-- [ ] Global error banner for API errors
-- [ ] Apply shadcn/ui theme for consistent styling
-- [ ] Accessibility: labels for inputs, keyboard navigation for buttons and modals, contrast checks
-
-### Infrastructure & Setup
-- [ ] Initialize frontend project (React + TS + shadcn/ui)
-- [ ] Initialize backend (Node + TS)
-- [ ] Configure env vars for API keys (catalog, LLM, availability)
-- [ ] Set up basic deployment (Vercel/Netlify + simple backend host)
-- [ ] Add linting, formatting, and CI (build + tests)
+- [ ] Refresh setup and summary docs that still mention OpenAI or JustWatch-era assumptions
+- [ ] Refresh `Film_Advisor_App_AllDocs.md` narrative sections to match implemented architecture and status
+- [ ] Rotate exposed development secrets

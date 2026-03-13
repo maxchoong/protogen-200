@@ -10,9 +10,11 @@ interface HomePageProps {
       maxRating?: string
     }
   }) => void
+  loading?: boolean
+  error?: string | null
 }
 
-export default function HomePage({ onSubmit }: HomePageProps) {
+export default function HomePage({ onSubmit, loading = false, error = null }: HomePageProps) {
   const [description, setDescription] = useState('')
   const [showPreferences, setShowPreferences] = useState(false)
   const [preferences, setPreferences] = useState({
@@ -21,10 +23,15 @@ export default function HomePage({ onSubmit }: HomePageProps) {
     type: 'both' as 'movie' | 'tv' | 'both',
     maxRating: 'PG-13'
   })
-  const [loading, setLoading] = useState(false)
 
   const genres = ['Action', 'Comedy', 'Drama', 'Horror', 'Romance', 'Sci-Fi', 'Thriller', 'Animation']
   const moods = ['Happy', 'Sad', 'Intense', 'Relaxing', 'Funny', 'Thoughtful']
+
+  const hasSelectedPreferences =
+    preferences.genres.length > 0 ||
+    preferences.mood.length > 0 ||
+    preferences.type !== 'both' ||
+    preferences.maxRating !== 'PG-13'
 
   const handleToggleGenre = (genre: string) => {
     setPreferences(prev => ({
@@ -46,19 +53,17 @@ export default function HomePage({ onSubmit }: HomePageProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!description.trim()) {
-      alert('Please enter what you\'re looking for')
+    const trimmed = description.trim()
+    if (!trimmed && !hasSelectedPreferences) {
       return
     }
-    setLoading(true)
-    try {
-      onSubmit({
-        description: description.trim(),
-        preferences
-      })
-    } finally {
-      setLoading(false)
+    if (trimmed && trimmed.length < 3) {
+      return
     }
+    onSubmit({
+      description: trimmed,
+      preferences
+    })
   }
 
   return (
@@ -87,8 +92,10 @@ export default function HomePage({ onSubmit }: HomePageProps) {
               placeholder="e.g., A cozy romance on a rainy day, or an intense sci-fi thriller..."
               className="w-full px-4 py-3 bg-slate-700 text-white rounded-lg placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 h-32 resize-none"
               disabled={loading}
+              aria-invalid={description.length > 0 && description.trim().length < 3}
+              aria-describedby="char-count"
             />
-            <p className="text-sm text-slate-400 mt-2">
+            <p id="char-count" className="text-sm text-slate-400 mt-2">
               {description.length}/500 characters
             </p>
           </div>
@@ -98,19 +105,21 @@ export default function HomePage({ onSubmit }: HomePageProps) {
             type="button"
             onClick={() => setShowPreferences(!showPreferences)}
             className="text-blue-400 hover:text-blue-300 text-sm mb-4 underline"
+            aria-expanded={showPreferences}
+            aria-controls="preferences-panel"
           >
             {showPreferences ? 'Hide' : 'Show'} preference details
           </button>
 
           {/* Preferences Panel */}
           {showPreferences && (
-            <div className="bg-slate-700 rounded-lg p-6 mb-6 space-y-6">
+            <div id="preferences-panel" className="bg-slate-700 rounded-lg p-6 mb-6 space-y-6" role="region" aria-label="Preference options">
               {/* Genres */}
               <div>
                 <label className="block text-sm font-medium text-white mb-3">
                   Genres (optional)
                 </label>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2" role="group" aria-label="Genre selection">
                   {genres.map(genre => (
                     <button
                       key={genre}
@@ -122,6 +131,8 @@ export default function HomePage({ onSubmit }: HomePageProps) {
                           : 'bg-slate-600 text-slate-200 hover:bg-slate-500'
                       }`}
                       disabled={loading}
+                      aria-pressed={preferences.genres.includes(genre)}
+                      aria-label={`${genre} genre`}
                     >
                       {genre}
                     </button>
@@ -134,7 +145,7 @@ export default function HomePage({ onSubmit }: HomePageProps) {
                 <label className="block text-sm font-medium text-white mb-3">
                   Mood (optional)
                 </label>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2" role="group" aria-label="Mood selection">
                   {moods.map(mood => (
                     <button
                       key={mood}
@@ -146,6 +157,8 @@ export default function HomePage({ onSubmit }: HomePageProps) {
                           : 'bg-slate-600 text-slate-200 hover:bg-slate-500'
                       }`}
                       disabled={loading}
+                      aria-pressed={preferences.mood.includes(mood)}
+                      aria-label={`${mood} mood`}
                     >
                       {mood}
                     </button>
@@ -199,11 +212,36 @@ export default function HomePage({ onSubmit }: HomePageProps) {
           {/* Submit Button */}
           <button
             type="submit"
-            disabled={loading || !description.trim()}
+            disabled={loading || (!description.trim() && !hasSelectedPreferences) || (description.trim().length > 0 && description.trim().length < 3)}
             className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 disabled:opacity-50 text-white font-semibold py-3 px-6 rounded-lg transition-colors duration-200"
           >
             {loading ? 'Finding recommendations...' : 'Get Recommendations'}
           </button>
+
+          {description.trim().length > 0 && description.trim().length < 3 && (
+            <p className="mt-3 text-amber-300 text-sm" role="status" aria-live="polite">
+              Description must be at least 3 characters, or submit preferences only.
+            </p>
+          )}
+
+          {/* Error Message */}
+          {error && (
+            <div className="mt-4 p-4 bg-red-900 border border-red-700 rounded-lg">
+              <p className="text-red-100 text-sm">
+                <span className="font-semibold">Error:</span> {error}
+              </p>
+            </div>
+          )}
+
+          {/* Loading Indicator */}
+          {loading && (
+            <div className="mt-4 text-center">
+              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+              <p className="text-slate-300 mt-2 text-sm">
+                Analyzing your preferences with AI...
+              </p>
+            </div>
+          )}
         </form>
       </div>
     </div>

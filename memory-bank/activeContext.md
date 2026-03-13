@@ -2,149 +2,77 @@
 
 ## Project Status
 
-**Date:** February 10, 2026  
-**Phase:** Phase 2: Catalog Integration (Starting next)
-**Phase 1 Status:** ✅ COMPLETE – Skeleton MVP with mock data running
-
-### Phase 1 Completion Summary
-- ✅ Frontend: React + TypeScript + Vite + Tailwind running on localhost:5173
-- ✅ Backend: Node.js + TypeScript + Express running on localhost:5000
-- ✅ Home page with free-text input and preference panel
-- ✅ Results page with mock recommendation cards
-- ✅ POST /recommendations endpoint with mock data
-- ✅ Frontend-backend wiring complete
+**Date:** March 13, 2026  
+**Phase:** v1 implementation complete; documentation and final polish in progress  
+**Overall Progress:** Core recommendation flow, availability integration, and UI polish are implemented and working.
 
 ---
 
-## Completed Deliverables
+## Current Reality
 
-✅ **Product Requirements Document (PRD)**
-- Six user stories with acceptance criteria
-- Key user personas defined
-- Content safety requirements mandated
-
-✅ **Design Document**
-- System architecture (5 components)
-- Data model definition
-- UX/interaction design for home, preferences, results, and trailer pages
-- API endpoint specifications
-- LLM integration strategy (parsing, explanations, synopsis generation)
-- Performance, security, and compliance considerations
-
-✅ **Granular Task List**
-- 100+ tasks mapped to user stories
-- Frontend and backend tasks separated
-- Cross-cutting tasks (content safety, LLM guardrails, caching, UI polish, infrastructure)
-
-✅ **Memory Bank Files Created**
-- `projectbrief.md` – Executive summary
-- `productContext.md` – PRD and user stories
-- `techContext.md` – Architecture and implementation details
-- `systemPatterns.md` – Design patterns and module organization
-- `progress.md` – Granular task checklist
-- `activeContext.md` – This file
+- Frontend and backend are implemented and build successfully.
+- Backend runs on port 3000; frontend runs on port 5173.
+- OMDb is the active catalog source.
+- GitHub Models `gpt-4o-mini` is the active LLM integration with rule-based fallback.
+- Streaming Availability via RapidAPI is integrated and verified against the current `/shows/{imdbId}` endpoint.
+- TMDB trailer lookup code exists, but trailer data depends on a valid `TMDB_API_KEY` being configured.
 
 ---
 
-## Next Steps (Ready for Implementation)
+## Recently Verified
 
-### Phase 1: Skeleton MVP (Frontend + Backend Stub)
-1. Initialize React frontend project (TypeScript + shadcn/ui)
-2. Initialize Node.js backend (TypeScript + Express/Fastify)
-3. Create home page layout with input + preferences panel
-4. Create results page component (placeholder)
-5. Implement basic `POST /recommendations` endpoint (returns mock data)
-6. Wire up frontend submission to backend
-
-### Phase 2: Catalog Integration
-1. Set up TMDB API key and client
-2. Implement `CatalogClient` module
-3. Build query builder for genre, type, rating filters
-4. Implement content safety filters (adult, unrated, X)
-5. Connect to recommendation engine
-6. Test with real TMDB data
-
-### Phase 3: LLM Integration
-1. Choose LLM provider (OpenAI, Anthropic, or open-source)
-2. Set up LLM client with error handling + fallbacks
-3. Implement preference parsing from user input
-4. Implement "Why this?" generation
-5. Implement spoiler-free synopsis generation
-6. Add caching for LLM outputs
-
-### Phase 4: Availability & Polish
-1. Evaluate JustWatch API or implement fallback
-2. Integrate availability fetching
-3. Add trailer modal and playback
-4. UI polish, accessibility, error handling
-5. Performance tuning
-6. Testing and deployment setup
+- Questions-only flow works: requests may include preferences without a description.
+- Description validation works: if provided, description must be at least 3 characters.
+- Region is inferred from browser locale in the frontend and passed through to backend availability lookup.
+- Availability links open in a new tab and include an explicit fallback message when unavailable.
+- RapidAPI availability lookups return live data for supported titles and regions.
 
 ---
 
-## Key Architectural Decisions
+## Current Architecture Snapshot
 
-✅ **No user accounts** – Stateless backend, on-demand API calls, simple caching  
-✅ **TMDB as catalog** – Rich API, freely accessible, good coverage  
-✅ **Free-tier LLM** – Balance cost with quality; fallback patterns for reliability  
-✅ **Responsive web app** – Single SPA for desktop + mobile support  
-✅ **Content safety critical** – Filter at three levels: query, filtering, and unit tests  
-✅ **Parallelization for performance** – Batch LLM calls, parallel external API calls  
+### Backend
+- Node.js 20 + Express + TypeScript
+- Main endpoint: `POST /recommendations`
+- Recommendation engine pipeline:
+  1. Validate request
+  2. Parse preferences with rule-based logic
+  3. Optionally enhance parsing and explanations with GitHub Models
+  4. Search OMDb and enrich title details
+  5. Apply content-safety filtering
+  6. Rank results
+  7. Fetch streaming availability by IMDb ID and region
+  8. Fetch trailers by IMDb ID when TMDB is configured
 
----
-
-## Known Constraints & Trade-offs
-
-### Content Safety
-- Must filter adult/unrated/X content → this is **non-negotiable**
-- May miss some edge cases → unit tests required for verification
-
-### Availability Data
-- JustWatch free tier may have limitations
-- Fallback: generic search links or omit availability info
-- Trade-off: convenience vs data accuracy
-
-### LLM Cost
-- Each recommendation batch may call LLM 11+ times (parse + 10 explanations + synopsis)
-- Counter: cache LLM outputs aggressively
-- Alternative: batch multiple explanation generations in single call
-
-### Spoiler Prevention
-- LLM-generated synopses may occasionally miss spoilers
-- Counter: heuristic scan for spoiler phrases + manual review of test results
+### Frontend
+- React 18 + TypeScript + Vite 5 + Tailwind CSS
+- Home page supports free-text and optional preference questions
+- Results page shows recommendations, availability links, and trailer modal support
+- Browser locale is used to infer `region`
 
 ---
 
-## Tech Stack Summary
+## Important Decisions
 
-| Layer | Technology |
-|-------|------------|
-| Frontend | React, TypeScript, shadcn/ui, Tailwind CSS |
-| Backend | Node.js, TypeScript, Express/Fastify |
-| Catalog | TMDB API |
-| LLM | Free-tier provider (TBD) |
-| Availability | JustWatch (ideal) or fallback |
-| Caching | In-memory or Redis |
-| Hosting | Vercel (frontend) + simple backend host (Render, Fly, etc.) |
-| Testing | Jest, React Testing Library |
+- No user accounts or persistent user storage in v1.
+- Content safety remains non-negotiable: adult, unrated, X, and similar unsafe results are filtered.
+- Region selection is inferred from browser locale instead of asking the user directly.
+- Spoiler-control is deferred for v1 even though synopsis-generation helpers exist in the LLM client.
+- Graceful degradation is required: the app must still work if GitHub Models, RapidAPI, or TMDB are not configured.
 
 ---
 
-## Communication & Documentation
+## Remaining Gaps
 
-- **Primary source:** This memory bank (markdown files)
-- **Code organization:** Clear module boundaries (engine, clients, components)
-- **Commits:** Descriptive messages mapping to task list
-- **Code comments:** Explain "why" for complex logic (LLM prompts, filter reasoning)
+- Trailer support is not active locally until `TMDB_API_KEY` is configured.
+- `Film_Advisor_App_AllDocs.md` still contains older plan-era sections and should be refreshed when full narrative alignment is needed.
+- Frontend lint now runs with a TypeScript support warning from `@typescript-eslint` (TS 5.9.x vs recommended range), but no lint-rule violations.
+- Exposed local secrets referenced during development should be rotated.
 
 ---
 
-## Success Criteria for v1
+## Next Steps
 
-- ✅ Users can describe what they want in natural language
-- ✅ System returns 5–10 relevant recommendations with explanations
-- ✅ Each recommendation shows where to watch + trailer link
-- ✅ Content safety filters work reliably (no adult/unrated/X content)
-- ✅ UX is intuitive and accessible (mobile-first, responsive)
-- ✅ Response time < 2–3 seconds typical
-- ✅ No persistent user data storage (privacy-first)
+1. Finish updating memory-bank and setup documentation.
+2. Decide whether to configure TMDB locally for trailer verification.
+3. Rotate any exposed development secrets.

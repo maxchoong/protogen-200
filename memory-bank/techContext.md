@@ -1,217 +1,144 @@
 # Tech Context – Architecture & Implementation
 
-## System Architecture
+## Stack
 
-### Components
+### Frontend
+- React 18
+- TypeScript
+- Vite 5
+- Tailwind CSS
 
-**1. Client (Web App)**
-- React + TypeScript SPA
-- Responsive layout (mobile-first)
-- Uses shadcn/ui + Tailwind CSS
-- Calls backend `POST /recommendations`
+### Backend
+- Node.js 20
+- Express 4
+- TypeScript 5
 
-**2. Backend API**
-- Node.js/TypeScript (Express, Fastify, or Next.js API routes)
-- Endpoints:
-  - `POST /recommendations`: main endpoint
-  - Optional: `GET /title/:id` for future detail views
-- Orchestrates: LLM calls, catalog API, availability API
-- Applies rating and adult-content filters
-
-**3. Recommendation Engine (Backend Module)**
-- Parses user description and preferences
-- Builds queries to external catalog
-- Filters and ranks candidate titles
-- Generates "Why this?" and spoiler-free synopses (via LLM)
-
-**4. External Integrations**
-- **Catalog:** TMDB (metadata, posters, trailers, ratings)
-- **Availability:** JustWatch or similar (if free tier available; otherwise fallback)
-- **LLM:** Free-tier LLM (OpenAI or open-source) for parsing, explanations, synopsis generation
-
-**5. Storage & Caching**
-- No user database (no accounts)
-- Simple caching layer (in-memory or Redis) for:
-  - Title metadata by ID
-  - LLM-generated synopsis per title
-  - Cached recommendation results for common queries
+### External Services
+- OMDb API for catalog metadata and plots
+- GitHub Models `gpt-4o-mini` for preference parsing and recommendation explanations
+- Streaming Availability API via RapidAPI for watch-platform availability
+- TMDB for trailer lookup when configured
 
 ---
 
-## Data Model
+## Runtime Architecture
 
-### Title
-```
-- id
-- name
-- type (movie | series)
-- year
-- genres (list)
-- tags (mood/themes if available)
-- runtime or episode_count
-- rating (e.g., PG‑13, TV‑MA)
-- is_adult or adult flag
-- poster_url
-- catalog_synopsis
-- popularity_score / vote_average
-- trailer_url or trailer_video_id
-```
+### Frontend Responsibilities
+- Collect user description and optional preferences
+- Allow submission with description, preferences, or both
+- Infer `region` from `navigator.language`
+- Send `POST /recommendations` to backend
+- Render recommendation cards, availability links, and trailer modal
 
-### Availability
-```
-- title_id
-- region (e.g., US, UK)
-- platforms: list of { name, availability_type, deeplink_url }
-```
-
-### RecommendationResult (API response)
-```
-- id
-- name
-- year
-- type
-- poster_url
-- synopsis_short
-- why_this
-- availability (list of platforms)
-- trailer_url
-```
+### Backend Responsibilities
+- Validate request shape and input rules
+- Parse preferences with rule-based logic and optional LLM enhancement
+- Search OMDb and normalize title metadata
+- Apply content-safety filtering
+- Rank and shape recommendations
+- Enrich results with availability and trailers when optional APIs are configured
 
 ---
 
-## Backend API Design
+## API Design
 
-### POST /recommendations
+### `POST /recommendations`
 
-**Request:**
+**Request**
 ```json
 {
-  "description": "a cozy feel-good comedy like Parks and Rec",
+  "description": "Inception-like sci-fi thriller",
   "preferences": {
-    "genres": ["Comedy"],
-    "mood": ["Light"],
-    "type": "either",
-    "content_rating_max": "R"
+    "genres": ["Sci-Fi", "Thriller"],
+    "mood": ["Intense"],
+    "type": "movie",
+    "maxRating": "PG-13"
   },
   "region": "US"
 }
 ```
 
-**Response:**
+**Validation Rules**
+- Request is invalid if description is empty and no preferences are selected.
+- If description is present, it must be at least 3 characters.
+- Preferences-only flow is valid.
+
+**Response**
 ```json
 {
-  "query_summary": "Light, feel-good comedy similar to Parks and Recreation, up to R rating, region: US.",
-  "results": [
+  "success": true,
+  "recommendations": [
     {
-      "id": "12345",
-      "name": "Brooklyn Nine-Nine",
-      "year": 2013,
-      "type": "series",
-      "poster_url": "https://...",
-      "synopsis_short": "A lighthearted comedy about a group of detectives in a Brooklyn police precinct.",
-      "why_this": "You asked for a light, feel-good comedy, and this series has a similar ensemble humor and heart to Parks and Recreation.",
+      "id": "tt1375666",
+      "title": "Inception",
+      "year": "2010",
+      "type": "movie",
+      "synopsis": "A thief who steals corporate secrets through dream-sharing technology...",
+      "posterUrl": "https://...",
+      "whyThis": "Matches your sci-fi thriller request with a highly rated, mind-bending premise.",
       "availability": [
         {
-          "platform": "Netflix",
-          "availability_type": "subscription",
-          "deeplink_url": "https://..."
+          "platform": "Apple TV",
+          "type": "rent",
+          "link": "https://..."
         }
       ],
-      "trailer_url": "https://youtube.com/..."
+      "trailerUrl": "https://www.youtube.com/watch?v=...",
+      "score": 8.8
     }
   ]
 }
 ```
 
-**Errors:**
-- 400 for invalid input (no description and no preferences)
-- 500 for upstream failures (catalog/LLM); return friendly message and log details
+---
+
+## Recommendation Pipeline
+
+1. Validate request body.
+2. Parse preferences from explicit controls and free text.
+3. Optionally merge LLM-derived preferences and keywords.
+4. Search OMDb using extracted search terms.
+5. Convert OMDb records into internal recommendation candidates.
+6. Filter unsafe content.
+7. Rank by genre fit and rating.
+8. Generate "Why this?" explanations using LLM batch mode or fallback templates.
+9. Fetch availability using IMDb ID and lowercase country code.
+10. Fetch trailers using TMDB when `TMDB_API_KEY` is available.
 
 ---
 
-## LLM Integration Strategy
+## Service Integration Notes
 
-### Input Parsing
+### OMDb
+- Base URL: `http://www.omdbapi.com`
+- Development key: `trilogy`
+- Used for title search and detailed metadata lookup
 
-**LLM Prompt:** Request structured JSON with:
-```json
-{
-  "preferred_genres": ["Comedy", "Romance"],
-  "excluded_genres": ["Horror"],
-  "mood": ["Light", "Feel-good"],
-  "type": "either",
-  "content_rating_max": "R",
-  "reference_titles": ["Parks and Recreation"],
-  "other_constraints": ["short episodes preferred"]
-}
-```
+### GitHub Models
+- Base URL: `https://models.inference.ai.azure.com`
+- Model: `gpt-4o-mini`
+- Used for:
+  - enhanced preference parsing
+  - batch recommendation explanations
+- Fallback mode keeps the app usable without a token
 
-**Fallback:** Rule-based parsing if LLM fails.
+### Streaming Availability
+- Host: `streaming-availability.p.rapidapi.com`
+- Verified endpoint: `GET /shows/{imdbId}`
+- Query params include `country`, `output_language`, and `series_granularity`
+- Response is read from `streamingOptions[country]`
 
-### "Why this?" Explanation
-
-- LLM generates 1–2 sentences explaining why title matches user's preferences
-- No spoilers; must reference at least one user preference
-- Fallback: template-based explanation using metadata
-
-### Spoiler-Free Synopsis
-
-1. Retrieve catalog synopsis
-2. If short and clearly non-spoilery, use as-is
-3. Else: Ask LLM to summarize in 1–3 sentences (premise only, no twists/endings), enforce 300–400 char limit
-4. Optional heuristic: Check for spoiler phrases; re-generate if needed
-5. **Cache `synopsis_short` per title** to reduce cost/latency
+### TMDB
+- Used only for trailer lookup
+- Optional in local/dev environments
+- Missing key should not break the recommendation flow
 
 ---
 
-## Catalog Query & Filtering Pipeline
+## Constraints and Trade-Offs
 
-1. **Build query** from structured preferences:
-   - Map genres to catalog genre IDs
-   - Filter by type (movie/series)
-   - Filter by rating: exclude unrated and X, use `adult` flag
-
-2. **Fetch candidates** using catalog's discover/search APIs
-
-3. **Filter:**
-   - Drop all `adult = true` titles
-   - Drop unrated and X-rated content
-
-4. **Rank** by scoring:
-   - Genre match
-   - Mood/keyword match
-   - Similarity to reference titles (if any)
-   - Popularity/ratings
-
-5. **Select top 5–10** results
-
----
-
-## Performance & Security
-
-### Performance
-
-- **Target response time:** < 2–3 seconds typical
-- **Caching:**
-  - Title metadata by ID
-  - LLM outputs (synopsis, "why this")
-- **Parallelization:**
-  - Catalog calls
-  - Availability calls
-  - LLM calls (within rate limits)
-
-### Security & Privacy
-
-- No accounts; no persistent PII
-- Do not log full user descriptions long-term; truncate or anonymize
-- Keep API keys server-side only
-- **Enforce content filters:** no unrated/X/adult content
-
----
-
-## Implementation Phases
-
-1. **Skeleton MVP:** Basic frontend pages with mock data; backend stub
-2. **Catalog integration:** Real data from TMDB; rating/adult filters
-3. **LLM integration:** Parsing input; "Why this?" and synopsis generation
-4. **Availability + polish:** Integrate availability API or fallback; UI polish, error handling, performance tuning
+- No persistent user storage in v1.
+- Availability and trailer data are optional enrichments, not hard dependencies.
+- Spoiler-safe synopsis generation exists in code but is not part of the active v1 response contract.
+- Frontend linting is currently not configured even though build succeeds.
+- Content safety relies on metadata filtering and may still need broader test coverage.

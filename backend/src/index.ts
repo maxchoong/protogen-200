@@ -1,9 +1,14 @@
 import express, { Express, Request, Response } from 'express'
 import cors from 'cors'
 import 'dotenv/config'
+import { validateConfig } from './config.js'
+import { recommendationEngine } from './engine/recommendationEngine.js'
 
 const app: Express = express()
-const port = process.env.PORT || 5000
+const port = process.env.PORT || 3000
+
+// Validate configuration on startup
+validateConfig()
 
 // Middleware
 app.use(cors())
@@ -12,6 +17,7 @@ app.use(express.json())
 // Types
 interface RecommendationRequest {
   description: string
+  region?: string
   preferences?: {
     genres?: string[]
     mood?: string[]
@@ -31,8 +37,10 @@ interface Recommendation {
   availability?: {
     platform: string
     type: string
+    link?: string
   }[]
   trailerUrl?: string
+  score?: number
 }
 
 interface ApiResponse {
@@ -41,7 +49,7 @@ interface ApiResponse {
   message?: string
 }
 
-// Mock recommendations for testing
+// Mock recommendations for testing (fallback when no real data)
 const getMockRecommendations = (query: string): Recommendation[] => {
   const mockData: Recommendation[] = [
     {
@@ -122,31 +130,64 @@ app.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'OK' })
 })
 
-app.post('/recommendations', (req: Request, res: Response<ApiResponse>) => {
+app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) => {
   try {
-    const { description, preferences } = req.body as RecommendationRequest
+    const { description, preferences, region } = req.body as RecommendationRequest
+    const normalizedDescription = (description || '').trim()
+    const hasDescription = normalizedDescription.length > 0
+    const hasPreferences = !!(
+      preferences && (
+        (preferences.genres && preferences.genres.length > 0) ||
+        (preferences.mood && preferences.mood.length > 0) ||
+        !!preferences.type ||
+        !!preferences.maxRating
+      )
+    )
 
-    // Validation
-    if (!description || !description.trim()) {
+    // Validation: allow description-only OR preferences-only flow
+    if (!hasDescription && !hasPreferences) {
       return res.status(400).json({
         success: false,
-        message: 'Description is required'
+        message: 'Provide a description or select at least one preference.'
+      })
+    }
+
+    // Validation: if description is provided, it must be at least 3 chars
+    if (hasDescription && normalizedDescription.length < 3) {
+      return res.status(400).json({
+        success: false,
+        message: 'Description must be at least 3 characters.'
       })
     }
 
     // Log the query (anonymized) for debugging
     console.log(`[${new Date().toISOString()}] Recommendation request:`, {
-      descriptionLength: description.length,
+      descriptionLength: normalizedDescription.length,
       hasPreferences: !!preferences,
-      preferencesKeys: preferences ? Object.keys(preferences) : []
+      preferencesKeys: preferences ? Object.keys(preferences) : [],
+      region: region || 'US'
     })
 
-    // Get mock recommendations
-    const recommendations = getMockRecommendations(description)
+    // Use real recommendation engine
+    const recommendations = await recommendationEngine.getRecommendations({
+      description: normalizedDescription,
+      region,
+      preferences: preferences ? {
+        genres: preferences.genres,
+        mood: preferences.mood,
+        contentType: preferences.type as 'movie' | 'tv' | 'both' | undefined,
+        maxRating: preferences.maxRating
+      } : undefined
+    })
+
+    // If no real results, fall back to mock data
+    const finalRecommendations = recommendations.length > 0
+      ? recommendations
+      : getMockRecommendations(normalizedDescription || 'preferences-based search')
 
     res.json({
       success: true,
-      recommendations
+      recommendations: finalRecommendations
     })
   } catch (error) {
     console.error('Error in /recommendations:', error)
