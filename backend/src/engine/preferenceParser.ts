@@ -17,6 +17,7 @@ export interface ParsedPreferences {
   excludedGenres?: string[]     // Genres user wants to avoid
   constraints?: string[]        // Captured constraints (e.g., "slow-paced", "short episodes")
   moodStrength?: Map<string, number>  // Mood confidence 0-1 (e.g., "funny": 1.0, "kinda dark": 0.6)
+  description?: string          // Original user query (for hard filter inference)
 }
 
 export interface RecommendationRequest {

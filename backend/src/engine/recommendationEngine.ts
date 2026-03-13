@@ -85,6 +85,9 @@ export class RecommendationEngine {
       }
     }
 
+    // Store description in preferences for hard filter inference
+    preferences.description = request.description
+
     // Extract search terms from query and genres
     const searchTerms = this.extractSearchTerms(request.description, preferences.genres)
     console.log(`[Engine] Search terms: ${searchTerms.join(', ')}`)
@@ -306,12 +309,128 @@ export class RecommendationEngine {
   }
 
   /**
+   * Infer core genres from query to enforce as hard filters
+   * E.g., if query contains "heist", REQUIRE Crime/Thriller (not optional)
+   */
+  private inferCoreGenres(query: string, parsedGenres: string[]): string[] {
+    // Check query for specific genre keywords
+    const queryLower = query.toLowerCase()
+
+    // Determine REQUIRED genres (these are mandatory, not optional)
+    const requiredGenres: string[] = []
+
+    // If query mentions "heist", require Crime or Thriller
+    if (
+      queryLower.includes('heist') ||
+      queryLower.includes('theft') ||
+      queryLower.includes('robbery') ||
+      queryLower.includes('caper')
+    ) {
+      requiredGenres.push('Crime', 'Thriller')
+    }
+
+    // If query mentions "mystery" or "detective", require those
+    if (queryLower.includes('mystery') || queryLower.includes('detective')) {
+      requiredGenres.push('Mystery', 'Crime')
+    }
+
+    if (queryLower.includes('thriller')) {
+      requiredGenres.push('Thriller')
+    }
+
+    if (queryLower.includes('drama')) {
+      requiredGenres.push('Drama')
+    }
+
+    // If we found required genres from keywords, use those (strict enforcement)
+    if (requiredGenres.length > 0) {
+      return Array.from(new Set(requiredGenres))
+    }
+
+    // Otherwise, fall back to parsed genres as soft preferences
+    return parsedGenres
+  }
+
+  /**
    * Rank titles by relevance (Phase 3: Multi-factor scoring)
    * Combines: genre, mood, talent, rating, popularity, recency
+   * WITH hard filters for core genres and exclusions
    */
   private rankTitles(titles: any[], preferences: ParsedPreferences): any[] {
-    // === PHASE 3: Use multi-factor ranking scorer ===
-    return RankingScorer.rankTitles(titles, preferences)
+    // === PHASE 3.1: Hard Genre Filter ===
+    // Infer core genres from query and parsed preferences
+    const coreGenres = this.inferCoreGenres(
+      preferences.description || '',
+      preferences.genres
+    )
+
+    // Filter titles: must have at least one core genre
+    let filtered = titles
+    if (coreGenres.length > 0) {
+      filtered = titles.filter(t => {
+        const titleGenres = (t.genres || []).map((g: string) => g.toLowerCase())
+        return coreGenres.some(cg =>
+          titleGenres.some((tg: string) => tg.toLowerCase() === cg.toLowerCase())
+        )
+      })
+
+      if (filtered.length < titles.length) {
+        const removed = titles.length - filtered.length
+        console.log(
+          `[Engine.Rank] Hard genre filter: removed ${removed} titles without core genres [${coreGenres.join(', ')}]`
+        )
+      }
+    }
+
+    // === PHASE 3.2: Exclusion Genre Penalty ===
+    // Track exclusion penalties before scoring
+    const exclusionPenalties = new Map<string, number>()
+
+    filtered.forEach(t => {
+      let penalty = 1.0 // No penalty by default
+
+      if (preferences.excludedGenres && preferences.excludedGenres.length > 0) {
+        const titleGenres = (t.genres || []).map((g: string) => g.toLowerCase())
+        const hasExcluded = titleGenres.some((tg: string) =>
+          preferences.excludedGenres!.some(eg => eg.toLowerCase() === tg.toLowerCase())
+        )
+
+        if (hasExcluded) {
+          // Heavy penalty: reduce composite score to 30% of original
+          penalty = 0.3
+          console.log(
+            `[Engine.Rank] Exclusion penalty 0.3x: "${t.title}" has excluded genres [${(t.genres || []).join(', ')}]`
+          )
+        }
+      }
+
+      exclusionPenalties.set(t.id, penalty)
+    })
+
+    // === PHASE 3.3: Multi-Factor Scoring ===
+    // Use multi-factor ranking scorer on hard-filtered list
+    const ranked = RankingScorer.rankTitles(filtered, preferences)
+
+    // === PHASE 3.4: Apply Exclusion Penalties to Composite Scores ===
+    // Reduce composite score for titles with excluded genres
+    const penalizedRanked = ranked.map(r => {
+      const penalty = exclusionPenalties.get(r.id) || 1.0
+      return {
+        ...r,
+        scoringFactors: {
+          ...r.scoringFactors,
+          composite: Math.max(
+            0,
+            r.scoringFactors.composite * penalty
+          )
+        }
+      }
+    })
+
+    // Re-sort after applying penalties
+    return penalizedRanked.sort(
+      (a, b) => b.scoringFactors.composite - a.scoringFactors.composite
+    )
   }
 
   /**
