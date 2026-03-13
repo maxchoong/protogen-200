@@ -364,20 +364,41 @@ export class RecommendationEngine {
       preferences.genres
     )
 
+    // Check if query is heist-specific to enable semantic filtering
+    const isHeistQuery = (preferences.description || '').toLowerCase().match(/\bheist\b|\btheft\b|\brobbery\b|\bcaper\b/i)
+    const heistKeywords = /\bheist\b|\btheft\b|\brobbery\b|\bcaper\b|\bsteal|\brob\b|\bloot\b|\bgem\b|\bdiamond\b|\bbank\b|\bjewel\b|\bburglary\b/i
+
     // Filter titles: must have at least one core genre
     let filtered = titles
     if (coreGenres.length > 0) {
       filtered = titles.filter(t => {
         const titleGenres = (t.genres || []).map((g: string) => g.toLowerCase())
-        return coreGenres.some(cg =>
+        const hasRequiredGenre = coreGenres.some(cg =>
           titleGenres.some((tg: string) => tg.toLowerCase() === cg.toLowerCase())
         )
+
+        // Additional semantic filtering for heist queries
+        if (isHeistQuery && hasRequiredGenre) {
+          const titleLower = (t.title || '').toLowerCase()
+          const plotLower = (t.plot || '').toLowerCase()
+          
+          // If query is about heist but title/plot lacks heist keywords, filter it out
+          // (e.g., "Funny Games" is a thriller but not a heist)
+          if (!heistKeywords.test(titleLower) && !heistKeywords.test(plotLower)) {
+            console.log(
+              `[Engine.Rank] Semantic filter: removed "${t.title}" - Crime/Thriller but no heist keywords`
+            )
+            return false
+          }
+        }
+
+        return hasRequiredGenre
       })
 
       if (filtered.length < titles.length) {
         const removed = titles.length - filtered.length
         console.log(
-          `[Engine.Rank] Hard genre filter: removed ${removed} titles without core genres [${coreGenres.join(', ')}]`
+          `[Engine.Rank] Hard genre filter: removed ${removed} titles without core genres or heist semantics [${coreGenres.join(', ')}]`
         )
       }
     }
