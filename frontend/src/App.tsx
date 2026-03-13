@@ -39,7 +39,8 @@ function App() {
     }
     
     try {
-      const response = await fetch('/api/recommendations', {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://protogen-backend-1bvp.onrender.com'
+      const response = await fetch(`${backendUrl}/recommendations`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
