@@ -4,6 +4,8 @@ import { streamingClient } from '../clients/streaming.js'
 import { tmdbClient } from '../clients/tmdb.js'
 import { ContentSafetyFilter } from '../filters/contentSafety.js'
 import { PreferenceParser, ParsedPreferences, RecommendationRequest } from './preferenceParser.js'
+import { TalentMatcher } from './talentMatcher.js'
+import { RankingScorer, ScoringFactors } from './rankingScorer.js'
 
 export interface StreamingAvailability {
   platform: string
@@ -22,12 +24,18 @@ export interface Recommendation {
   availability?: StreamingAvailability[]
   whyThis?: string
   score: number
+  // Phase 2: Talent matching score
+  talentMatchScore?: number
+  // Phase 3: Detailed scoring factors
+  scoringFactors?: ScoringFactors
 }
 
 /**
  * Core recommendation engine using FM-DB API
  */
 export class RecommendationEngine {
+  // Cache for reference titles (Phase 2.2)
+  private referenceTitlesCache: Map<string, any> = new Map()
   /**
    * Generate recommendations based on user request
    */
@@ -40,6 +48,19 @@ export class RecommendationEngine {
     // Parse preferences with rule-based parser
     const preferences = PreferenceParser.parse(request)
     console.log(`[Engine] Rule-based parsing: ${PreferenceParser.explain(preferences)}`)
+
+    // === PHASE 2.2: Fetch and cache reference titles ===
+    const referenceTitles: any[] = []
+    if (preferences.referenceTitle && preferences.referenceTitle.length > 0) {
+      console.log(`[Engine] Fetching reference titles: ${preferences.referenceTitle.join(', ')}`)
+      const refTitlePromises = preferences.referenceTitle.map(refTitle =>
+        this.fetchReferenceTitle(refTitle)
+      )
+      const refResults = await Promise.all(refTitlePromises)
+      const validRefs = refResults.filter((r): r is any => r !== null)
+      referenceTitles.push(...validRefs)
+      console.log(`[Engine] Resolved ${referenceTitles.length} reference titles`)
+    }
 
     // Enhance with LLM if available
     if (llmClient.isEnabled() && request.description) {
@@ -97,8 +118,17 @@ export class RecommendationEngine {
     const safe = this.filterContent(uniqueCandidates)
     console.log(`[Engine] ${safe.length} titles passed safety filters`)
 
+    // === PHASE 2.2 (continued): Add talent match scores for ranking ===
+    // Calculate talent scores for each candidate based on reference titles
+    const titlesWithTalentScores = safe.map(title => ({
+      ...title,
+      talentMatchScore: referenceTitles.length > 0
+        ? TalentMatcher.findTalentMatch(title, referenceTitles).combinedScore
+        : 0
+    }))
+
     // Rank and limit
-    const ranked = this.rankTitles(safe, preferences)
+    const ranked = this.rankTitles(titlesWithTalentScores, preferences)
     const final = ranked.slice(0, limit)
 
     console.log(`[Engine] Returning ${final.length} recommendations`)
@@ -107,11 +137,22 @@ export class RecommendationEngine {
     let llmExplanations = new Map<string, string>()
     if (llmClient.isEnabled() && final.length > 0) {
       try {
+        // === PHASE 4 ENHANCEMENT: Provide scoring context for better explanations ===
         const titlesForLLM = final.map(item => ({
           title: item.title,
           genre: (item.genres || []).join(', '),
           plot: item.plot || '',
-          rating: item.rating
+          rating: item.rating,
+          // Pass scoring factors for context
+          ...(item.scoringFactors && {
+            genreScore: item.scoringFactors.genreScore,
+            moodScore: item.scoringFactors.moodScore,
+            talentScore: item.scoringFactors.talentScore
+          }),
+          talentMatchScore: item.talentMatchScore,
+          // Pass user context
+          referenceTitles: preferences.referenceTitle,
+          excludedGenres: preferences.excludedGenres
         }))
         
         llmExplanations = await llmClient.generateWhyThisBatch(
@@ -120,7 +161,7 @@ export class RecommendationEngine {
         )
         
         if (llmExplanations.size > 0) {
-          console.log(`[Engine] Generated ${llmExplanations.size} LLM explanations`)
+          console.log(`[Engine] Generated ${llmExplanations.size} LLM explanations with enhanced context`)
         }
       } catch (error) {
         console.warn('[Engine] LLM explanation generation failed, using fallback')
@@ -161,9 +202,48 @@ export class RecommendationEngine {
         request.description, 
         llmExplanations,
         availabilityData,
-        trailerData
+        trailerData,
+        referenceTitles
       )
     )
+  }
+
+  /**
+   * Phase 2.2: Fetch reference title details from catalog
+   * Searches for the reference title and returns full details if found
+   */
+  private async fetchReferenceTitle(titleName: string): Promise<any | null> {
+    // Check cache first
+    const cached = this.referenceTitlesCache.get(titleName.toLowerCase())
+    if (cached) {
+      console.log(`[Engine.Ref] Cache hit: ${titleName}`)
+      return cached
+    }
+
+    try {
+      console.log(`[Engine.Ref] Searching for reference title: ${titleName}`)
+      const results = await fmdbClient.searchByTitle(titleName, undefined)
+      
+      if (results.length === 0) {
+        console.log(`[Engine.Ref] No results for: ${titleName}`)
+        return null
+      }
+
+      // Get full details for first result (best match)
+      const details = await fmdbClient.getDetails(results[0].imdbID)
+      if (details) {
+        const converted = fmdbClient.convertToInternal(details)
+        // Cache it
+        this.referenceTitlesCache.set(titleName.toLowerCase(), converted)
+        console.log(`[Engine.Ref] Cached: ${titleName}`)
+        return converted
+      }
+      
+      return null
+    } catch (error) {
+      console.error(`[Engine.Ref] Error fetching ${titleName}:`, error)
+      return null
+    }
   }
 
   /**
@@ -226,31 +306,12 @@ export class RecommendationEngine {
   }
 
   /**
-   * Rank titles by relevance
+   * Rank titles by relevance (Phase 3: Multi-factor scoring)
+   * Combines: genre, mood, talent, rating, popularity, recency
    */
   private rankTitles(titles: any[], preferences: ParsedPreferences): any[] {
-    return titles.sort((a, b) => {
-      // Score by genre match
-      const aGenreMatch = this.genreMatchScore(a.genres || [], preferences.genres)
-      const bGenreMatch = this.genreMatchScore(b.genres || [], preferences.genres)
-
-      if (aGenreMatch !== bGenreMatch) {
-        return bGenreMatch - aGenreMatch
-      }
-
-      // Then by rating
-      return (b.rating || 0) - (a.rating || 0)
-    })
-  }
-
-  private genreMatchScore(itemGenres: string[], preferredGenres: string[]): number {
-    if (preferredGenres.length === 0) return 0
-
-    const matches = itemGenres.filter(g =>
-      preferredGenres.some(pg => pg.toLowerCase() === g.toLowerCase())
-    )
-
-    return matches.length
+    // === PHASE 3: Use multi-factor ranking scorer ===
+    return RankingScorer.rankTitles(titles, preferences)
   }
 
   /**
@@ -262,7 +323,8 @@ export class RecommendationEngine {
     userDescription: string,
     llmExplanations?: Map<string, string>,
     availabilityData?: Map<string, StreamingAvailability[]>,
-    trailerData?: Map<string, string>
+    trailerData?: Map<string, string>,
+    referenceTitles?: any[]
   ): Recommendation {
     const type = item.type === 'series' ? 'tv' : 'movie'
     const year = item.year?.toString() || 'N/A'
@@ -276,6 +338,9 @@ export class RecommendationEngine {
     // Get trailer URL if available
     const trailerUrl = trailerData?.get(item.id) || undefined
 
+    // === PHASE 3: Extract scoring factors if available ===
+    const scoringFactors = item.scoringFactors as ScoringFactors | undefined
+
     return {
       id: item.id,
       title: item.title,
@@ -286,7 +351,11 @@ export class RecommendationEngine {
       trailerUrl,
       availability,
       whyThis,
-      score: item.rating || 0
+      score: item.rating || 0,
+      // Phase 2: Include talent match score
+      talentMatchScore: item.talentMatchScore || 0,
+      // Phase 3: Include detailed scoring factors
+      scoringFactors
     }
   }
 
@@ -295,6 +364,13 @@ export class RecommendationEngine {
    */
   private generateWhyThis(item: any, preferences: ParsedPreferences): string {
     const reasons: string[] = []
+
+    // === PHASE 4: Enhanced template fallback with scoring context ===
+
+    // Talent matching (Phase 2 signal)
+    if (item.talentMatchScore && item.talentMatchScore > 0.7) {
+      reasons.push(`Features cast/director from titles you mentioned`)
+    }
 
     // Genre match
     if (preferences.genres.length > 0) {
@@ -306,32 +382,48 @@ export class RecommendationEngine {
       }
     }
 
+    // Excluded genres avoided
+    if (preferences.excludedGenres && preferences.excludedGenres.length > 0) {
+      const hasExcluded = (item.genres || []).some((g: string) =>
+        preferences.excludedGenres!.some(eg => eg.toLowerCase() === g.toLowerCase())
+      )
+      if (!hasExcluded) {
+        // Explicitly mention that we avoided excluded genres
+        const excludedList = preferences.excludedGenres.join(', ')
+        reasons.push(`Avoids ${excludedList}`)
+      }
+    }
+
+    // Mood matching with confidence
+    if (preferences.moodStrength && preferences.moodStrength.size > 0 && item.plot) {
+      const plotLower = item.plot.toLowerCase()
+      const moodKeywords: Record<string, string[]> = {
+        happy: ['heartwarming', 'uplifting', 'joyful', 'cheerful', 'amusing', 'lighthearted'],
+        sad: ['emotional', 'touching', 'tearjerker', 'melancholy', 'poignant', 'tragic'],
+        intense: ['action', 'thriller', 'suspense', 'gripping', 'intense', 'explosive', 'thrilling'],
+        relaxing: ['gentle', 'peaceful', 'calm', 'cozy', 'comfort', 'soothing', 'tranquil'],
+        funny: ['comedy', 'hilarious', 'humorous', 'witty', 'comedic', 'laugh', 'absurd', 'comic'],
+        thoughtful: ['philosophical', 'thought-provoking', 'intelligent', 'explores', 'examines', 'contemplative'],
+        dark: ['dark', 'gritty', 'bleak', 'moody', 'noir', 'cynical', 'ominous'],
+        romantic: ['love', 'romance', 'tender', 'passionate', 'intimate', 'devoted'],
+        suspenseful: ['suspense', 'tension', 'thrilling', 'mystery', 'twist', 'unpredictable']
+      }
+
+      for (const [mood, keywords] of Object.entries(moodKeywords)) {
+        const confidence = preferences.moodStrength.get(mood) || 0
+        if (keywords.some(kw => plotLower.includes(kw)) && confidence > 0.5) {
+          const strength = confidence > 0.85 ? 'definitely' : 'nicely'
+          reasons.push(`${strength.charAt(0).toUpperCase() + strength.slice(1)} fits your ${mood} mood`)
+          break
+        }
+      }
+    }
+
     // Rating
     if (item.rating && item.rating >= 8.0) {
       reasons.push(`Highly rated (${item.rating}/10 on IMDb)`)
     } else if (item.rating && item.rating >= 7.0) {
       reasons.push(`Well-reviewed (${item.rating}/10)`)
-    }
-
-    // Mood matching
-    if (preferences.mood.length > 0 && item.plot) {
-      const plotLower = item.plot.toLowerCase()
-      const moodKeywords: Record<string, string[]> = {
-        happy: ['heartwarming', 'uplifting', 'joyful', 'cheerful'],
-        sad: ['emotional', 'touching', 'tearjerker', 'melancholy'],
-        intense: ['action', 'thriller', 'suspense', 'gripping', 'intense'],
-        relaxing: ['gentle', 'peaceful', 'calm', 'cozy', 'comfort'],
-        funny: ['comedy', 'hilarious', 'humorous', 'witty'],
-        thoughtful: ['philosophical', 'thought-provoking', 'intelligent']
-      }
-
-      for (const mood of preferences.mood) {
-        const keywords = moodKeywords[mood.toLowerCase()] || []
-        if (keywords.some(kw => plotLower.includes(kw))) {
-          reasons.push(`Fits your ${mood} mood`)
-          break
-        }
-      }
     }
 
     return reasons.length > 0

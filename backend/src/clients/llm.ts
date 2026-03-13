@@ -206,10 +206,23 @@ Why recommend this?`
 
   /**
    * Generate multiple "Why this?" explanations in a single batch call
+   * Enhanced with context about matches, reference titles, and excluded preferences
    */
   async generateWhyThisBatch(
     userDescription: string,
-    titles: Array<{ title: string; genre: string; plot: string; rating?: number }>
+    titles: Array<{
+      title: string
+      genre: string
+      plot: string
+      rating?: number
+      // Phase 4 enhancements
+      genreScore?: number
+      moodScore?: number
+      talentScore?: number
+      talentMatchScore?: number
+      referenceTitles?: string[]
+      excludedGenres?: string[]
+    }>
   ): Promise<Map<string, string>> {
     if (!this.enabled || titles.length === 0) {
       return new Map()
@@ -219,24 +232,43 @@ Why recommend this?`
       console.log(`[LLM] Generating ${titles.length} explanations in batch...`)
 
       const titlesText = titles
-        .map((t, i) => `${i + 1}. "${t.title}" (${t.genre}) - ${t.plot.substring(0, 150)}`)
+        .map((t, i) => {
+          let desc = `${i + 1}. "${t.title}" (${t.genre})`
+          if (t.talentMatchScore && t.talentMatchScore > 0.5) {
+            desc += ` [Talent Match: ${(t.talentMatchScore * 100).toFixed(0)}%]`
+          }
+          desc += ` - ${t.plot.substring(0, 100)}`
+          return desc
+        })
         .join('\n')
+
+      const referenceContext = titles[0]?.referenceTitles?.length
+        ? `Reference titles mentioned: ${titles[0].referenceTitles.join(', ')}`
+        : ''
+
+      const excludedContext = titles[0]?.excludedGenres?.length
+        ? `Avoid genres: ${titles[0].excludedGenres.join(', ')}`
+        : ''
 
       const messages: ChatCompletionMessageParam[] = [
         {
           role: 'system',
           content: `You are a film recommendation assistant. For each title, write a brief 1-2 sentence explanation of why it matches the user's request.
+Use the provided matching signals (genre match, mood match, cast match) to explain the recommendation.
+For reference title matches, emphasize cast/director similarity. For excluded genres, briefly acknowledge what was avoided.
 Return valid JSON: {"1": "explanation", "2": "explanation", ...}
-Be enthusiastic but concise. No spoilers.`
+Be enthusiastic, specific, and concise. No spoilers.`
         },
         {
           role: 'user',
           content: `User wants: "${userDescription}"
+${referenceContext}
+${excludedContext}
 
-Titles:
+Titles with matching signals:
 ${titlesText}
 
-Generate explanations as JSON object with numbered keys.`
+Generate explanations as JSON object with numbered keys. Reference the matching signals in your explanations.`
         }
       ]
 
