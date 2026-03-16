@@ -71,8 +71,15 @@
 
 ---
 
+## Current Session Focus
+
+- Workspace structure verified and project state analyzed
+- Memory bank review in progress
+- Ready to proceed with next implementation or documentation tasks
+
 ## Next Steps
 
-1. Finish updating memory-bank and setup documentation.
-2. Decide whether to configure TMDB locally for trailer verification.
-3. Rotate any exposed development secrets.
+1. Update memory-bank and setup documentation to match v1 implementation
+2. Decide whether to configure TMDB locally for trailer verification
+3. Rotate any exposed development secrets
+4. Refresh `Film_Advisor_App_AllDocs.md` and setup docs (PHASE_3_SUMMARY.md, PHASE_4_SETUP.md, etc.)

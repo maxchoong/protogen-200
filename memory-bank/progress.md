@@ -113,3 +113,5 @@
 - [ ] Refresh setup and summary docs that still mention OpenAI or JustWatch-era assumptions
 - [ ] Refresh `Film_Advisor_App_AllDocs.md` narrative sections to match implemented architecture and status
 - [ ] Rotate exposed development secrets
+- [ ] Consider backend pipeline optimization or refactoring if performance becomes an issue
+- [ ] Plan v2 features if any (spoiler handling, user accounts, advanced filtering, etc.)
