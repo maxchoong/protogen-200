@@ -1,9 +1,10 @@
 /**
  * Phase 3: Multi-Factor Ranking Overhaul
  * Calculates composite scores across multiple relevance signals
+ * Phase 5: Mode-specific weighting for different discovery paths
  */
 
-import { ParsedPreferences } from './preferenceParser'
+import { ParsedPreferences, DiscoveryMode } from './preferenceParser'
 
 export interface ScoringFactors {
   genreScore: number
@@ -41,6 +42,61 @@ export class RankingScorer {
       popularity: 0.15,
       recency: 0.05
     }
+  }
+
+  // Phase 5: Mode-specific weight profiles
+  private static readonly MODE_WEIGHTS: Record<DiscoveryMode, RankingConfig> = {
+    // MOOD: Emphasize mood/situation fit, broaden genre tolerance
+    mood: {
+      weights: {
+        genre: 0.20,    // Lower: more genre-agnostic
+        mood: 0.40,     // Higher: mood is the primary signal
+        talent: 0.05,   // Lower: don't care about specific actors
+        rating: 0.15,   // Medium: still prefer well-rated content
+        popularity: 0.10, // Lower: mood matters more than popularity
+        recency: 0.10   // Medium: slightly prefer recent for mood
+      }
+    },
+    // REFERENCE: Emphasize title affinity and talent overlap
+    reference: {
+      weights: {
+        genre: 0.30,    // Higher: genre proximity to reference is important
+        mood: 0.15,     // Lower: mood is secondary to reference match
+        talent: 0.35,   // Higher: talent overlap is key indicator
+        rating: 0.10,   // Lower: reference match matters more
+        popularity: 0.05, // Lower: don't care about popularity
+        recency: 0.05   // Lower: classic references are OK
+      }
+    },
+    // TALENT: Emphasize actor/director match
+    talent: {
+      weights: {
+        genre: 0.15,    // Lower: genre matters less
+        mood: 0.10,     // Lower: mood matters less
+        talent: 0.55,   // Very high: talent is the primary signal
+        rating: 0.10,   // Lower: talent match is more important
+        popularity: 0.05, // Lower: don't care about popularity
+        recency: 0.05   // Lower: classic performances are OK
+      }
+    },
+    // MIXED: Balanced approach (same as default)
+    mixed: {
+      weights: {
+        genre: 0.25,
+        mood: 0.20,
+        talent: 0.15,
+        rating: 0.20,
+        popularity: 0.15,
+        recency: 0.05
+      }
+    }
+  }
+
+  /**
+   * Get weight config for a specific discovery mode
+   */
+  static getWeightsForMode(mode: DiscoveryMode): RankingConfig {
+    return this.MODE_WEIGHTS[mode] || this.DEFAULT_CONFIG
   }
 
   /**

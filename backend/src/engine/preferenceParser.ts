@@ -1,7 +1,31 @@
 /**
  * Parses user preferences and input into structured query parameters
  * Phase 1 Enhancement: Reference titles, excluded genres, mood confidence scoring
+ * Phase 5: Intent classification and ambiguity detection
  */
+
+export type DiscoveryMode = 'mood' | 'reference' | 'talent' | 'mixed'
+
+export interface IntentSignals {
+  foundReferenceTitle: boolean
+  foundActorNames: boolean
+  hasMoodDescriptors: boolean
+  hasSituationDescriptors: boolean
+  conflictingSignals: boolean        // Multiple intent types detected
+}
+
+export interface IntentClassification {
+  mode: DiscoveryMode
+  confidence: number                  // 0-1: how confident we are in the mode
+  signals: IntentSignals
+  ambiguities?: string[]              // What's unclear (e.g., ["Mood and reference conflict"])
+  suggestedClarifications?: Array<{
+    id: string
+    question: string
+    type: 'select' | 'text' | 'boolean'
+    options?: string[]
+  }>
+}
 
 export interface ParsedPreferences {
   genres: string[]
@@ -18,12 +42,24 @@ export interface ParsedPreferences {
   constraints?: string[]        // Captured constraints (e.g., "slow-paced", "short episodes")
   moodStrength?: Map<string, number>  // Mood confidence 0-1 (e.g., "funny": 1.0, "kinda dark": 0.6)
   description?: string          // Original user query (for hard filter inference)
+  
+  // Phase 5: Intent classification signals
+  detectedActors?: string[]     // Actor names mentioned (e.g., "Ryan Gosling")
+  discoveryMode?: DiscoveryMode // Primary intent mode
+  intentConfidence?: number      // Confidence in discovered mode (0-1)
+  intentSignals?: IntentSignals  // Raw signal breakdown
 }
 
 export interface RecommendationRequest {
   description: string
   region?: string
   preferences?: Partial<ParsedPreferences>
+  clarificationContext?: {
+    clarificationRound: number
+    previousRecommendationId?: string
+    userClarification?: string
+    clarificationIndex?: number
+  }
 }
 
 /**
@@ -95,6 +131,22 @@ export class PreferenceParser {
     // Low
     'maybe': 0.4,
     'sorta': 0.4
+  }
+
+  // Phase 5: Actor/talent extraction patterns
+  private static readonly ACTOR_PATTERNS = [
+    /with\s+(?:['""])?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)*)/gi,
+    /(?:starring|featuring)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)*)/gi,
+    /cast:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)*)/gi
+  ]
+
+  // Phase 5: Situation/context keywords for mood detection
+  private static readonly SITUATION_KEYWORDS: Record<string, string[]> = {
+    'Lazy': ['lazy', 'cozy', 'relax', 'chill', 'wind down', 'unwind'],
+    'Stuck': ['stuck', 'trapped', 'can\'t go out', 'lockdown', 'snowed in'],
+    'Date': ['date night', 'with someone', 'with my', 'together', 'couples'],
+    'Sick': ['sick', 'ill', 'not feeling', 'bed', 'recovery'],
+    'Late': ['late night', '3am', 'can\'t sleep', 'insomnia', 'night owl']
   }
 
   /**
@@ -278,6 +330,21 @@ export class PreferenceParser {
       )
     }
 
+    // === PHASE 5: Extract actors and classify intent ===
+    preferences.detectedActors = this.extractActors(description)
+    const intentClassification = this.classifyIntent(
+      preferences.referenceTitle || [],
+      preferences.detectedActors || [],
+      Array.from(preferences.moodStrength?.keys() || []),
+      this.hasSituationKeywords(description)
+    )
+    preferences.discoveryMode = intentClassification.mode
+    preferences.intentConfidence = intentClassification.confidence
+    preferences.intentSignals = intentClassification.signals
+
+    // Store original description for later use
+    preferences.description = request.description
+
     // If no genres found, use top genres as fallback
     if (preferences.genres.length === 0 && !request.preferences?.genres) {
       preferences.genres = ['Drama', 'Comedy', 'Action']
@@ -321,4 +388,178 @@ export class PreferenceParser {
 
     return parts.join(' | ')
   }
+
+  /**
+   * Phase 5: Extract actor/talent names from description
+   * Patterns: "with Tom Cruise", "starring Ryan Gosling", "cast: Tom Hanks"
+   */
+  private static extractActors(description: string): string[] {
+    const actors: string[] = []
+
+    for (const pattern of this.ACTOR_PATTERNS) {
+      let match
+      while ((match = pattern.exec(description)) !== null) {
+        const names = match[1]
+          .split(/\s+and\s+|\s*,\s*/)
+          .map(n => n.trim())
+          .filter(n => n.length > 2)
+        actors.push(...names)
+      }
+    }
+
+    return [...new Set(actors)]  // Deduplicate
+  }
+
+  /**
+   * Phase 5: Detect if description contains situation keywords
+   * E.g., "lazy Sunday", "date night", "stuck at home"
+   */
+  private static hasSituationKeywords(description: string): boolean {
+    const lower = description.toLowerCase()
+    return Object.values(this.SITUATION_KEYWORDS)
+      .some(keywords => keywords.some(kw => lower.includes(kw)))
+  }
+
+  /**
+   * Phase 5: Classify the primary intent mode and confidence
+   * Returns: mood | reference | talent | mixed
+   */
+  private static classifyIntent(
+    referenceTitle: string[],
+    actors: string[],
+    moods: string[],
+    hasSituation: boolean
+  ): IntentClassification {
+    const signals: IntentSignals = {
+      foundReferenceTitle: referenceTitle.length > 0,
+      foundActorNames: actors.length > 0,
+      hasMoodDescriptors: moods.length > 0,
+      hasSituationDescriptors: hasSituation,
+      conflictingSignals: false
+    }
+
+    let mode: DiscoveryMode = 'mixed'
+    let confidence = 0.5
+
+    // Priority order: talent > reference > mood > mixed
+    if (actors.length > 0) {
+      mode = 'talent'
+      confidence = Math.min(1.0, 0.85 + actors.length * 0.05)  // Higher with more actors
+    } else if (referenceTitle.length > 0) {
+      mode = 'reference'
+      confidence = Math.min(1.0, 0.85 + referenceTitle.length * 0.05)
+    } else if (moods.length > 0 || hasSituation) {
+      mode = 'mood'
+      confidence = 0.75 + (hasSituation ? 0.15 : 0)
+    } else {
+      mode = 'mixed'
+      confidence = 0.3  // Low confidence for empty/vague queries
+    }
+
+    // Detect conflicts (multiple strong signals)
+    const strongSignals = [
+      actors.length > 0,
+      referenceTitle.length > 0,
+      moods.length > 0 && moods.length <= 1
+    ]
+    signals.conflictingSignals = strongSignals.filter(s => s).length > 1
+
+    // If conflicting signals, lower confidence and mark as ambiguous
+    if (signals.conflictingSignals) {
+      confidence = Math.max(0.4, confidence - 0.2)
+      mode = 'mixed'
+    }
+
+    return {
+      mode,
+      confidence,
+      signals,
+      ambiguities: signals.conflictingSignals ? ["Multiple intent signals detected; could you clarify?"] : undefined
+    }
+  }
+
+  /**
+   * Phase 5: Determine if clarification is needed
+   * Returns null if confidence is high, otherwise returns clarification questions
+   * Confidence threshold: 0.65 (return results if >= 0.65, ask if < 0.65)
+   */
+  static needsClarification(
+    preferences: ParsedPreferences,
+    clarificationRound: number = 0
+  ): Array<{
+    id: string
+    question: string
+    type: 'select' | 'text' | 'boolean'
+    options?: string[]
+  }> | null {
+    const CONFIDENCE_THRESHOLD = 0.65
+    const confidence = preferences.intentConfidence ?? 0.5
+
+    // On first round, ask only if confidence is low
+    if (clarificationRound === 0 && confidence >= CONFIDENCE_THRESHOLD) {
+      return null  // No clarification needed
+    }
+
+    // On follow-up rounds, always return recommendations
+    if (clarificationRound > 0) {
+      return null
+    }
+
+    // Generate clarification questions based on detected signals and mode
+    const questions: Array<{
+      id: string
+      question: string
+      type: 'select' | 'text' | 'boolean'
+      options?: string[]
+    }> = []
+
+    const signals = preferences.intentSignals
+
+    // Case: Conflicting signals (multiple intent types detected)
+    if (signals?.conflictingSignals && preferences.discoveryMode === 'mixed') {
+      if (
+        signals.foundActorNames &&
+        signals.foundReferenceTitle &&
+        signals.hasMoodDescriptors
+      ) {
+        // All three types detected - ask which is primary
+        questions.push({
+          id: 'primary_intent',
+          question: 'You mentioned actor(s), a reference title, and a mood. Which matters most to you?',
+          type: 'select',
+          options: ['Finding movies with specific actors', 'Similar to a movie I like', 'A specific mood or vibe']
+        })
+      } else if (signals.foundActorNames && signals.foundReferenceTitle) {
+        // Both actor and reference detected
+        questions.push({
+          id: 'actor_vs_reference',
+          question: 'Should I prioritize movies with those actors, or movies similar to the reference you mentioned?',
+          type: 'select',
+          options: ['Actors are key', 'Reference title matters more', 'Both equally']
+        })
+      } else if (
+        signals.foundReferenceTitle &&
+        signals.hasMoodDescriptors &&
+        (preferences.mood && preferences.mood.length > 1)
+      ) {
+        // Reference + multiple conflicting moods
+        questions.push({
+          id: 'mood_priority',
+          question: `You want something like "${preferences.referenceTitle?.[0]}" but also with moods: ${preferences.mood.join(', ')}. Do you want similar vibes to the reference, or the moods you mentioned?`,
+          type: 'select',
+          options: ['Similar to reference title', 'The moods you mentioned', 'Both']
+        })
+      }
+    }
+
+    // If we generated any questions, return them
+    if (questions.length > 0) {
+      return questions
+    }
+
+    // Default: No clarification needed (confidence is good or on follow-up round)
+    return null
+  }
 }
+
+

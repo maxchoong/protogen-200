@@ -2,6 +2,7 @@ import express, { Express, Request, Response } from 'express'
 import cors from 'cors'
 import 'dotenv/config'
 import { validateConfig } from './config.js'
+import { PreferenceParser } from './engine/preferenceParser.js'
 import { recommendationEngine } from './engine/recommendationEngine.js'
 
 const app: Express = express()
@@ -24,6 +25,13 @@ interface RecommendationRequest {
     type?: 'movie' | 'tv' | 'both'
     maxRating?: string
   }
+  // Phase 5: Conversational intent support (optional for backward compat)
+  clarificationContext?: {
+    clarificationRound: number          // 0 = first, 1+ = follow-up
+    previousRecommendationId?: string
+    userClarification?: string           // User's answer to clarification question
+    clarificationIndex?: number          // Which question answered (0-based)
+  }
 }
 
 interface Recommendation {
@@ -43,10 +51,29 @@ interface Recommendation {
   score?: number
 }
 
+interface ClarificationQuestion {
+  id: string                            // Unique question identifier
+  question: string                      // The clarification question text
+  type: 'select' | 'text' | 'boolean'  // Response type
+  options?: string[]                    // For 'select' type only
+}
+
+interface RequiresClarification {
+  questions: ClarificationQuestion[]
+  context: string                       // Why clarification is needed
+  confidenceScore?: number              // Intent confidence (0-1)
+}
+
 interface ApiResponse {
   success: boolean
   recommendations?: Recommendation[]
+  requiresClarification?: RequiresClarification
   message?: string
+  // Phase 5: Intent metadata (informational)
+  detectedIntent?: {
+    mode: 'mood' | 'reference' | 'talent' | 'mixed'
+    confidence: number                  // 0-1
+  }
 }
 
 // Mock recommendations for testing (fallback when no real data)
@@ -132,7 +159,7 @@ app.get('/health', (req: Request, res: Response) => {
 
 app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) => {
   try {
-    const { description, preferences, region } = req.body as RecommendationRequest
+    const { description, preferences, region, clarificationContext } = req.body as RecommendationRequest
     const normalizedDescription = (description || '').trim()
     const hasDescription = normalizedDescription.length > 0
     const hasPreferences = !!(
@@ -165,8 +192,50 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
       descriptionLength: normalizedDescription.length,
       hasPreferences: !!preferences,
       preferencesKeys: preferences ? Object.keys(preferences) : [],
-      region: region || 'US'
+      region: region || 'US',
+      clarificationRound: clarificationContext?.clarificationRound ?? 0,
+      hasUserClarification: !!clarificationContext?.userClarification
     })
+
+    // === PHASE 5: Parse preferences and check for clarification need ===
+    const preferencesObject = preferences ? {
+      genres: preferences.genres,
+      mood: preferences.mood,
+      contentType: preferences.type as 'movie' | 'tv' | 'both' | undefined,
+      maxRating: preferences.maxRating
+    } : undefined
+
+    const parsedPreferences = PreferenceParser.parse({
+      description: normalizedDescription,
+      region,
+      preferences: preferencesObject,
+      clarificationContext
+    })
+
+    // Check if clarification is needed (only on first round, confidence-gated)
+    const clarificationRound = clarificationContext?.clarificationRound ?? 0
+    const clarificationQuestions = PreferenceParser.needsClarification(
+      parsedPreferences,
+      clarificationRound
+    )
+
+    if (clarificationQuestions) {
+      console.log(`[${new Date().toISOString()}] Clarification suggested with ${clarificationQuestions.length} questions`)
+      return res.json({
+        success: true,
+        requiresClarification: {
+          questions: clarificationQuestions,
+          context: 'Your request has multiple possible interpretations. Help us narrow it down:',
+          confidenceScore: parsedPreferences.intentConfidence
+        },
+        detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence
+          ? {
+              mode: parsedPreferences.discoveryMode,
+              confidence: parsedPreferences.intentConfidence
+            }
+          : undefined
+      })
+    }
 
     // Use real recommendation engine
     const recommendations = await recommendationEngine.getRecommendations({
@@ -177,7 +246,8 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
         mood: preferences.mood,
         contentType: preferences.type as 'movie' | 'tv' | 'both' | undefined,
         maxRating: preferences.maxRating
-      } : undefined
+      } : undefined,
+      clarificationContext: clarificationContext
     })
 
     // If no real results, fall back to mock data
@@ -187,7 +257,13 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
 
     res.json({
       success: true,
-      recommendations: finalRecommendations
+      recommendations: finalRecommendations,
+      detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence !== undefined
+        ? {
+            mode: parsedPreferences.discoveryMode,
+            confidence: parsedPreferences.intentConfidence
+          }
+        : undefined
     })
   } catch (error) {
     console.error('Error in /recommendations:', error)

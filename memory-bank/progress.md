@@ -6,6 +6,8 @@
 - [x] Phase 2 complete: OMDb catalog integration and safety filters
 - [x] Phase 3 complete: GitHub Models integration with fallback
 - [x] Phase 4 complete: availability, trailers, loading/error states, accessibility work
+- [x] Phase 5 complete: Intent classification, conversational UI, multi-turn clarification
+- [x] Phase 6 complete: End-to-end testing, API integration validation
 - [ ] Documentation fully aligned with current implementation
 - [x] Frontend lint configuration added
 - [ ] TMDB configured locally for trailer verification
@@ -108,10 +110,82 @@
 
 ---
 
+## Phase 5 – Conversational UI & Intent Classification
+
+### Backend Intent Classification
+- [x] Add IntentSignals and IntentClassification types to preferenceParser
+- [x] Implement intent classification with 4 modes: mood | reference | talent | mixed
+- [x] Extract actors from "with X", "starring X", "cast: X" patterns
+- [x] Implement DiscoveryMode-specific ranking weights in RankingScorer
+- [x] Add mood-aware weights (mood: 40%), reference-aware weights (talent: 35%), talent-aware weights (talent: 55%)
+- [x] Implement needsClarification() with confidence threshold 0.65
+- [x] Generate 3 clarification question patterns for ambiguous queries
+- [x] Prevent clarification re-asks on round > 0
+
+### Frontend Conversational UI
+- [x] Create useConversation hook with message state and round tracking
+- [x] Create ConversationalHome component with chat thread and input composer
+- [x] Render user/assistant message bubbles with intent metadata display
+- [x] Implement clarification question UI with select/text/boolean options
+- [x] Update App.tsx to handle clarificationContext in API requests
+- [x] Support multi-turn flow: user query → clarification (if needed) → refined results
+- [x] Add loading indicators and error handling
+- [x] Show examples on empty state
+
+### API Contract Extensions
+- [x] Add optional clarificationContext to RecommendationRequest
+- [x] Include requiresClarification with questions array in response
+- [x] Include detectedIntent (mode + confidence) in all responses
+- [x] Maintain backward compatibility with old API format
+
+### Files Created/Modified
+- [x] `/backend/src/engine/preferenceParser.ts` - Intent classification and clarification logic
+- [x] `/backend/src/engine/rankingScorer.ts` - Mode-specific ranking weights
+- [x] `/backend/src/index.ts` - Clarification gating before search
+- [x] `/frontend/src/hooks/useConversation.ts` - State management hook
+- [x] `/frontend/src/pages/ConversationalHome.tsx` - Chat UI component
+- [x] `/frontend/src/pages/ConversationalHome.css` - Styling
+- [x] `/frontend/src/App.tsx` - Component integration and API flow
+
+---
+
+## Phase 6 – Testing & Rollout Hardening
+
+### End-to-End Tests
+- [x] Create `test-phase5-conversation-e2e.ts` with 10 comprehensive test cases
+- [x] Test 1: High-confidence mood queries → immediate results
+- [x] Test 2: Talent-focused queries with actor extraction
+- [x] Test 3: Reference-focused queries with title matching
+- [x] Test 4: Ambiguous queries → clarification questions
+- [x] Test 5: Multi-turn flow (ambiguous → clarification → refined results)
+- [x] Test 6: Intent metadata always included in response
+- [x] Test 7: Recommendations include required fields (imdbId, title, plot, rating)
+- [x] Test 8: Talent mode applied for actor-specific queries
+- [x] Test 9: Backward compatibility with old API format
+- [x] Test 10: No clarification on round > 0 (prevents loops)
+
+### Integration Tests
+- [x] Create `src/engine/__tests__/intentClassification.test.ts` with Jest tests
+- [x] Test intent classification accuracy for 4 modes
+- [x] Test actor extraction from multiple patterns
+- [x] Test confidence scoring and thresholds
+- [x] Test clarification question generation and types
+- [x] Test suite compiles and runs without errors
+
+### Build Verification
+- [x] Backend `npm run build` passes
+- [x] Frontend `npm run build` passes
+- [x] No TypeScript errors in test files
+- [x] No lint violations
+
+---
+
 ## Open Follow-Ups
 
 - [ ] Refresh setup and summary docs that still mention OpenAI or JustWatch-era assumptions
 - [ ] Refresh `Film_Advisor_App_AllDocs.md` narrative sections to match implemented architecture and status
 - [ ] Rotate exposed development secrets
 - [ ] Consider backend pipeline optimization or refactoring if performance becomes an issue
+- [ ] Test full multi-turn flow end-to-end with live API
+- [ ] Run accessibility audit on new conversational UI
 - [ ] Plan v2 features if any (spoiler handling, user accounts, advanced filtering, etc.)

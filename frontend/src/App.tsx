@@ -1,11 +1,15 @@
 import { useState } from 'react'
-import HomePage from './pages/HomePage'
+import ConversationalHome from './pages/ConversationalHome'
 import ResultsPage from './pages/ResultsPage'
 import './App.css'
 
 interface RecommendationRequest {
   description: string
   region?: string
+  clarificationContext?: {
+    clarificationRound: number
+    userClarification: string
+  }
   preferences?: {
     genres?: string[]
     mood?: string[]
@@ -14,11 +18,28 @@ interface RecommendationRequest {
   }
 }
 
+interface RecommendationResponse {
+  recommendations?: any[]
+  requiresClarification?: {
+    questions: Array<{
+      id: string
+      question: string
+      type: 'select' | 'text' | 'boolean'
+      options?: string[]
+    }>
+    context: string
+    confidenceScore?: number
+  }
+  detectedIntent?: {
+    mode: 'mood' | 'reference' | 'talent' | 'mixed'
+    confidence: number
+  }
+}
+
 function App() {
   const [currentPage, setCurrentPage] = useState<'home' | 'results'>('home')
   const [results, setResults] = useState<any[]>([])
   const [query, setQuery] = useState<string>('')
-  const [loading, setLoading] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
 
   const inferRegionFromLocale = (): string => {
@@ -30,14 +51,16 @@ function App() {
     return 'US'
   }
 
-  const handleSubmit = async (request: RecommendationRequest) => {
-    setLoading(true)
-    setError(null)
+  const handleConversationSubmit = async (
+    description: string,
+    clarificationContext?: { clarificationRound: number; userClarification: string }
+  ): Promise<RecommendationResponse> => {
     const payload: RecommendationRequest = {
-      ...request,
-      region: inferRegionFromLocale()
+      description,
+      region: inferRegionFromLocale(),
+      clarificationContext
     }
-    
+
     try {
       const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://protogen-backend-1bvp.onrender.com'
       const response = await fetch(`${backendUrl}/recommendations`, {
@@ -53,16 +76,18 @@ function App() {
         throw new Error(errorData.message || 'Failed to get recommendations')
       }
 
-      const data = await response.json()
-      setResults(data.recommendations || [])
-      setQuery(request.description.trim() ? request.description : 'Preferences-based recommendations')
-      setCurrentPage('results')
+      const data: RecommendationResponse = await response.json()
+      return data
     } catch (error) {
-      console.error('Error:', error)
-      setError(error instanceof Error ? error.message : 'Something went wrong. Please try again.')
-    } finally {
-      setLoading(false)
+      const errorMsg = error instanceof Error ? error.message : 'Something went wrong'
+      throw new Error(errorMsg)
     }
+  }
+
+  const handleNavigateToResults = (recommendations: any[], queryText: string) => {
+    setResults(recommendations)
+    setQuery(queryText)
+    setCurrentPage('results')
   }
 
   const handleBackHome = () => {
@@ -75,7 +100,11 @@ function App() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800">
       {currentPage === 'home' ? (
-        <HomePage onSubmit={handleSubmit} loading={loading} error={error} />
+        <ConversationalHome 
+          onSubmit={handleConversationSubmit}
+          error={error}
+          onNavigateToResults={handleNavigateToResults}
+        />
       ) : (
         <ResultsPage results={results} query={query} onBackHome={handleBackHome} />
       )}

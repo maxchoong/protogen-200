@@ -3,7 +3,7 @@ import { llmClient } from '../clients/llm.js'
 import { streamingClient } from '../clients/streaming.js'
 import { tmdbClient } from '../clients/tmdb.js'
 import { ContentSafetyFilter } from '../filters/contentSafety.js'
-import { PreferenceParser, ParsedPreferences, RecommendationRequest } from './preferenceParser.js'
+import { PreferenceParser, ParsedPreferences, RecommendationRequest, DiscoveryMode } from './preferenceParser.js'
 import { TalentMatcher } from './talentMatcher.js'
 import { RankingScorer, ScoringFactors } from './rankingScorer.js'
 
@@ -44,10 +44,21 @@ export class RecommendationEngine {
     limit: number = 10
   ): Promise<Recommendation[]> {
     console.log(`[Engine] Processing request: "${request.description.substring(0, 50)}..."`)
+    if (request.clarificationContext) {
+      console.log(`[Engine] Clarification round ${request.clarificationContext.clarificationRound}`)
+    }
 
     // Parse preferences with rule-based parser
     const preferences = PreferenceParser.parse(request)
     console.log(`[Engine] Rule-based parsing: ${PreferenceParser.explain(preferences)}`)
+    
+    // Phase 5: Log intent classification
+    if (preferences.discoveryMode && preferences.intentConfidence !== undefined) {
+      console.log(`[Engine] Intent classification: mode=${preferences.discoveryMode}, confidence=${(preferences.intentConfidence * 100).toFixed(0)}%`)
+      if (preferences.detectedActors && preferences.detectedActors.length > 0) {
+        console.log(`[Engine] Detected actors: ${preferences.detectedActors.join(', ')}`)
+      }
+    }
 
     // === PHASE 2.2: Fetch and cache reference titles ===
     const referenceTitles: any[] = []
@@ -88,8 +99,43 @@ export class RecommendationEngine {
     // Store description in preferences for hard filter inference
     preferences.description = request.description
 
-    // Extract search terms from query and genres
-    const searchTerms = this.extractSearchTerms(request.description, preferences.genres)
+    // === PHASE 5: Mode-aware search strategy ===
+    let searchTerms: string[] = []
+    
+    if (preferences.discoveryMode === 'talent' && preferences.detectedActors && preferences.detectedActors.length > 0) {
+      // Talent mode: search by actor names + broader genre/mood terms
+      searchTerms = [...preferences.detectedActors]
+      // Also add genre/mood keywords for additional results
+      if (preferences.genres && preferences.genres.length > 0) {
+        searchTerms.push(...preferences.genres.slice(0, 2))
+      }
+      if (preferences.mood && preferences.mood.length > 0) {
+        searchTerms.push(...preferences.mood.slice(0, 1))
+      }
+      console.log(`[Engine] Talent mode: searching for actors + genres`)
+    } else if (preferences.discoveryMode === 'reference' && preferences.referenceTitle && preferences.referenceTitle.length > 0) {
+      // Reference mode: search by reference title + genres
+      searchTerms = [...preferences.referenceTitle]
+      if (preferences.genres && preferences.genres.length > 0) {
+        searchTerms.push(...preferences.genres)
+      }
+      console.log(`[Engine] Reference mode: searching by reference title + genres`)
+    } else if (preferences.discoveryMode === 'mood') {
+      // Mood mode: broaden genre search, include all detected genres
+      searchTerms = preferences.genres && preferences.genres.length > 0
+        ? [...preferences.genres]
+        : ['Drama', 'Comedy']  // Safe defaults
+      // Also search by mood keywords
+      if (preferences.mood && preferences.mood.length > 0) {
+        searchTerms.push(...preferences.mood.slice(0, 2))
+      }
+      console.log(`[Engine] Mood mode: broad genre + mood search`)
+    } else {
+      // Mixed or default: extract from description + use explicit genres
+      searchTerms = this.extractSearchTerms(request.description, preferences.genres)
+      console.log(`[Engine] Mixed/default mode: extracted search terms`)
+    }
+
     console.log(`[Engine] Search terms: ${searchTerms.join(', ')}`)
 
     // Determine type filter
@@ -430,7 +476,21 @@ export class RecommendationEngine {
 
     // === PHASE 3.3: Multi-Factor Scoring ===
     // Use multi-factor ranking scorer on hard-filtered list
-    const ranked = RankingScorer.rankTitles(filtered, preferences)
+    // Phase 5: Apply mode-specific weights based on intent classification
+    const modeConfig = preferences.discoveryMode
+      ? RankingScorer.getWeightsForMode(preferences.discoveryMode)
+      : undefined
+    
+    if (modeConfig && preferences.discoveryMode) {
+      console.log(
+        `[Engine.Rank] Applying ${preferences.discoveryMode} mode weights: ` +
+        `genre=${(modeConfig.weights.genre * 100).toFixed(0)}%, ` +
+        `mood=${(modeConfig.weights.mood * 100).toFixed(0)}%, ` +
+        `talent=${(modeConfig.weights.talent * 100).toFixed(0)}%`
+      )
+    }
+
+    const ranked = RankingScorer.rankTitles(filtered, preferences, modeConfig)
 
     // === PHASE 3.4: Apply Exclusion Penalties to Composite Scores ===
     // Reduce composite score for titles with excluded genres
