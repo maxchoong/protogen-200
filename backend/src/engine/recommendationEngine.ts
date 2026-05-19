@@ -113,12 +113,18 @@ export class RecommendationEngine {
       }
       console.log(`[Engine] Talent mode: searching for actors + genres`)
     } else if (preferences.discoveryMode === 'reference' && preferences.referenceTitle && preferences.referenceTitle.length > 0) {
-      // Reference mode: search by reference title + genres
-      searchTerms = [...preferences.referenceTitle]
+      // Reference mode: fetches anchor metadata separately; search alternatives by genres/mood.
+      searchTerms = []
       if (preferences.genres && preferences.genres.length > 0) {
         searchTerms.push(...preferences.genres)
       }
-      console.log(`[Engine] Reference mode: searching by reference title + genres`)
+      if (preferences.mood && preferences.mood.length > 0) {
+        searchTerms.push(...preferences.mood.slice(0, 2))
+      }
+      if (searchTerms.length === 0) {
+        searchTerms = ['Drama', 'Thriller']
+      }
+      console.log(`[Engine] Reference mode: searching alternatives by genres/mood`)
     } else if (preferences.discoveryMode === 'mood') {
       // Mood mode: broaden genre search, include all detected genres
       searchTerms = preferences.genres && preferences.genres.length > 0
@@ -195,7 +201,8 @@ export class RecommendationEngine {
           ...(item.scoringFactors && {
             genreScore: item.scoringFactors.genreScore,
             moodScore: item.scoringFactors.moodScore,
-            talentScore: item.scoringFactors.talentScore
+            talentScore: item.scoringFactors.talentScore,
+            compositeScore: item.scoringFactors.composite
           }),
           talentMatchScore: item.talentMatchScore,
           // Pass user context
@@ -416,14 +423,20 @@ export class RecommendationEngine {
     // Filter titles: must have at least one core genre
     let filtered = titles
 
-    // For contrastive reference requests ("like X but more Y"), suppress the exact anchor title.
-    const shouldSuppressAnchor =
-      !!preferences.isContrastiveReference &&
-      !/(rewatch|watch again|same movie|the original)/i.test(preferences.description || '')
+    // Suppress any explicitly-mentioned anchor title by default unless user asks for a rewatch.
+    const hasRewatchIntent = /(rewatch|watch again|same movie|the original|again)/i.test(
+      preferences.description || ''
+    )
 
-    if (shouldSuppressAnchor && referenceTitles.length > 0) {
+    if (!hasRewatchIntent && referenceTitles.length > 0) {
       const referenceIds = new Set(referenceTitles.map(ref => ref.id).filter(Boolean))
+      const beforeCount = filtered.length
       filtered = filtered.filter(t => !referenceIds.has(t.id))
+      if (filtered.length < beforeCount) {
+        console.log(
+          `[Engine.Rank] Suppressed ${beforeCount - filtered.length} explicitly-mentioned anchor title(s)`
+        )
+      }
     }
 
     if (coreGenres.length > 0) {
@@ -680,7 +693,7 @@ export class RecommendationEngine {
 
     return reasons.length > 0
       ? reasons.join('. ') + '.'
-      : 'Popular choice based on your preferences.'
+      : 'Recommended based on overall catalog fit to your request.'
   }
 }
 

@@ -355,4 +355,75 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
     expect(ranked[0].id).toBe('tt1111111')
     expect(ranked[0].scoringFactors.composite).toBeGreaterThan(ranked[1].scoringFactors.composite)
   })
+
+  it('should suppress explicitly mentioned anchor title by default even without contrastive language', () => {
+    const preferences = PreferenceParser.parse({
+      description: 'Something like Inception'
+    })
+
+    const titles = [
+      {
+        id: 'tt1375666',
+        title: 'Inception',
+        genres: ['Drama', 'Sci-Fi'],
+        plot: 'A high-stakes dream heist.',
+        rating: 8.8,
+        voteCount: 1000,
+        year: 2010,
+        talentMatchScore: 1
+      },
+      {
+        id: 'tt7654321',
+        title: 'Alternative Sci-Fi Pick',
+        genres: ['Drama', 'Sci-Fi'],
+        plot: 'A cerebral and atmospheric science fiction mystery.',
+        rating: 7.6,
+        voteCount: 650,
+        year: 2017,
+        talentMatchScore: 0.3
+      }
+    ]
+
+    const referenceTitles = [{ id: 'tt1375666', title: 'Inception' }]
+    const ranked = (recommendationEngine as any).rankTitles(titles, preferences, referenceTitles)
+    const rankedIds = ranked.map((item: any) => item.id)
+
+    expect(rankedIds).not.toContain('tt1375666')
+    expect(rankedIds).toContain('tt7654321')
+  })
+
+  it('should keep explicitly mentioned anchor title when query asks to rewatch', () => {
+    const preferences = PreferenceParser.parse({
+      description: 'I want to rewatch Inception again'
+    })
+
+    const titles = [
+      {
+        id: 'tt1375666',
+        title: 'Inception',
+        genres: ['Drama', 'Sci-Fi'],
+        plot: 'A high-stakes dream heist.',
+        rating: 8.8,
+        voteCount: 1000,
+        year: 2010,
+        talentMatchScore: 1
+      },
+      {
+        id: 'tt7654321',
+        title: 'Alternative Sci-Fi Pick',
+        genres: ['Drama', 'Sci-Fi'],
+        plot: 'A cerebral and atmospheric science fiction mystery.',
+        rating: 7.6,
+        voteCount: 650,
+        year: 2017,
+        talentMatchScore: 0.3
+      }
+    ]
+
+    const referenceTitles = [{ id: 'tt1375666', title: 'Inception' }]
+    const ranked = (recommendationEngine as any).rankTitles(titles, preferences, referenceTitles)
+    const rankedIds = ranked.map((item: any) => item.id)
+
+    expect(rankedIds).toContain('tt1375666')
+  })
 })

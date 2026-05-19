@@ -5,7 +5,7 @@ import { validateConfig } from './config.js'
 import { PreferenceParser } from './engine/preferenceParser.js'
 import { recommendationEngine } from './engine/recommendationEngine.js'
 
-const app: Express = express()
+export const app: Express = express()
 const port = process.env.PORT || 3000
 
 // Validate configuration on startup
@@ -49,6 +49,9 @@ interface Recommendation {
   }[]
   trailerUrl?: string
   score?: number
+  scoringFactors?: {
+    composite?: number
+  }
 }
 
 interface ClarificationQuestion {
@@ -76,80 +79,66 @@ interface ApiResponse {
   }
 }
 
-// Mock recommendations for testing (fallback when no real data)
-const getMockRecommendations = (query: string): Recommendation[] => {
-  const mockData: Recommendation[] = [
-    {
-      id: '1',
-      title: 'The Shawshank Redemption',
-      year: '1994',
-      type: 'movie',
-      synopsis: 'Two imprisoned men bond over a number of years, finding solace and eventual redemption through acts of common decency.',
-      whyThis: 'This classic drama perfectly captures emotional depth with outstanding performances.',
-      posterUrl: 'https://via.placeholder.com/300x450?text=Shawshank',
-      availability: [
-        { platform: 'Netflix', type: 'Stream' },
-        { platform: 'Amazon Prime', type: 'Rent' }
-      ],
-      trailerUrl: 'https://www.youtube.com/watch?v=6hB3S9bIaco'
-    },
-    {
-      id: '2',
-      title: 'The Matrix',
-      year: '1999',
-      type: 'movie',
-      synopsis: 'A computer hacker learns from mysterious rebels about the true nature of his reality and his role in the war against its controllers.',
-      whyThis: 'Ground-breaking sci-fi action with a mind-bending plot that still holds up today.',
-      posterUrl: 'https://via.placeholder.com/300x450?text=Matrix',
-      availability: [
-        { platform: 'HBO Max', type: 'Stream' }
-      ],
-      trailerUrl: 'https://www.youtube.com/watch?v=vKQi3bBA1y8'
-    },
-    {
-      id: '3',
-      title: 'Inception',
-      year: '2010',
-      type: 'movie',
-      synopsis: 'A skilled thief who steals corporate secrets through the use of dream-sharing technology is given the inverse task of planting an idea.',
-      whyThis: 'Complex, intelligent sci-fi thriller with stunning visuals and an intricate plot.',
-      posterUrl: 'https://via.placeholder.com/300x450?text=Inception',
-      availability: [
-        { platform: 'Netflix', type: 'Stream' },
-        { platform: 'Disney+', type: 'Stream' }
-      ],
-      trailerUrl: 'https://www.youtube.com/watch?v=YoHD_XwIlIY'
-    },
-    {
-      id: '4',
-      title: 'The Crown',
-      year: '2016',
-      type: 'tv',
-      synopsis: 'The political rivalries and romance of Queen Elizabeth II\'s reign, and the events that shaped the second half of the twentieth century.',
-      whyThis: 'Prestige drama with high production values and compelling historical storytelling.',
-      posterUrl: 'https://via.placeholder.com/300x450?text=TheCrown',
-      availability: [
-        { platform: 'Netflix', type: 'Stream' }
-      ],
-      trailerUrl: 'https://www.youtube.com/watch?v=JWtnJjn6ng0'
-    },
-    {
-      id: '5',
-      title: 'Gladiator',
-      year: '2000',
-      type: 'movie',
-      synopsis: 'A former Roman General sets out to exact vengeance against the Emperor who wronged him.',
-      whyThis: 'Epic historical drama with thrilling action sequences and emotional resonance.',
-      posterUrl: 'https://via.placeholder.com/300x450?text=Gladiator',
-      availability: [
-        { platform: 'Paramount+', type: 'Stream' },
-        { platform: 'Amazon Prime', type: 'Rent' }
-      ],
-      trailerUrl: 'https://www.youtube.com/watch?v=owK1qxDsel8'
-    }
-  ]
+const MIN_TOP_COMPOSITE = 0.45
+const MIN_STRONG_MATCH_COUNT = 2
 
-  return mockData
+const isWeakRecommendationSet = (recommendations: Recommendation[]): boolean => {
+  if (recommendations.length === 0) {
+    return true
+  }
+
+  const compositeScores = recommendations
+    .map(r => r.scoringFactors?.composite)
+    .filter((value): value is number => typeof value === 'number')
+
+  const topComposite = compositeScores.length > 0 ? Math.max(...compositeScores) : 0
+  const strongMatches = compositeScores.filter(score => score >= MIN_TOP_COMPOSITE).length
+
+  return topComposite < MIN_TOP_COMPOSITE || strongMatches < MIN_STRONG_MATCH_COUNT
+}
+
+const buildWeakMatchClarification = (mode?: 'mood' | 'reference' | 'talent' | 'mixed'): RequiresClarification => {
+  const sharedContext = 'I need one more detail so I can return closer matches instead of weak guesses.'
+
+  if (mode === 'reference') {
+    return {
+      context: sharedContext,
+      questions: [
+        {
+          id: 'quality_reference_axis',
+          question: 'For recommendations similar to your reference title, what should I prioritize next?',
+          type: 'select',
+          options: ['More relaxing tone', 'Similar plot complexity', 'Similar cast/director', 'Different but same genre']
+        }
+      ]
+    }
+  }
+
+  if (mode === 'talent') {
+    return {
+      context: sharedContext,
+      questions: [
+        {
+          id: 'quality_talent_axis',
+          question: 'Should I prioritize actor match or overall vibe first?',
+          type: 'select',
+          options: ['Actor match first', 'Vibe first', 'Balanced']
+        }
+      ]
+    }
+  }
+
+  return {
+    context: sharedContext,
+    questions: [
+      {
+        id: 'quality_general_axis',
+        question: 'What should I tune first to improve relevance?',
+        type: 'select',
+        options: ['Mood/tone', 'Genre', 'Cast/crew', 'Pace (slower/faster)']
+      }
+    ]
+  }
 }
 
 // Routes
@@ -250,14 +239,28 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
       clarificationContext: clarificationContext
     })
 
-    // If no real results, fall back to mock data
-    const finalRecommendations = recommendations.length > 0
-      ? recommendations
-      : getMockRecommendations(normalizedDescription || 'preferences-based search')
+    const weakResultSet = isWeakRecommendationSet(recommendations)
+    if (weakResultSet) {
+      console.log(`[${new Date().toISOString()}] Weak recommendation set detected; requesting clarification`) 
+      const clarification = buildWeakMatchClarification(parsedPreferences.discoveryMode)
+      return res.json({
+        success: true,
+        requiresClarification: {
+          ...clarification,
+          confidenceScore: parsedPreferences.intentConfidence
+        },
+        detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence !== undefined
+          ? {
+              mode: parsedPreferences.discoveryMode,
+              confidence: parsedPreferences.intentConfidence
+            }
+          : undefined
+      })
+    }
 
     res.json({
       success: true,
-      recommendations: finalRecommendations,
+      recommendations,
       detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence !== undefined
         ? {
             mode: parsedPreferences.discoveryMode,
@@ -291,8 +294,10 @@ app.use((err: any, req: Request, res: Response) => {
   })
 })
 
-// Start server
-app.listen(port, () => {
-  console.log(`🚀 Film & TV Advisor backend listening on port ${port}`)
-  console.log(`   Health check: http://localhost:${port}/health`)
-})
+// Start server when not running under Jest tests
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(port, () => {
+    console.log(`🚀 Film & TV Advisor backend listening on port ${port}`)
+    console.log(`   Health check: http://localhost:${port}/health`)
+  })
+}

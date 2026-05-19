@@ -219,6 +219,7 @@ Why recommend this?`
       genreScore?: number
       moodScore?: number
       talentScore?: number
+      compositeScore?: number
       talentMatchScore?: number
       referenceTitles?: string[]
       excludedGenres?: string[]
@@ -237,6 +238,18 @@ Why recommend this?`
           if (t.talentMatchScore && t.talentMatchScore > 0.5) {
             desc += ` [Talent Match: ${(t.talentMatchScore * 100).toFixed(0)}%]`
           }
+          if (typeof t.genreScore === 'number') {
+            desc += ` [Genre: ${t.genreScore.toFixed(2)}]`
+          }
+          if (typeof t.moodScore === 'number') {
+            desc += ` [Mood: ${t.moodScore.toFixed(2)}]`
+          }
+          if (typeof t.talentScore === 'number') {
+            desc += ` [Talent: ${t.talentScore.toFixed(2)}]`
+          }
+          if (typeof t.compositeScore === 'number') {
+            desc += ` [Composite: ${t.compositeScore.toFixed(2)}]`
+          }
           desc += ` - ${t.plot.substring(0, 100)}`
           return desc
         })
@@ -253,11 +266,14 @@ Why recommend this?`
       const messages: ChatCompletionMessageParam[] = [
         {
           role: 'system',
-          content: `You are a film recommendation assistant. For each title, write a brief 1-2 sentence explanation of why it matches the user's request.
-Use the provided matching signals (genre match, mood match, cast match) to explain the recommendation.
-For reference title matches, emphasize cast/director similarity. For excluded genres, briefly acknowledge what was avoided.
-Return valid JSON: {"1": "explanation", "2": "explanation", ...}
-Be enthusiastic, specific, and concise. No spoilers.`
+          content: `You are a film recommendation assistant. For each title, write a concise 1-2 sentence explanation only if the provided match signals support the recommendation.
+Rules:
+- Do not claim similarity unless there is evidence in the supplied scores or plot cues.
+- If a title appears weakly matched (for example, all scores low), return null for that item.
+- Do not mention cast/director similarity unless talent score is clearly meaningful.
+- For excluded genres, only mention avoidance when applicable.
+- No spoilers.
+Return valid JSON: {"1": "explanation or null", "2": "explanation or null", ...}`
         },
         {
           role: 'user',
@@ -283,16 +299,17 @@ Generate explanations as JSON object with numbered keys. Reference the matching 
       const content = response.choices[0]?.message?.content
       if (!content) return new Map()
 
-      const parsed = JSON.parse(content) as Record<string, string>
+      const parsed = JSON.parse(content) as Record<string, unknown>
       const result = new Map<string, string>()
 
       titles.forEach((title, i) => {
         const key = (i + 1).toString()
-        if (parsed[key]) {
-          result.set(title.title, parsed[key])
+        const candidate = parsed[key]
+        if (typeof candidate === 'string' && candidate.trim().length > 0) {
+          result.set(title.title, candidate)
           // Cache individual explanations
           const cacheKey = `why:${title.title}:${userDescription.substring(0, 50)}`
-          this.setCache(cacheKey, parsed[key], 7200000)
+          this.setCache(cacheKey, candidate, 7200000)
         }
       })
 
