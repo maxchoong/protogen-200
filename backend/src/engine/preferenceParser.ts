@@ -63,6 +63,7 @@ export interface RecommendationRequest {
     previousRecommendationId?: string
     userClarification?: string
     clarificationIndex?: number
+    askedQuestionIds?: string[]
   }
 }
 

@@ -5,7 +5,11 @@ import './ConversationalHome.css'
 interface ConversationalHomeProps {
   onSubmit: (
     description: string,
-    clarificationContext?: { clarificationRound: number; userClarification: string }
+    clarificationContext?: {
+      clarificationRound: number
+      userClarification: string
+      askedQuestionIds?: string[]
+    }
   ) => Promise<{
     recommendations?: any[]
     requiresClarification?: {
@@ -81,13 +85,18 @@ export default function ConversationalHome({
     activeRequestRef.current = requestId
     startPendingState()
 
+    const askedQuestionIds = state.messages.flatMap(message =>
+      (message.clarificationQuestions || []).map(question => question.id)
+    )
+
     try {
       const response = await onSubmit(
         state.clarificationRound === 0 ? trimmed : state.lastQuery,
         state.clarificationRound > 0
           ? {
               clarificationRound: state.clarificationRound,
-              userClarification: trimmed
+              userClarification: trimmed,
+              askedQuestionIds
             }
           : undefined
       )
@@ -105,7 +114,7 @@ export default function ConversationalHome({
           clarificationQuestions: response.requiresClarification.questions,
           detectedIntent: response.detectedIntent
         })
-        conversation.updateClarificationRound(1)
+        conversation.updateClarificationRound(state.clarificationRound + 1)
       } else if (response.recommendations && response.recommendations.length > 0) {
         conversation.addMessage({
           role: 'assistant',
@@ -114,6 +123,8 @@ export default function ConversationalHome({
           recommendations: response.recommendations,
           detectedIntent: response.detectedIntent
         })
+
+        conversation.updateClarificationRound(0)
 
         if (onNavigateToResults) {
           onNavigateToResults(response.recommendations, state.lastQuery || trimmed)
@@ -143,8 +154,11 @@ export default function ConversationalHome({
     await submitMessage(inputValue)
   }
 
-  const handleClarificationSelect = (optionText: string) => {
-    setInputValue(optionText)
+  const handleClarificationSelect = async (optionText: string) => {
+    if (state.isLoading) {
+      return
+    }
+    await submitMessage(optionText)
   }
 
   const handleCancelPending = () => {

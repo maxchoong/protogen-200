@@ -86,4 +86,92 @@ describe('POST /recommendations route guardrails', () => {
     expect(response.body.requiresClarification).toBeUndefined()
     expect(response.body.recommendations).toHaveLength(2)
   })
+
+  it('should ask a different follow-up question when prior clarification ids are provided', async () => {
+    const mockRecommendations = [
+      {
+        id: 'tt1234567',
+        title: 'Weak Match One',
+        year: '2015',
+        type: 'movie',
+        synopsis: 'A loosely related title.',
+        score: 6.2,
+        scoringFactors: { composite: 0.31 }
+      },
+      {
+        id: 'tt7654321',
+        title: 'Weak Match Two',
+        year: '2012',
+        type: 'movie',
+        synopsis: 'Another weakly related title.',
+        score: 6.0,
+        scoringFactors: { composite: 0.29 }
+      }
+    ]
+
+    jest
+      .spyOn(recommendationEngine, 'getRecommendations')
+      .mockResolvedValue(mockRecommendations as any)
+
+    const response = await request(app)
+      .post('/recommendations')
+      .send({
+        description: 'Fast',
+        region: 'US',
+        clarificationContext: {
+          clarificationRound: 2,
+          userClarification: 'Mood/tone',
+          askedQuestionIds: ['quality_disambiguate_intent', 'quality_format_focus']
+        }
+      })
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+    expect(response.body.requiresClarification).toBeDefined()
+    expect(response.body.requiresClarification.questions[0].id).toBe('quality_runtime_focus')
+  })
+
+  it('should stop asking clarification after max turns and return best available recommendations', async () => {
+    const mockRecommendations = [
+      {
+        id: 'tt1234567',
+        title: 'Weak Match One',
+        year: '2015',
+        type: 'movie',
+        synopsis: 'A loosely related title.',
+        score: 6.2,
+        scoringFactors: { composite: 0.31 }
+      },
+      {
+        id: 'tt7654321',
+        title: 'Weak Match Two',
+        year: '2012',
+        type: 'movie',
+        synopsis: 'Another weakly related title.',
+        score: 6.0,
+        scoringFactors: { composite: 0.29 }
+      }
+    ]
+
+    jest
+      .spyOn(recommendationEngine, 'getRecommendations')
+      .mockResolvedValue(mockRecommendations as any)
+
+    const response = await request(app)
+      .post('/recommendations')
+      .send({
+        description: 'Fast',
+        region: 'US',
+        clarificationContext: {
+          clarificationRound: 3,
+          userClarification: 'Movie',
+          askedQuestionIds: ['quality_disambiguate_intent', 'quality_format_focus', 'quality_era_focus']
+        }
+      })
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+    expect(response.body.requiresClarification).toBeUndefined()
+    expect(response.body.recommendations).toHaveLength(2)
+  })
 })

@@ -9,6 +9,7 @@ interface RecommendationRequest {
   clarificationContext?: {
     clarificationRound: number
     userClarification: string
+    askedQuestionIds?: string[]
   }
   preferences?: {
     genres?: string[]
@@ -53,7 +54,11 @@ function App() {
 
   const handleConversationSubmit = async (
     description: string,
-    clarificationContext?: { clarificationRound: number; userClarification: string }
+    clarificationContext?: {
+      clarificationRound: number
+      userClarification: string
+      askedQuestionIds?: string[]
+    }
   ): Promise<RecommendationResponse> => {
     const payload: RecommendationRequest = {
       description,

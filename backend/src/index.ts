@@ -31,6 +31,7 @@ interface RecommendationRequest {
     previousRecommendationId?: string
     userClarification?: string           // User's answer to clarification question
     clarificationIndex?: number          // Which question answered (0-based)
+    askedQuestionIds?: string[]
   }
 }
 
@@ -81,6 +82,7 @@ interface ApiResponse {
 
 const MIN_TOP_COMPOSITE = 0.45
 const MIN_STRONG_MATCH_COUNT = 2
+const MAX_CLARIFICATION_TURNS = 3
 
 const isWeakRecommendationSet = (recommendations: Recommendation[]): boolean => {
   if (recommendations.length === 0) {
@@ -97,47 +99,105 @@ const isWeakRecommendationSet = (recommendations: Recommendation[]): boolean => 
   return topComposite < MIN_TOP_COMPOSITE || strongMatches < MIN_STRONG_MATCH_COUNT
 }
 
-const buildWeakMatchClarification = (mode?: 'mood' | 'reference' | 'talent' | 'mixed'): RequiresClarification => {
-  const sharedContext = 'I need one more detail so I can return closer matches instead of weak guesses.'
-
-  if (mode === 'reference') {
-    return {
-      context: sharedContext,
-      questions: [
-        {
-          id: 'quality_reference_axis',
-          question: 'For recommendations similar to your reference title, what should I prioritize next?',
-          type: 'select',
-          options: ['More relaxing tone', 'Similar plot complexity', 'Similar cast/director', 'Different but same genre']
-        }
-      ]
+const nextUnaskedQuestion = (
+  askedQuestionIds: Set<string>,
+  candidates: ClarificationQuestion[]
+): ClarificationQuestion | null => {
+  for (const candidate of candidates) {
+    if (!askedQuestionIds.has(candidate.id)) {
+      return candidate
     }
   }
+  return null
+}
 
-  if (mode === 'talent') {
-    return {
-      context: sharedContext,
-      questions: [
-        {
-          id: 'quality_talent_axis',
-          question: 'Should I prioritize actor match or overall vibe first?',
-          type: 'select',
-          options: ['Actor match first', 'Vibe first', 'Balanced']
-        }
-      ]
+const buildWeakMatchClarification = (
+  mode: 'mood' | 'reference' | 'talent' | 'mixed' | undefined,
+  clarificationRound: number,
+  askedQuestionIds: Set<string>
+): RequiresClarification | null => {
+  const sharedContext = 'I need one more detail so I can return closer matches instead of weak guesses.'
+
+  const roundOneByMode: Record<'mood' | 'reference' | 'talent' | 'mixed', ClarificationQuestion[]> = {
+    mood: [
+      {
+        id: 'quality_mood_genre_focus',
+        question: 'What genre should I pair with that mood?',
+        type: 'select',
+        options: ['Action', 'Comedy', 'Drama', 'Sci-Fi', 'Thriller', 'Other (type your own)']
+      }
+    ],
+    reference: [
+      {
+        id: 'quality_reference_axis',
+        question: 'For titles similar to your reference, what should I prioritize?',
+        type: 'select',
+        options: ['Mood/tone', 'Plot complexity', 'Cast/director overlap', 'Genre similarity', 'Other (type your own)']
+      }
+    ],
+    talent: [
+      {
+        id: 'quality_talent_genre_focus',
+        question: 'Which genre should I focus on for that actor/director?',
+        type: 'select',
+        options: ['Action', 'Comedy', 'Drama', 'Romance', 'Thriller', 'Other (type your own)']
+      }
+    ],
+    mixed: [
+      {
+        id: 'quality_disambiguate_intent',
+        question: 'To narrow this down, what did you mean most by your request?',
+        type: 'select',
+        options: ['Mood/tone', 'Genre', 'A specific title', 'A specific actor/director', 'Other (type your own)']
+      }
+    ]
+  }
+
+  const roundOneFollowUps: ClarificationQuestion[] = [
+    {
+      id: 'quality_genre_focus',
+      question: 'Is there a particular genre you are interested in?',
+      type: 'select',
+      options: ['Action', 'Comedy', 'Drama', 'Sci-Fi', 'Thriller', 'No preference', 'Other (type your own)']
+    },
+    {
+      id: 'quality_format_focus',
+      question: 'Do you want a movie, series, or either?',
+      type: 'select',
+      options: ['Movie', 'Series', 'Either', 'Other (type your own)']
     }
+  ]
+
+  const roundTwoGeneric: ClarificationQuestion[] = [
+    {
+      id: 'quality_runtime_focus',
+      question: 'Do you prefer a faster pace or a slower, more relaxed pace?',
+      type: 'select',
+      options: ['Faster pace', 'Balanced pace', 'Slower pace', 'No preference', 'Other (type your own)']
+    },
+    {
+      id: 'quality_era_focus',
+      question: 'Any preferred release era?',
+      type: 'select',
+      options: ['Recent (last 5 years)', '2010s', '2000s', 'Classic (before 2000)', 'No preference']
+    }
+  ]
+
+  const modeKey: 'mood' | 'reference' | 'talent' | 'mixed' = mode || 'mixed'
+  const primaryCandidates = clarificationRound === 0
+    ? roundOneByMode[modeKey]
+    : clarificationRound === 1
+      ? roundOneFollowUps
+      : roundTwoGeneric
+
+  const question = nextUnaskedQuestion(askedQuestionIds, primaryCandidates)
+  if (!question) {
+    return null
   }
 
   return {
     context: sharedContext,
-    questions: [
-      {
-        id: 'quality_general_axis',
-        question: 'What should I tune first to improve relevance?',
-        type: 'select',
-        options: ['Mood/tone', 'Genre', 'Cast/crew', 'Pace (slower/faster)']
-      }
-    ]
+    questions: [question]
   }
 }
 
@@ -241,21 +301,35 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
 
     const weakResultSet = isWeakRecommendationSet(recommendations)
     if (weakResultSet) {
-      console.log(`[${new Date().toISOString()}] Weak recommendation set detected; requesting clarification`) 
-      const clarification = buildWeakMatchClarification(parsedPreferences.discoveryMode)
-      return res.json({
-        success: true,
-        requiresClarification: {
-          ...clarification,
-          confidenceScore: parsedPreferences.intentConfidence
-        },
-        detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence !== undefined
-          ? {
-              mode: parsedPreferences.discoveryMode,
-              confidence: parsedPreferences.intentConfidence
-            }
-          : undefined
-      })
+      const round = clarificationContext?.clarificationRound ?? 0
+      const askedQuestionIds = new Set(clarificationContext?.askedQuestionIds || [])
+
+      if (round < MAX_CLARIFICATION_TURNS) {
+        const clarification = buildWeakMatchClarification(
+          parsedPreferences.discoveryMode,
+          round,
+          askedQuestionIds
+        )
+
+        if (clarification) {
+          console.log(`[${new Date().toISOString()}] Weak recommendation set detected; requesting clarification`) 
+          return res.json({
+            success: true,
+            requiresClarification: {
+              ...clarification,
+              confidenceScore: parsedPreferences.intentConfidence
+            },
+            detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence !== undefined
+              ? {
+                  mode: parsedPreferences.discoveryMode,
+                  confidence: parsedPreferences.intentConfidence
+                }
+              : undefined
+          })
+        }
+      }
+
+      console.log(`[${new Date().toISOString()}] Weak recommendation set persisted after clarification cap; returning best available results`)
     }
 
     res.json({
