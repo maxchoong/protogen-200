@@ -23,14 +23,17 @@ Backend API (Express + TypeScript)
 - Accepts and validates the API request
 - Supports description-only and preferences-only flows
 - Normalizes region and request data before calling the engine
+- Applies confidence gating and weak-result clarification decisions
 
 ### `src/engine/preferenceParser.ts`
 - Rule-based extraction of genres, moods, content type, and rating limits
+- Merges free-text clarification replies into the active preference analysis
 - Serves as the baseline parser even when LLM features are unavailable
 
 ### `src/engine/recommendationEngine.ts`
 - Central orchestration module
 - Combines parsing, search, filtering, ranking, explanations, availability, and trailers
+- Reuses reference-title metadata and suppresses anchor-title repeats for non-rewatch reference flows
 - Preserves graceful degradation when optional providers fail
 
 ### `src/clients/fmdb.ts`
@@ -81,12 +84,13 @@ Backend API (Express + TypeScript)
 1. User submits description, preferences, or both.
 2. Frontend infers region from browser locale and includes it in request payload.
 3. Backend validates the request.
-4. Rule-based parser extracts preferences.
-5. LLM optionally enriches parsing and explanations.
-6. OMDb returns title candidates and details.
-7. Engine filters unsafe content and ranks candidates.
-8. Engine enriches results with availability and trailers in batch-like workflows.
-9. Frontend renders cards with graceful fallback for missing enrichments.
+4. Parser extracts preferences from the initial prompt and any clarification reply.
+5. Intent/confidence gating and weak-result quality checks decide whether to clarify or finalize.
+6. LLM optionally enriches parsing and explanations.
+7. OMDb returns title candidates and details.
+8. Engine filters unsafe content and ranks candidates with mode-specific and reference-aware heuristics.
+9. Engine enriches results with availability and trailers in batch-like workflows.
+10. Frontend renders cards with graceful fallback for missing enrichments.
 
 ---
 
@@ -110,6 +114,7 @@ This pattern keeps the app functional under missing config, rate limits, or upst
 - Reject descriptions under 3 characters when present.
 - Filter unsafe titles after OMDb normalization.
 - Keep adult-content blocking as a backend concern, not a frontend-only rule.
+- Prefer clarification over returning weak recommendation sets.
 
 ---
 
@@ -117,4 +122,4 @@ This pattern keeps the app functional under missing config, rate limits, or upst
 
 - `fmdb.ts` is a legacy filename for the OMDb client and may be worth renaming later.
 - Spoiler-safe synopsis generation exists in the LLM client but is not wired into the current response flow.
-- Frontend linting is expected by scripts but not yet configured.
+- Dynamic clarification heuristics are rule-based and may still need tuning against more live prompts.

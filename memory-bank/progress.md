@@ -8,6 +8,7 @@
 - [x] Phase 4 complete: availability, trailers, loading/error states, accessibility work
 - [x] Phase 5 complete: Intent classification, conversational UI, multi-turn clarification
 - [x] Phase 6 complete: End-to-end testing, API integration validation
+- [x] Recommendation-quality refinement complete: dynamic clarification, anchor suppression, and reference-flow ranking improvements
 - [ ] Documentation fully aligned with current implementation
 - [x] Frontend lint configuration added
 - [ ] TMDB configured locally for trailer verification
@@ -120,7 +121,7 @@
 - [x] Add mood-aware weights (mood: 40%), reference-aware weights (talent: 35%), talent-aware weights (talent: 55%)
 - [x] Implement needsClarification() with confidence threshold 0.65
 - [x] Generate 3 clarification question patterns for ambiguous queries
-- [x] Prevent clarification re-asks on round > 0
+- [x] Prevent redundant clarification loops with asked-question tracking and max-turn caps
 
 ### Frontend Conversational UI
 - [x] Create useConversation hook with message state and round tracking
@@ -162,7 +163,7 @@
 - [x] Test 7: Recommendations include required fields (imdbId, title, plot, rating)
 - [x] Test 8: Talent mode applied for actor-specific queries
 - [x] Test 9: Backward compatibility with old API format
-- [x] Test 10: No clarification on round > 0 (prevents loops)
+- [x] Test 10: Clarification loop prevention behavior covered
 
 ### Integration Tests
 - [x] Create `src/engine/__tests__/intentClassification.test.ts` with Jest tests
@@ -171,6 +172,35 @@
 - [x] Test confidence scoring and thresholds
 - [x] Test clarification question generation and types
 - [x] Test suite compiles and runs without errors
+
+---
+
+## Recommendation Quality & Clarification Refinement
+
+### Backend Recommendation Quality
+- [x] Remove static mock recommendation fallback from production responses
+- [x] Suppress explicitly mentioned anchor titles by default for reference-style prompts
+- [x] Reuse reference-title genres earlier in recommendation retrieval and ranking
+- [x] Reduce broad-genre drift for reference flows like "Like Inception but more relaxing"
+- [x] Strengthen pace and mood contrast parsing for calming/slower refinements
+- [x] Add weak-result quality gates before finalizing recommendations
+
+### Dynamic Clarification Flow
+- [x] Track asked clarification IDs in request/response flow
+- [x] Auto-submit clarification options in the conversational UI
+- [x] Auto-submit empty-state example prompts for faster flow testing
+- [x] Replace stage-based weak-match questioning with unresolved-dimension selection
+- [x] Allow one freeform clarification to satisfy multiple latent questions
+- [x] Finalize immediately when enough context has been gathered
+- [x] Cap clarification turns to avoid procedural loops
+
+### Verification
+- [x] Route-level tests updated for dynamic clarification behavior
+- [x] Integration regression added for relaxing-reference ranking behavior
+- [x] Backend Jest suite passing (87/87)
+- [x] Backend `npm run build` passing
+- [x] Frontend `npm run build` passing
+- [x] Changes committed and pushed to `origin/main` (`c3b590e`)
 
 ### Build Verification
 - [x] Backend `npm run build` passes
@@ -188,4 +218,5 @@
 - [ ] Consider backend pipeline optimization or refactoring if performance becomes an issue
 - [ ] Test full multi-turn flow end-to-end with live API
 - [ ] Run accessibility audit on new conversational UI
+- [ ] Run live smoke tests focused on conversational naturalness and dynamic follow-up heuristics
 - [ ] Plan v2 features if any (spoiler handling, user accounts, advanced filtering, etc.)
