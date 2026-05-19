@@ -80,6 +80,8 @@ interface ApiResponse {
   }
 }
 
+type ParsedPreferencesSnapshot = ReturnType<typeof PreferenceParser.parse>
+
 const MIN_TOP_COMPOSITE = 0.45
 const MIN_STRONG_MATCH_COUNT = 2
 const MAX_CLARIFICATION_TURNS = 3
@@ -111,12 +113,90 @@ const nextUnaskedQuestion = (
   return null
 }
 
+const hasKeywordMatch = (value: string, keywords: string[]): boolean => {
+  const lower = value.toLowerCase()
+  return keywords.some(keyword => lower.includes(keyword.toLowerCase()))
+}
+
+const inferClarificationState = (
+  mode: 'mood' | 'reference' | 'talent' | 'mixed' | undefined,
+  parsedPreferences: ParsedPreferencesSnapshot,
+  latestAnswer: string,
+  askedQuestionIds: Set<string>
+) => {
+  const lowerAnswer = latestAnswer.toLowerCase()
+  const genreKeywords = [
+    'action', 'comedy', 'drama', 'sci-fi', 'science fiction', 'thriller',
+    'romance', 'horror', 'fantasy', 'animation', 'documentary', 'indie'
+  ]
+
+  const axisResolved =
+    askedQuestionIds.has('quality_reference_axis') ||
+    askedQuestionIds.has('quality_disambiguate_intent') ||
+    hasKeywordMatch(lowerAnswer, [
+      'mood', 'tone', 'plot', 'plot complexity', 'cast', 'director',
+      'genre similarity', 'genre', 'actor', 'title', 'reference title'
+    ])
+
+  const formatResolved =
+    askedQuestionIds.has('quality_format_focus') ||
+    hasKeywordMatch(lowerAnswer, ['movie', 'movies', 'film', 'series', 'show', 'tv', 'either'])
+
+  const paceResolved =
+    askedQuestionIds.has('quality_runtime_focus') ||
+    hasKeywordMatch(lowerAnswer, [
+      'slower pace', 'slow pace', 'slower', 'gentler', 'more relaxed', 'relaxed pace',
+      'faster pace', 'fast pace', 'faster', 'more kinetic', 'balanced pace', 'no preference'
+    ])
+
+  const eraResolved =
+    askedQuestionIds.has('quality_era_focus') ||
+    hasKeywordMatch(lowerAnswer, ['recent', 'last 5 years', '2010s', '2000s', 'classic', 'before 2000', 'no preference'])
+
+  const genreResolved =
+    parsedPreferences.genres.length > 0 ||
+    hasKeywordMatch(lowerAnswer, genreKeywords) ||
+    (mode === 'reference' && (parsedPreferences.referenceTitle?.length || 0) > 0 && axisResolved)
+
+  const moodResolved =
+    (parsedPreferences.boostedMoods?.length || 0) > 0 ||
+    (parsedPreferences.reducedMoods?.length || 0) > 0 ||
+    hasKeywordMatch(lowerAnswer, ['mood', 'tone', 'relaxing', 'calm', 'intense', 'dark', 'funny'])
+
+  const enoughContextToFinalize =
+    (mode === 'reference' && axisResolved && genreResolved && (paceResolved || formatResolved)) ||
+    (mode === 'mood' && genreResolved && (paceResolved || formatResolved)) ||
+    (mode === 'talent' && genreResolved && formatResolved) ||
+    (mode === 'mixed' && axisResolved && (genreResolved || moodResolved) && (paceResolved || formatResolved))
+
+  return {
+    axisResolved,
+    formatResolved,
+    paceResolved,
+    eraResolved,
+    genreResolved,
+    moodResolved,
+    enoughContextToFinalize
+  }
+}
+
 const buildWeakMatchClarification = (
   mode: 'mood' | 'reference' | 'talent' | 'mixed' | undefined,
   clarificationRound: number,
-  askedQuestionIds: Set<string>
+  askedQuestionIds: Set<string>,
+  parsedPreferences: ParsedPreferencesSnapshot,
+  latestAnswer: string
 ): RequiresClarification | null => {
   const sharedContext = 'I need one more detail so I can return closer matches instead of weak guesses.'
+  const hasInferredMoodShift =
+    (parsedPreferences.boostedMoods?.length || 0) > 0 ||
+    (parsedPreferences.reducedMoods?.length || 0) > 0
+  const modeKey: 'mood' | 'reference' | 'talent' | 'mixed' = mode || 'mixed'
+  const state = inferClarificationState(modeKey, parsedPreferences, latestAnswer, askedQuestionIds)
+
+  if (state.enoughContextToFinalize) {
+    return null
+  }
 
   const roundOneByMode: Record<'mood' | 'reference' | 'talent' | 'mixed', ClarificationQuestion[]> = {
     mood: [
@@ -132,7 +212,13 @@ const buildWeakMatchClarification = (
         id: 'quality_reference_axis',
         question: 'For titles similar to your reference, what should I prioritize?',
         type: 'select',
-        options: ['Mood/tone', 'Plot complexity', 'Cast/director overlap', 'Genre similarity', 'Other (type your own)']
+        options: [
+          ...(hasInferredMoodShift ? [] : ['Mood/tone']),
+          'Plot complexity',
+          'Cast/director overlap',
+          'Genre similarity',
+          'Other (type your own)'
+        ]
       }
     ],
     talent: [
@@ -168,6 +254,21 @@ const buildWeakMatchClarification = (
     }
   ]
 
+  const referenceFollowUps: ClarificationQuestion[] = [
+    {
+      id: 'quality_format_focus',
+      question: 'Do you want a movie, series, or either?',
+      type: 'select',
+      options: ['Movie', 'Series', 'Either', 'Other (type your own)']
+    },
+    {
+      id: 'quality_runtime_focus',
+      question: 'Do you prefer a faster pace or a slower, more relaxed pace?',
+      type: 'select',
+      options: ['Faster pace', 'Balanced pace', 'Slower pace', 'No preference', 'Other (type your own)']
+    }
+  ]
+
   const roundTwoGeneric: ClarificationQuestion[] = [
     {
       id: 'quality_runtime_focus',
@@ -183,12 +284,36 @@ const buildWeakMatchClarification = (
     }
   ]
 
-  const modeKey: 'mood' | 'reference' | 'talent' | 'mixed' = mode || 'mixed'
-  const primaryCandidates = clarificationRound === 0
-    ? roundOneByMode[modeKey]
-    : clarificationRound === 1
-      ? roundOneFollowUps
-      : roundTwoGeneric
+  let primaryCandidates: ClarificationQuestion[] = []
+
+  if (clarificationRound === 0 && !state.axisResolved) {
+    primaryCandidates = roundOneByMode[modeKey]
+  } else if (!state.genreResolved) {
+    if (modeKey === 'mood') {
+      primaryCandidates = [roundOneByMode.mood[0]]
+    } else if (modeKey === 'talent') {
+      primaryCandidates = [roundOneByMode.talent[0]]
+    } else if (modeKey === 'mixed') {
+      primaryCandidates = [roundOneFollowUps[0]]
+    }
+  } else if (!state.formatResolved) {
+    primaryCandidates = [
+      {
+        id: 'quality_format_focus',
+        question: 'Do you want a movie, series, or either?',
+        type: 'select',
+        options: ['Movie', 'Series', 'Either', 'Other (type your own)']
+      }
+    ]
+  } else if (!state.paceResolved && !hasInferredMoodShift) {
+    primaryCandidates = [roundTwoGeneric[0]]
+  } else if (!state.eraResolved && clarificationRound >= 2) {
+    primaryCandidates = [roundTwoGeneric[1]]
+  }
+
+  if (primaryCandidates.length === 0) {
+    return null
+  }
 
   const question = nextUnaskedQuestion(askedQuestionIds, primaryCandidates)
   if (!question) {
@@ -308,7 +433,9 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
         const clarification = buildWeakMatchClarification(
           parsedPreferences.discoveryMode,
           round,
-          askedQuestionIds
+          askedQuestionIds,
+          parsedPreferences,
+          clarificationContext?.userClarification || ''
         )
 
         if (clarification) {

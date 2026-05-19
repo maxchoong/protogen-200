@@ -89,8 +89,8 @@ export class PreferenceParser {
   private static readonly MOOD_KEYWORDS: Record<string, string[]> = {
     'Happy': ['happy', 'uplifting', 'feel-good', 'cheerful', 'light', 'fun'],
     'Sad': ['sad', 'emotional', 'crying', 'melancholic', 'depressing'],
-    'Intense': ['intense', 'adrenaline', 'fast-paced', 'suspenseful', 'gripping'],
-    'Relaxing': ['relaxing', 'chill', 'cozy', 'calm', 'peaceful', 'easy-going'],
+    'Intense': ['intense', 'adrenaline', 'fast-paced', 'fast paced', 'suspenseful', 'gripping', 'faster pace'],
+    'Relaxing': ['relaxing', 'chill', 'cozy', 'calm', 'peaceful', 'easy-going', 'slower pace', 'slow pace', 'slower', 'gentle'],
     'Funny': ['funny', 'hilarious', 'laugh', 'comedy', 'witty'],
     'Thoughtful': ['thoughtful', 'philosophical', 'intelligent', 'educational', 'inspiring'],
     'Dark': ['dark', 'gritty', 'bleak', 'moody', 'brooding'],
@@ -402,8 +402,12 @@ export class PreferenceParser {
     // Store original description for later use
     preferences.description = analysisText
 
-    // If no genres found, use top genres as fallback
-    if (preferences.genres.length === 0 && !request.preferences?.genres) {
+    // If no genres found, use broad fallback genres only for non-reference discovery.
+    if (
+      preferences.genres.length === 0 &&
+      !request.preferences?.genres &&
+      (preferences.referenceTitle?.length || 0) === 0
+    ) {
       preferences.genres = ['Drama', 'Comedy', 'Action']
     }
 
@@ -441,6 +445,18 @@ export class PreferenceParser {
     if (/(more|extra|bit more)\s+(relaxing|calm|chill|cozy|peaceful)/i.test(lower)) {
       boostedMoods.push('Relaxing')
       reducedMoods.push('Intense')
+      reducedMoods.push('Funny')
+      reducedMoods.push('Happy')
+    }
+
+    if (/(slower|slower pace|slow pace|more measured|gentler)/i.test(lower)) {
+      boostedMoods.push('Relaxing')
+      reducedMoods.push('Intense')
+    }
+
+    if (/(faster|faster pace|more kinetic|more adrenaline)/i.test(lower)) {
+      boostedMoods.push('Intense')
+      reducedMoods.push('Relaxing')
     }
 
     if (/(less|not as)\s+(intense|dark|suspenseful|gritty)/i.test(lower)) {

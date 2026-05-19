@@ -259,13 +259,13 @@ describe('Performance Benchmarks - Phase 6', () => {
  * Manual smoke tests for expected behavior
  */
 describe('Manual Smoke Tests - Phase 4 Explanations', () => {
-  it('Query 1: heist with reference title should focus on genres and talent', () => {
+  it('Query 1: heist with reference title should focus on inference and talent', () => {
     const request = { description: 'heist like Ocean\'s Eleven' }
     const preferences = PreferenceParser.parse(request)
     
-    // Verification: heist genre and reference title are parsed
-    expect(preferences.genres.length).toBeGreaterThan(0)
+    // Verification: reference title survives parsing; genre enforcement happens later in ranking.
     expect(preferences.referenceTitle).toBeDefined()
+    expect(preferences.referenceTitle!.length).toBeGreaterThan(0)
   })
 
   it('Query 2: excluded genres should be captured for filtering', () => {
@@ -425,5 +425,58 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
     const rankedIds = ranked.map((item: any) => item.id)
 
     expect(rankedIds).toContain('tt1375666')
+  })
+
+  it('should treat slower pace refinement as relaxing and reduce intensity', () => {
+    const preferences = PreferenceParser.parse({
+      description: 'Like Inception but more relaxing',
+      clarificationContext: {
+        clarificationRound: 1,
+        userClarification: 'Genre similarity slower pace'
+      }
+    })
+
+    expect(preferences.boostedMoods).toContain('Relaxing')
+    expect(preferences.reducedMoods).toContain('Intense')
+    expect(preferences.genres).toEqual([])
+  })
+
+  it('should favor sci-fi alternatives over comedy drift for relaxing Inception-like requests', () => {
+    const preferences = PreferenceParser.parse({
+      description: 'Like Inception but more relaxing',
+      clarificationContext: {
+        clarificationRound: 1,
+        userClarification: 'Genre similarity slower pace'
+      }
+    })
+
+    const titles = [
+      {
+        id: 'tt3000001',
+        title: 'Relaxed Sci-Fi Option',
+        genres: ['Sci-Fi', 'Thriller'],
+        plot: 'A calm and thoughtful science-fiction mystery with gentle pacing.',
+        rating: 7.4,
+        voteCount: 900,
+        year: 2018,
+        talentMatchScore: 0.3
+      },
+      {
+        id: 'tt3000002',
+        title: 'Comedy Drift Option',
+        genres: ['Drama', 'Comedy'],
+        plot: 'A hilarious and lighthearted comedy about unlikely friendships.',
+        rating: 7.9,
+        voteCount: 1200,
+        year: 2019,
+        talentMatchScore: 0.3
+      }
+    ]
+
+    const referenceTitles = [{ id: 'tt1375666', title: 'Inception', genres: ['Sci-Fi', 'Thriller', 'Drama'] }]
+    const ranked = (recommendationEngine as any).rankTitles(titles, preferences, referenceTitles)
+
+    expect(ranked).toHaveLength(1)
+    expect(ranked[0].id).toBe('tt3000001')
   })
 })

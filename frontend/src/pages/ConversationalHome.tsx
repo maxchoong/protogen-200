@@ -218,7 +218,8 @@ export default function ConversationalHome({
                 ].map((example, i) => (
                   <button
                     key={i}
-                    onClick={() => setInputValue(example)}
+                    onClick={() => void submitMessage(example)}
+                    disabled={state.isLoading}
                     className="rounded-md border border-border bg-surface px-3 py-2 text-sm text-text transition-colors hover:border-accent"
                   >
                     {example}

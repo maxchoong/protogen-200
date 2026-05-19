@@ -36,6 +36,16 @@ export interface Recommendation {
 export class RecommendationEngine {
   // Cache for reference titles (Phase 2.2)
   private referenceTitlesCache: Map<string, any> = new Map()
+
+  private deriveReferenceGenres(referenceTitles: any[]): string[] {
+    const broadGenres = new Set(['Drama', 'Comedy', 'Romance', 'Action', 'Adventure'])
+    const collected = referenceTitles.flatMap(referenceTitle => referenceTitle?.genres || [])
+    const unique = Array.from(new Set(collected.filter(Boolean)))
+    const specific = unique.filter(genre => !broadGenres.has(genre))
+
+    return specific.length > 0 ? specific : unique
+  }
+
   /**
    * Generate recommendations based on user request
    */
@@ -70,6 +80,10 @@ export class RecommendationEngine {
       const refResults = await Promise.all(refTitlePromises)
       const validRefs = refResults.filter((r): r is any => r !== null)
       referenceTitles.push(...validRefs)
+      const referenceGenres = this.deriveReferenceGenres(referenceTitles)
+      if (referenceGenres.length > 0) {
+        preferences.genres = Array.from(new Set([...referenceGenres, ...preferences.genres]))
+      }
       console.log(`[Engine] Resolved ${referenceTitles.length} reference titles`)
     }
 
@@ -115,8 +129,12 @@ export class RecommendationEngine {
     } else if (preferences.discoveryMode === 'reference' && preferences.referenceTitle && preferences.referenceTitle.length > 0) {
       // Reference mode: fetches anchor metadata separately; search alternatives by genres/mood.
       searchTerms = []
+      const referenceGenres = this.deriveReferenceGenres(referenceTitles)
+      if (referenceGenres.length > 0) {
+        searchTerms.push(...referenceGenres.slice(0, 2))
+      }
       if (preferences.genres && preferences.genres.length > 0) {
-        searchTerms.push(...preferences.genres)
+        searchTerms.push(...preferences.genres.filter(genre => !searchTerms.includes(genre)).slice(0, 2))
       }
       if (preferences.mood && preferences.mood.length > 0) {
         searchTerms.push(...preferences.mood.slice(0, 2))
@@ -364,7 +382,7 @@ export class RecommendationEngine {
    * Infer core genres from query to enforce as hard filters
    * E.g., if query contains "heist", REQUIRE Crime/Thriller (not optional)
    */
-  private inferCoreGenres(query: string, parsedGenres: string[]): string[] {
+  private inferCoreGenres(query: string, parsedGenres: string[], referenceTitles: any[] = []): string[] {
     // Check query for specific genre keywords
     const queryLower = query.toLowerCase()
 
@@ -399,6 +417,11 @@ export class RecommendationEngine {
       return Array.from(new Set(requiredGenres))
     }
 
+    const referenceGenres = this.deriveReferenceGenres(referenceTitles)
+    if (referenceGenres.length > 0) {
+      return referenceGenres
+    }
+
     // Otherwise, fall back to parsed genres as soft preferences
     return parsedGenres
   }
@@ -413,7 +436,8 @@ export class RecommendationEngine {
     // Infer core genres from query and parsed preferences
     const coreGenres = this.inferCoreGenres(
       preferences.description || '',
-      preferences.genres
+      preferences.genres,
+      referenceTitles
     )
 
     // Check if query is heist-specific to enable semantic filtering
@@ -546,6 +570,12 @@ export class RecommendationEngine {
     const boosted = new Set(preferences.boostedMoods || [])
     const reduced = new Set(preferences.reducedMoods || [])
 
+    if (boosted.has('Relaxing')) {
+      reduced.add('Funny')
+      reduced.add('Happy')
+      reduced.add('Intense')
+    }
+
     if (boosted.size === 0 && reduced.size === 0) {
       return 1.0
     }
@@ -565,14 +595,14 @@ export class RecommendationEngine {
     for (const mood of boosted) {
       const keywords = moodKeywords[mood] || []
       if (keywords.some(kw => plotLower.includes(kw))) {
-        multiplier += 0.12
+        multiplier += preferences.isContrastiveReference ? 0.22 : 0.12
       }
     }
 
     for (const mood of reduced) {
       const keywords = moodKeywords[mood] || []
       if (keywords.some(kw => plotLower.includes(kw))) {
-        multiplier -= 0.2
+        multiplier -= preferences.isContrastiveReference ? 0.3 : 0.2
       }
     }
 
