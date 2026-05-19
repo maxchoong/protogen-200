@@ -160,6 +160,37 @@ Use tighter tracking for headings and labels only. Keep body copy and synopsis n
 - Enter submits, Shift+Enter inserts newline
 - Show loading and disabled states clearly
 
+### Response Pending Indicator
+
+Use a dedicated assistant-side waiting indicator whenever a query is submitted and the system has not returned a response yet.
+
+1. Initial waiting state (0 to 2 seconds)
+- Render a pending assistant bubble immediately below the latest user message
+- Use neutral copy such as "Thinking" or "Generating response"
+- Include subtle motion (for example animated dots), but keep animation low-amplitude and non-distracting
+- Keep send action disabled while request is in-flight, with a visible disabled state
+
+2. Slow response state (2 to 8 seconds)
+- Update indicator copy to set expectation, such as "Still working on this"
+- Keep the same bubble position to prevent layout jump
+- Continue to show keyboard-focus order clearly for available controls
+
+3. Delayed response state (8+ seconds)
+- Show a secondary helper line, such as "This is taking longer than usual"
+- Reveal a non-destructive secondary action: "Cancel" or "Try again"
+- Preserve user input and conversation context if cancellation happens
+
+4. Failure state
+- Replace pending indicator with inline error text in the assistant stream area
+- Provide a clear retry action near the failed message
+- Do not clear previous messages or entered clarification context
+
+5. Accessibility requirements
+- Announce state changes using an `aria-live="polite"` region
+- Ensure animated indicators respect reduced-motion settings
+- Do not rely on color alone to indicate waiting vs failed states
+- Keep indicator copy concise and free of emoticons/emoji characters
+
 ## Layout Guidance
 
 - Default layout supports conversational-first home screen
@@ -183,6 +214,7 @@ Use tighter tracking for headings and labels only. Keep body copy and synopsis n
 - Do not rely on color alone to indicate selected conversational options
 - Do not use dense 2px gaps between all interactive elements on mobile
 - Do not introduce Tailwind v4-only syntax while the app remains on Tailwind v3
+- Do not use emoticons or emoji characters in UI copy, labels, buttons, placeholders, or system messages
 
 ## Quick Start
 

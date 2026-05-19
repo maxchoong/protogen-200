@@ -1,9 +1,12 @@
-import { useState } from 'react'
+import { useRef, useState, type KeyboardEvent } from 'react'
 import { useConversation, ClarificationQuestion, DetectedIntent } from '../hooks/useConversation'
 import './ConversationalHome.css'
 
 interface ConversationalHomeProps {
-  onSubmit: (description: string, clarificationContext?: any) => Promise<{
+  onSubmit: (
+    description: string,
+    clarificationContext?: { clarificationRound: number; userClarification: string }
+  ) => Promise<{
     recommendations?: any[]
     requiresClarification?: {
       questions: ClarificationQuestion[]
@@ -12,35 +15,71 @@ interface ConversationalHomeProps {
     }
     detectedIntent?: DetectedIntent
   }>
-  loading?: boolean
-  error?: string | null
   onNavigateToResults?: (recommendations: any[], query: string) => void
 }
 
+type PendingPhase = 'initial' | 'slow' | 'delayed' | null
+
 export default function ConversationalHome({
   onSubmit,
-  loading = false,
-  error = null,
   onNavigateToResults
 }: ConversationalHomeProps) {
   const conversation = useConversation()
   const { state } = conversation
   const [inputValue, setInputValue] = useState('')
+  const [pendingPhase, setPendingPhase] = useState<PendingPhase>(null)
+  const [lastSubmittedText, setLastSubmittedText] = useState('')
+  const activeRequestRef = useRef(0)
+  const slowTimerRef = useRef<number>()
+  const delayedTimerRef = useRef<number>()
 
-  const handleSubmitMessage = async () => {
-    const trimmed = inputValue.trim()
+  const clearPendingTimers = () => {
+    if (slowTimerRef.current) {
+      window.clearTimeout(slowTimerRef.current)
+    }
+    if (delayedTimerRef.current) {
+      window.clearTimeout(delayedTimerRef.current)
+    }
+  }
+
+  const startPendingState = () => {
+    clearPendingTimers()
+    setPendingPhase('initial')
+    conversation.setLoading(true)
+    slowTimerRef.current = window.setTimeout(() => setPendingPhase('slow'), 2000)
+    delayedTimerRef.current = window.setTimeout(() => setPendingPhase('delayed'), 8000)
+  }
+
+  const stopPendingState = () => {
+    clearPendingTimers()
+    setPendingPhase(null)
+    conversation.setLoading(false)
+  }
+
+  const submitMessage = async (
+    rawText: string,
+    options: { appendUserMessage?: boolean } = {}
+  ) => {
+    const trimmed = rawText.trim()
     if (!trimmed) return
 
-    // Add user message
-    conversation.addMessage({
-      role: 'user',
-      text: trimmed,
-      timestamp: Date.now()
-    })
+    const shouldAppendUserMessage = options.appendUserMessage ?? true
 
-    conversation.setLoading(true)
+    if (shouldAppendUserMessage) {
+      conversation.addMessage({
+        role: 'user',
+        text: trimmed,
+        timestamp: Date.now()
+      })
+      setInputValue('')
+    }
+
+    setLastSubmittedText(trimmed)
     conversation.setError(null)
-    setInputValue('')
+
+    const requestId = activeRequestRef.current + 1
+    activeRequestRef.current = requestId
+    startPendingState()
 
     try {
       const response = await onSubmit(
@@ -53,8 +92,12 @@ export default function ConversationalHome({
           : undefined
       )
 
+      // Ignore stale responses from canceled or superseded requests.
+      if (requestId !== activeRequestRef.current) {
+        return
+      }
+
       if (response.requiresClarification) {
-        // Add clarification prompt
         conversation.addMessage({
           role: 'assistant',
           text: response.requiresClarification.context,
@@ -64,21 +107,16 @@ export default function ConversationalHome({
         })
         conversation.updateClarificationRound(1)
       } else if (response.recommendations && response.recommendations.length > 0) {
-        // Add results message
         conversation.addMessage({
           role: 'assistant',
-          text: `Found ${response.recommendations.length} recommendations for you!`,
+          text: `Found ${response.recommendations.length} recommendations for you.`,
           timestamp: Date.now(),
           recommendations: response.recommendations,
           detectedIntent: response.detectedIntent
         })
 
-        // Navigate to results page
         if (onNavigateToResults) {
-          onNavigateToResults(
-            response.recommendations,
-            state.lastQuery || trimmed
-          )
+          onNavigateToResults(response.recommendations, state.lastQuery || trimmed)
         }
       }
 
@@ -90,17 +128,38 @@ export default function ConversationalHome({
         conversation.updateLastIntent(response.detectedIntent)
       }
     } catch (err) {
+      if (requestId !== activeRequestRef.current) {
+        return
+      }
       conversation.setError(err instanceof Error ? err.message : 'Something went wrong')
     } finally {
-      conversation.setLoading(false)
+      if (requestId === activeRequestRef.current) {
+        stopPendingState()
+      }
     }
+  }
+
+  const handleSubmitMessage = async () => {
+    await submitMessage(inputValue)
   }
 
   const handleClarificationSelect = (optionText: string) => {
     setInputValue(optionText)
   }
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleCancelPending = () => {
+    if (!state.isLoading) return
+    activeRequestRef.current += 1
+    stopPendingState()
+    conversation.setError('Request canceled. You can refine your message and try again.')
+  }
+
+  const handleRetry = async () => {
+    if (!lastSubmittedText || state.isLoading) return
+    await submitMessage(lastSubmittedText, { appendUserMessage: false })
+  }
+
+  const handleKeyPress = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSubmitMessage()
@@ -110,14 +169,20 @@ export default function ConversationalHome({
   const latestMessage = state.messages[state.messages.length - 1]
   const showClarification =
     latestMessage?.role === 'assistant' && latestMessage?.clarificationQuestions
+  const pendingLabel =
+    pendingPhase === 'delayed'
+      ? 'This is taking longer than usual.'
+      : pendingPhase === 'slow'
+        ? 'Still working on this request.'
+        : 'Generating response.'
 
   return (
-    <div className="conversational-home min-h-screen flex flex-col bg-gradient-to-br from-slate-900 to-slate-800">
+    <div className="conversational-home min-h-screen flex flex-col bg-bg text-text">
       {/* Header */}
-      <div className="bg-slate-900 border-b border-slate-700 px-4 py-4">
+      <div className="border-b border-border bg-surface px-4 py-4">
         <div className="max-w-4xl mx-auto">
-          <h1 className="text-2xl font-bold text-white">🎬 Film & TV Advisor</h1>
-          <p className="text-slate-400 text-sm mt-1">
+          <h1 className="text-2xl font-bold text-text">Film and TV Advisor</h1>
+          <p className="mt-1 text-sm text-text-muted">
             Tell me what you're looking for and I'll find the perfect thing to watch
           </p>
         </div>
@@ -127,20 +192,20 @@ export default function ConversationalHome({
       <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="max-w-4xl mx-auto space-y-4">
           {state.messages.length === 0 && (
-            <div className="text-center text-slate-400 mt-12">
-              <p className="text-lg mb-4">👋 Start by telling me what you're in the mood for</p>
+            <div className="mt-12 text-center text-text-muted">
+              <p className="mb-4 text-lg">Start by describing what you want to watch.</p>
               <p className="text-sm">Examples:</p>
               <div className="flex flex-wrap justify-center gap-2 mt-4">
                 {[
-                  '🎭 Something funny with Ryan Gosling',
-                  '🎬 Like Inception but more relaxing',
-                  '☀️ A cozy weekend movie',
-                  '🎪 Surprising indie gems'
+                  'Something funny with Ryan Gosling',
+                  'Like Inception but more relaxing',
+                  'A cozy weekend movie',
+                  'Surprising indie gems'
                 ].map((example, i) => (
                   <button
                     key={i}
-                    onClick={() => setInputValue(example.substring(2).trim())}
-                    className="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-sm transition-colors"
+                    onClick={() => setInputValue(example)}
+                    className="rounded-md border border-border bg-surface px-3 py-2 text-sm text-text transition-colors hover:border-accent"
                   >
                     {example}
                   </button>
@@ -157,16 +222,16 @@ export default function ConversationalHome({
               <div
                 className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
                   msg.role === 'user'
-                    ? 'bg-blue-600 text-white rounded-br-none'
-                    : 'bg-slate-700 text-slate-100 rounded-bl-none'
+                    ? 'bg-accent text-accent-contrast rounded-br-none'
+                    : 'bg-surface text-text rounded-bl-none border border-border'
                 }`}
               >
                 <p className="text-sm">{msg.text}</p>
 
                 {msg.detectedIntent && (
-                  <div className="mt-2 text-xs text-slate-300">
+                  <div className="mt-2 text-xs text-text-muted">
                     <p>
-                      🎯 Intent: <span className="font-semibold">{msg.detectedIntent.mode}</span>{' '}
+                      Intent mode: <span className="font-semibold">{msg.detectedIntent.mode}</span>{' '}
                       ({(msg.detectedIntent.confidence * 100).toFixed(0)}%)
                     </p>
                   </div>
@@ -183,8 +248,8 @@ export default function ConversationalHome({
                               <button
                                 key={i}
                                 onClick={() => handleClarificationSelect(option)}
-                                disabled={loading}
-                                className="w-full text-left px-3 py-1 text-sm bg-slate-600 hover:bg-slate-500 text-white rounded transition-colors disabled:opacity-50"
+                                disabled={state.isLoading}
+                                className="w-full rounded-md border border-border bg-surface-2 px-3 py-1 text-left text-sm text-text transition-colors hover:border-accent disabled:opacity-50"
                               >
                                 {option}
                               </button>
@@ -199,28 +264,53 @@ export default function ConversationalHome({
             </div>
           ))}
 
-          {loading && (
+          {state.isLoading && (
             <div className="flex justify-start">
-              <div className="bg-slate-700 text-slate-100 px-4 py-2 rounded-lg rounded-bl-none">
-                <div className="flex space-x-2">
-                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce"></div>
-                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+              <div
+                className="max-w-xs rounded-lg rounded-bl-none border border-border bg-surface px-4 py-3 text-text"
+                aria-live="polite"
+                role="status"
+              >
+                <p className="text-sm">{pendingLabel}</p>
+                <div className="mt-2 flex space-x-2" aria-hidden="true">
+                  <span className="pending-dot"></span>
+                  <span className="pending-dot"></span>
+                  <span className="pending-dot"></span>
                 </div>
+
+                {pendingPhase === 'delayed' && (
+                  <div className="mt-3">
+                    <button
+                      onClick={handleCancelPending}
+                      className="rounded-md border border-border px-3 py-1 text-xs text-text transition-colors hover:border-accent"
+                    >
+                      Cancel request
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           )}
 
-          {error && (
-            <div className="bg-red-900/30 border border-red-700 text-red-200 px-4 py-2 rounded-lg text-sm">
-              ⚠️ {error}
+          {state.error && (
+            <div className="rounded-lg border border-red-500/60 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+              <p>{state.error}</p>
+              {lastSubmittedText && (
+                <button
+                  onClick={handleRetry}
+                  disabled={state.isLoading}
+                  className="mt-3 rounded-md border border-border px-3 py-1 text-xs text-text transition-colors hover:border-accent disabled:opacity-50"
+                >
+                  Try again
+                </button>
+              )}
             </div>
           )}
         </div>
       </div>
 
       {/* Input Area */}
-      <div className="border-t border-slate-700 bg-slate-900 px-4 py-4">
+      <div className="border-t border-border bg-surface px-4 py-4">
         <div className="max-w-4xl mx-auto">
           <div className="flex gap-2">
             <textarea
@@ -232,19 +322,19 @@ export default function ConversationalHome({
                   ? 'Select or type your answer...'
                   : 'Tell me what you want to watch...'
               }
-              disabled={loading}
+              disabled={state.isLoading}
               rows={3}
-              className="flex-1 px-4 py-2 bg-slate-800 text-white rounded-lg placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 resize-none"
+              className="flex-1 resize-none rounded-lg border border-border bg-surface-2 px-4 py-2 text-text placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-focus disabled:opacity-50"
             />
             <button
               onClick={handleSubmitMessage}
-              disabled={!inputValue.trim() || loading}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed h-fit"
+              disabled={!inputValue.trim() || state.isLoading}
+              className="h-fit rounded-md bg-accent px-4 py-2 font-medium text-accent-contrast transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {loading ? '...' : 'Send'}
+              {state.isLoading ? 'Sending...' : 'Send'}
             </button>
           </div>
-          <p className="text-xs text-slate-500 mt-2">Press Enter to send, Shift+Enter for new line</p>
+          <p className="mt-2 text-xs text-text-muted">Press Enter to send, Shift+Enter for new line.</p>
         </div>
       </div>
     </div>

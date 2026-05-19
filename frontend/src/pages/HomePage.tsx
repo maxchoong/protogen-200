@@ -71,18 +71,18 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
       <div className="max-w-2xl w-full">
         {/* Header */}
         <div className="text-center mb-12">
-          <h1 className="text-5xl font-bold text-white mb-4">
-            🎬 Film & TV Advisor
+          <h1 className="mb-4 text-5xl font-bold text-text">
+            Film and TV Advisor
           </h1>
-          <p className="text-xl text-slate-300">
+          <p className="text-xl text-text-muted">
             Tell us what you're in the mood for and we'll find the perfect thing to watch
           </p>
         </div>
 
         {/* Main Form */}
-        <form onSubmit={handleSubmit} className="bg-slate-800 rounded-lg shadow-xl p-8 mb-6">
+        <form onSubmit={handleSubmit} className="mb-6 rounded-lg border border-border bg-surface p-8 shadow-card">
           <div className="mb-6">
-            <label htmlFor="description" className="block text-sm font-medium text-white mb-2">
+            <label htmlFor="description" className="mb-2 block text-sm font-medium text-text">
               What are you in the mood for?
             </label>
             <textarea
@@ -90,12 +90,12 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="e.g., A cozy romance on a rainy day, or an intense sci-fi thriller..."
-              className="w-full px-4 py-3 bg-slate-700 text-white rounded-lg placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 h-32 resize-none"
+              className="h-32 w-full resize-none rounded-lg border border-border bg-surface-2 px-4 py-3 text-text placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-focus"
               disabled={loading}
               aria-invalid={description.length > 0 && description.trim().length < 3}
               aria-describedby="char-count"
             />
-            <p id="char-count" className="text-sm text-slate-400 mt-2">
+            <p id="char-count" className="mt-2 text-sm text-text-muted">
               {description.length}/500 characters
             </p>
           </div>
@@ -104,7 +104,7 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
           <button
             type="button"
             onClick={() => setShowPreferences(!showPreferences)}
-            className="text-blue-400 hover:text-blue-300 text-sm mb-4 underline"
+            className="mb-4 text-sm text-accent underline transition-opacity hover:opacity-80"
             aria-expanded={showPreferences}
             aria-controls="preferences-panel"
           >
@@ -113,10 +113,10 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
 
           {/* Preferences Panel */}
           {showPreferences && (
-            <div id="preferences-panel" className="bg-slate-700 rounded-lg p-6 mb-6 space-y-6" role="region" aria-label="Preference options">
+            <div id="preferences-panel" className="mb-6 space-y-6 rounded-lg border border-border bg-surface-2 p-6" role="region" aria-label="Preference options">
               {/* Genres */}
               <div>
-                <label className="block text-sm font-medium text-white mb-3">
+                <label className="mb-3 block text-sm font-medium text-text">
                   Genres (optional)
                 </label>
                 <div className="flex flex-wrap gap-2" role="group" aria-label="Genre selection">
@@ -127,8 +127,8 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
                       onClick={() => handleToggleGenre(genre)}
                       className={`px-4 py-2 rounded-full text-sm transition-colors ${
                         preferences.genres.includes(genre)
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-slate-600 text-slate-200 hover:bg-slate-500'
+                          ? 'bg-accent text-accent-contrast'
+                          : 'border border-border bg-surface text-text hover:border-accent'
                       }`}
                       disabled={loading}
                       aria-pressed={preferences.genres.includes(genre)}
@@ -142,7 +142,7 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
 
               {/* Mood */}
               <div>
-                <label className="block text-sm font-medium text-white mb-3">
+                <label className="mb-3 block text-sm font-medium text-text">
                   Mood (optional)
                 </label>
                 <div className="flex flex-wrap gap-2" role="group" aria-label="Mood selection">
@@ -153,8 +153,8 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
                       onClick={() => handleToggleMood(mood)}
                       className={`px-4 py-2 rounded-full text-sm transition-colors ${
                         preferences.mood.includes(mood)
-                          ? 'bg-green-600 text-white'
-                          : 'bg-slate-600 text-slate-200 hover:bg-slate-500'
+                          ? 'bg-accent text-accent-contrast'
+                          : 'border border-border bg-surface text-text hover:border-accent'
                       }`}
                       disabled={loading}
                       aria-pressed={preferences.mood.includes(mood)}
@@ -168,7 +168,7 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
 
               {/* Type */}
               <div>
-                <label className="block text-sm font-medium text-white mb-3">
+                <label className="mb-3 block text-sm font-medium text-text">
                   Type (optional)
                 </label>
                 <div className="flex gap-4">
@@ -183,7 +183,7 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
                         className="w-4 h-4"
                         disabled={loading}
                       />
-                      <span className="text-white capitalize">{type === 'both' ? 'Movies & TV' : type}</span>
+                      <span className="capitalize text-text">{type === 'both' ? 'Movies and TV' : type}</span>
                     </label>
                   ))}
                 </div>
@@ -191,13 +191,13 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
 
               {/* Max Rating */}
               <div>
-                <label className="block text-sm font-medium text-white mb-3">
+                <label className="mb-3 block text-sm font-medium text-text">
                   Max Rating (optional)
                 </label>
                 <select
                   value={preferences.maxRating}
                   onChange={(e) => setPreferences(prev => ({ ...prev, maxRating: e.target.value }))}
-                  className="bg-slate-600 text-white px-4 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="rounded-lg border border-border bg-surface px-4 py-2 text-text focus:outline-none focus:ring-2 focus:ring-focus"
                   disabled={loading}
                 >
                   <option value="G">G</option>
@@ -213,21 +213,21 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
           <button
             type="submit"
             disabled={loading || (!description.trim() && !hasSelectedPreferences) || (description.trim().length > 0 && description.trim().length < 3)}
-            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 disabled:opacity-50 text-white font-semibold py-3 px-6 rounded-lg transition-colors duration-200"
+            className="w-full rounded-lg bg-accent px-6 py-3 font-semibold text-accent-contrast transition-opacity duration-200 hover:opacity-90 disabled:opacity-50"
           >
             {loading ? 'Finding recommendations...' : 'Get Recommendations'}
           </button>
 
           {description.trim().length > 0 && description.trim().length < 3 && (
-            <p className="mt-3 text-amber-300 text-sm" role="status" aria-live="polite">
+            <p className="mt-3 text-sm text-amber-300" role="status" aria-live="polite">
               Description must be at least 3 characters, or submit preferences only.
             </p>
           )}
 
           {/* Error Message */}
           {error && (
-            <div className="mt-4 p-4 bg-red-900 border border-red-700 rounded-lg">
-              <p className="text-red-100 text-sm">
+            <div className="mt-4 rounded-lg border border-red-500/60 bg-red-500/10 p-4">
+              <p className="text-sm text-red-300">
                 <span className="font-semibold">Error:</span> {error}
               </p>
             </div>
@@ -236,8 +236,8 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
           {/* Loading Indicator */}
           {loading && (
             <div className="mt-4 text-center">
-              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
-              <p className="text-slate-300 mt-2 text-sm">
+              <div className="inline-block h-8 w-8 animate-spin rounded-full border-b-2 border-accent"></div>
+              <p className="mt-2 text-sm text-text-muted">
                 Analyzing your preferences with AI...
               </p>
             </div>
