@@ -1,4 +1,4 @@
-import { TMDBTitle } from '../clients/tmdb'
+import { TMDBTitle } from '../clients/tmdb.js'
 
 /**
  * Content Safety Rating definitions based on TMDB data

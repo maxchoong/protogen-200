@@ -96,8 +96,7 @@ export class RecommendationEngine {
       }
     }
 
-    // Store description in preferences for hard filter inference
-    preferences.description = request.description
+    // Keep parser-combined description (base query + clarification context) for downstream ranking.
 
     // === PHASE 5: Mode-aware search strategy ===
     let searchTerms: string[] = []
@@ -177,7 +176,7 @@ export class RecommendationEngine {
     }))
 
     // Rank and limit
-    const ranked = this.rankTitles(titlesWithTalentScores, preferences)
+    const ranked = this.rankTitles(titlesWithTalentScores, preferences, referenceTitles)
     const final = ranked.slice(0, limit)
 
     console.log(`[Engine] Returning ${final.length} recommendations`)
@@ -402,7 +401,7 @@ export class RecommendationEngine {
    * Combines: genre, mood, talent, rating, popularity, recency
    * WITH hard filters for core genres and exclusions
    */
-  private rankTitles(titles: any[], preferences: ParsedPreferences): any[] {
+  private rankTitles(titles: any[], preferences: ParsedPreferences, referenceTitles: any[] = []): any[] {
     // === PHASE 3.1: Hard Genre Filter ===
     // Infer core genres from query and parsed preferences
     const coreGenres = this.inferCoreGenres(
@@ -416,8 +415,19 @@ export class RecommendationEngine {
 
     // Filter titles: must have at least one core genre
     let filtered = titles
+
+    // For contrastive reference requests ("like X but more Y"), suppress the exact anchor title.
+    const shouldSuppressAnchor =
+      !!preferences.isContrastiveReference &&
+      !/(rewatch|watch again|same movie|the original)/i.test(preferences.description || '')
+
+    if (shouldSuppressAnchor && referenceTitles.length > 0) {
+      const referenceIds = new Set(referenceTitles.map(ref => ref.id).filter(Boolean))
+      filtered = filtered.filter(t => !referenceIds.has(t.id))
+    }
+
     if (coreGenres.length > 0) {
-      filtered = titles.filter(t => {
+      filtered = filtered.filter(t => {
         const titleGenres = (t.genres || []).map((g: string) => g.toLowerCase())
         const hasRequiredGenre = coreGenres.some(cg =>
           titleGenres.some((tg: string) => tg.toLowerCase() === cg.toLowerCase())
@@ -496,13 +506,14 @@ export class RecommendationEngine {
     // Reduce composite score for titles with excluded genres
     const penalizedRanked = ranked.map(r => {
       const penalty = exclusionPenalties.get(r.id) || 1.0
+      const moodShiftMultiplier = this.calculateMoodShiftMultiplier(r, preferences)
       return {
         ...r,
         scoringFactors: {
           ...r.scoringFactors,
           composite: Math.max(
             0,
-            r.scoringFactors.composite * penalty
+            r.scoringFactors.composite * penalty * moodShiftMultiplier
           )
         }
       }
@@ -512,6 +523,47 @@ export class RecommendationEngine {
     return penalizedRanked.sort(
       (a, b) => b.scoringFactors.composite - a.scoringFactors.composite
     )
+  }
+
+  private calculateMoodShiftMultiplier(title: any, preferences: ParsedPreferences): number {
+    if (!title?.plot) {
+      return 1.0
+    }
+
+    const boosted = new Set(preferences.boostedMoods || [])
+    const reduced = new Set(preferences.reducedMoods || [])
+
+    if (boosted.size === 0 && reduced.size === 0) {
+      return 1.0
+    }
+
+    const plotLower = title.plot.toLowerCase()
+    const moodKeywords: Record<string, string[]> = {
+      Relaxing: ['calm', 'peaceful', 'gentle', 'cozy', 'soothing', 'quiet', 'heartwarming'],
+      Intense: ['intense', 'high-stakes', 'adrenaline', 'relentless', 'frantic', 'dangerous'],
+      Dark: ['dark', 'grim', 'bleak', 'brooding', 'disturbing'],
+      Suspenseful: ['suspense', 'edge of your seat', 'tense', 'twist', 'mystery'],
+      Funny: ['funny', 'comedic', 'hilarious', 'witty', 'laugh'],
+      Happy: ['uplifting', 'feel-good', 'joyful', 'warm', 'optimistic']
+    }
+
+    let multiplier = 1.0
+
+    for (const mood of boosted) {
+      const keywords = moodKeywords[mood] || []
+      if (keywords.some(kw => plotLower.includes(kw))) {
+        multiplier += 0.12
+      }
+    }
+
+    for (const mood of reduced) {
+      const keywords = moodKeywords[mood] || []
+      if (keywords.some(kw => plotLower.includes(kw))) {
+        multiplier -= 0.2
+      }
+    }
+
+    return Math.max(0.5, Math.min(1.3, multiplier))
   }
 
   /**

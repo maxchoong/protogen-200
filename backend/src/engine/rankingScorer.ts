@@ -4,7 +4,7 @@
  * Phase 5: Mode-specific weighting for different discovery paths
  */
 
-import { ParsedPreferences, DiscoveryMode } from './preferenceParser'
+import { ParsedPreferences, DiscoveryMode } from './preferenceParser.js'
 
 export interface ScoringFactors {
   genreScore: number

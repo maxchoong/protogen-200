@@ -4,6 +4,7 @@
  */
 
 import { PreferenceParser } from '../preferenceParser'
+import { recommendationEngine } from '../recommendationEngine'
 
 describe('End-to-End Recommendation Flow - Phase 5 Integration', () => {
   describe('Query: "funny heist like Ocean\'s Eleven"', () => {
@@ -281,5 +282,77 @@ describe('Manual Smoke Tests - Phase 4 Explanations', () => {
     
     expect(preferences.moodStrength).toBeDefined()
     expect(preferences.moodStrength!.size).toBeGreaterThan(0)
+  })
+})
+
+describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
+  it('should suppress anchor title for contrastive reference prompts', () => {
+    const preferences = PreferenceParser.parse({
+      description: 'Like Inception but more relaxing'
+    })
+
+    const titles = [
+      {
+        id: 'tt1375666',
+        title: 'Inception',
+        genres: ['Drama', 'Sci-Fi'],
+        plot: 'A high-stakes intense dream heist with relentless tension.',
+        rating: 8.8,
+        voteCount: 1000,
+        year: 2010,
+        talentMatchScore: 1
+      },
+      {
+        id: 'tt0123456',
+        title: 'Calm Sci-Fi Choice',
+        genres: ['Drama', 'Sci-Fi'],
+        plot: 'A gentle and peaceful speculative journey with quiet emotional stakes.',
+        rating: 7.8,
+        voteCount: 700,
+        year: 2018,
+        talentMatchScore: 0.4
+      }
+    ]
+
+    const referenceTitles = [{ id: 'tt1375666', title: 'Inception' }]
+    const ranked = (recommendationEngine as any).rankTitles(titles, preferences, referenceTitles)
+    const rankedIds = ranked.map((item: any) => item.id)
+
+    expect(rankedIds).not.toContain('tt1375666')
+    expect(rankedIds).toContain('tt0123456')
+  })
+
+  it('should favor calmer candidates when contrastive mood shift is requested', () => {
+    const preferences = PreferenceParser.parse({
+      description: 'Like Inception but more relaxing'
+    })
+
+    const titles = [
+      {
+        id: 'tt1111111',
+        title: 'Calm Option',
+        genres: ['Drama'],
+        plot: 'A calm, peaceful, and soothing journey through human connection.',
+        rating: 7.5,
+        voteCount: 500,
+        year: 2019,
+        talentMatchScore: 0.2
+      },
+      {
+        id: 'tt2222222',
+        title: 'Intense Option',
+        genres: ['Drama'],
+        plot: 'An intense, high-stakes, adrenaline-fueled race against danger.',
+        rating: 7.5,
+        voteCount: 500,
+        year: 2019,
+        talentMatchScore: 0.2
+      }
+    ]
+
+    const ranked = (recommendationEngine as any).rankTitles(titles, preferences, [])
+
+    expect(ranked[0].id).toBe('tt1111111')
+    expect(ranked[0].scoringFactors.composite).toBeGreaterThan(ranked[1].scoringFactors.composite)
   })
 })

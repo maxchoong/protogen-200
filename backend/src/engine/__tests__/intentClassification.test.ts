@@ -36,7 +36,7 @@ describe('Phase 5: Intent Classification & Clarification', () => {
 
     it('should output mixed mode for conflicting signals', () => {
       const request: RecommendationRequest = {
-        description: 'I want comedies like Inception but with great actors'
+        description: 'I want comedies like Inception with Ryan Gosling'
       }
       const preferences = PreferenceParser.parse(request)
 
@@ -155,6 +155,57 @@ describe('Phase 5: Intent Classification & Clarification', () => {
       const preferences = PreferenceParser.parse(request)
 
       expect((preferences.intentConfidence || 0) < 0.75).toBe(true)
+    })
+  })
+
+  describe('Golden Prompt Guardrails', () => {
+    it('should keep actor plus mood queries talent-compatible', () => {
+      const request: RecommendationRequest = {
+        description: 'Something funny with Ryan Gosling'
+      }
+      const preferences = PreferenceParser.parse(request)
+
+      expect(preferences.discoveryMode).toBe('talent')
+      expect((preferences.intentConfidence || 0)).toBeGreaterThanOrEqual(0.75)
+      expect(preferences.detectedActors?.length).toBeGreaterThan(0)
+      expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull()
+    })
+
+    it('should preserve reference intent for contrastive mood queries', () => {
+      const request: RecommendationRequest = {
+        description: 'Like Inception but more relaxing'
+      }
+      const preferences = PreferenceParser.parse(request)
+
+      expect(preferences.discoveryMode).toBe('reference')
+      expect(preferences.isContrastiveReference).toBe(true)
+      expect(preferences.boostedMoods).toContain('Relaxing')
+      expect(preferences.reducedMoods).toContain('Intense')
+      expect((preferences.intentConfidence || 0)).toBeGreaterThanOrEqual(0.75)
+      expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull()
+    })
+
+    it('should classify cozy weekend requests as confident mood intent', () => {
+      const request: RecommendationRequest = {
+        description: 'A cozy weekend movie'
+      }
+      const preferences = PreferenceParser.parse(request)
+
+      expect(preferences.discoveryMode).toBe('mood')
+      expect((preferences.intentConfidence || 0)).toBeGreaterThanOrEqual(0.85)
+      expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull()
+    })
+
+    it('should treat indie novelty queries as recognized discovery intent', () => {
+      const request: RecommendationRequest = {
+        description: 'Surprising indie gems'
+      }
+      const preferences = PreferenceParser.parse(request)
+
+      expect(preferences.noveltyIntent).toBe(true)
+      expect(preferences.genres).toContain('Indie')
+      expect((preferences.intentConfidence || 0)).toBeGreaterThanOrEqual(0.65)
+      expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull()
     })
   })
 })

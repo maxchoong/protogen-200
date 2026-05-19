@@ -48,6 +48,10 @@ export interface ParsedPreferences {
   discoveryMode?: DiscoveryMode // Primary intent mode
   intentConfidence?: number      // Confidence in discovered mode (0-1)
   intentSignals?: IntentSignals  // Raw signal breakdown
+  isContrastiveReference?: boolean // true for prompts like "like X but more relaxing"
+  boostedMoods?: string[]         // Moods to explicitly increase
+  reducedMoods?: string[]         // Moods to explicitly de-emphasize
+  noveltyIntent?: boolean         // true for discovery language like "indie gems"
 }
 
 export interface RecommendationRequest {
@@ -77,7 +81,8 @@ export class PreferenceParser {
     'Thriller': ['thriller', 'suspense', 'mystery', 'detective', 'crime', 'dark'],
     'Animation': ['animated', 'animation', 'cartoon'],
     'Fantasy': ['fantasy', 'magic', 'magical', 'legend', 'adventure'],
-    'Documentary': ['documentary', 'real', 'true', 'educational']
+    'Documentary': ['documentary', 'real', 'true', 'educational'],
+    'Indie': ['indie', 'independent', 'arthouse', 'art house', 'festival', 'hidden gem', 'cult']
   }
 
   private static readonly MOOD_KEYWORDS: Record<string, string[]> = {
@@ -89,7 +94,8 @@ export class PreferenceParser {
     'Thoughtful': ['thoughtful', 'philosophical', 'intelligent', 'educational', 'inspiring'],
     'Dark': ['dark', 'gritty', 'bleak', 'moody', 'brooding'],
     'Romantic': ['romantic', 'love', 'tender', 'passionate'],
-    'Suspenseful': ['suspenseful', 'tension', 'thrilling', 'edge-of-seat']
+    'Suspenseful': ['suspenseful', 'tension', 'thrilling', 'edge-of-seat'],
+    'Surprising': ['surprising', 'unexpected', 'offbeat', 'unusual', 'different', 'left-field']
   }
 
   // Patterns for extracting reference titles
@@ -135,9 +141,9 @@ export class PreferenceParser {
 
   // Phase 5: Actor/talent extraction patterns
   private static readonly ACTOR_PATTERNS = [
-    /with\s+(?:['""])?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)*)/gi,
-    /(?:starring|featuring)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)*)/gi,
-    /cast:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)*)/gi
+    /with\s+(?:['"])?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)*)/g,
+    /(?:starring|featuring)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)*)/g,
+    /cast:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)*)/g
   ]
 
   // Phase 5: Situation/context keywords for mood detection
@@ -146,8 +152,34 @@ export class PreferenceParser {
     'Stuck': ['stuck', 'trapped', 'can\'t go out', 'lockdown', 'snowed in'],
     'Date': ['date night', 'with someone', 'with my', 'together', 'couples'],
     'Sick': ['sick', 'ill', 'not feeling', 'bed', 'recovery'],
-    'Late': ['late night', '3am', 'can\'t sleep', 'insomnia', 'night owl']
+    'Late': ['late night', '3am', 'can\'t sleep', 'insomnia', 'night owl'],
+    'Weekend': ['weekend', 'saturday', 'sunday', 'friday night']
   }
+
+  private static readonly NOVELTY_KEYWORDS = [
+    'indie',
+    'independent',
+    'hidden gem',
+    'hidden gems',
+    'underrated',
+    'offbeat',
+    'cult',
+    'arthouse',
+    'art house',
+    'festival',
+    'surprising',
+    'unexpected',
+    'unusual'
+  ]
+
+  private static readonly CONTRASTIVE_CONNECTORS = [
+    ' but ',
+    ' instead ',
+    ' rather than ',
+    ' not as ',
+    ' less ',
+    ' more '
+  ]
 
   /**
    * Extract reference title(s) from description
@@ -265,7 +297,8 @@ export class PreferenceParser {
    * Combines rule-based extraction with optional LLM enhancement
    */
   static parse(request: RecommendationRequest): ParsedPreferences {
-    const description = request.description.toLowerCase()
+    const analysisText = this.buildAnalysisText(request)
+    const description = analysisText.toLowerCase()
 
     // Start with defaults
     const preferences: ParsedPreferences = {
@@ -276,7 +309,9 @@ export class PreferenceParser {
       referenceTitle: [],
       excludedGenres: [],
       constraints: [],
-      moodStrength: new Map()
+      moodStrength: new Map(),
+      boostedMoods: [],
+      reducedMoods: []
     }
 
     // === PHASE 1 STEP 1.2: Extract reference titles ===
@@ -330,20 +365,41 @@ export class PreferenceParser {
       )
     }
 
+    // Track comparative/contrastive constraints for reference-style prompts.
+    const comparative = this.extractComparativeMoodShifts(description)
+    preferences.boostedMoods = comparative.boostedMoods
+    preferences.reducedMoods = comparative.reducedMoods
+    preferences.isContrastiveReference = comparative.isContrastive
+
+    // Detect novelty-oriented discovery intent (e.g., "surprising indie gems").
+    preferences.noveltyIntent = this.hasNoveltyIntent(description)
+
+    // If novelty intent is explicit, enrich retrieval hints without hardcoding a single prompt.
+    if (preferences.noveltyIntent) {
+      if (!preferences.genres.includes('Indie')) {
+        preferences.genres.push('Indie')
+      }
+      if (preferences.constraints) {
+        preferences.constraints = Array.from(new Set([...preferences.constraints, 'novelty', 'discovery']))
+      }
+    }
+
     // === PHASE 5: Extract actors and classify intent ===
-    preferences.detectedActors = this.extractActors(description)
+    preferences.detectedActors = this.extractActors(analysisText)
     const intentClassification = this.classifyIntent(
       preferences.referenceTitle || [],
       preferences.detectedActors || [],
       Array.from(preferences.moodStrength?.keys() || []),
-      this.hasSituationKeywords(description)
+      this.hasSituationKeywords(description),
+      preferences.isContrastiveReference || false,
+      preferences.noveltyIntent || false
     )
     preferences.discoveryMode = intentClassification.mode
     preferences.intentConfidence = intentClassification.confidence
     preferences.intentSignals = intentClassification.signals
 
     // Store original description for later use
-    preferences.description = request.description
+    preferences.description = analysisText
 
     // If no genres found, use top genres as fallback
     if (preferences.genres.length === 0 && !request.preferences?.genres) {
@@ -351,6 +407,62 @@ export class PreferenceParser {
     }
 
     return preferences
+  }
+
+  private static buildAnalysisText(request: RecommendationRequest): string {
+    const base = request.description || ''
+    const clarification = request.clarificationContext?.userClarification?.trim()
+
+    if (!clarification) {
+      return base
+    }
+
+    return `${base} ${clarification}`.trim()
+  }
+
+  private static hasNoveltyIntent(description: string): boolean {
+    const lower = description.toLowerCase()
+    return this.NOVELTY_KEYWORDS.some(keyword => lower.includes(keyword))
+  }
+
+  private static extractComparativeMoodShifts(description: string): {
+    isContrastive: boolean
+    boostedMoods: string[]
+    reducedMoods: string[]
+  } {
+    const lower = description.toLowerCase()
+    const boostedMoods: string[] = []
+    const reducedMoods: string[] = []
+
+    const isContrastive = this.CONTRASTIVE_CONNECTORS.some(connector => lower.includes(connector))
+
+    // Generalized directional rules for common tone comparisons.
+    if (/(more|extra|bit more)\s+(relaxing|calm|chill|cozy|peaceful)/i.test(lower)) {
+      boostedMoods.push('Relaxing')
+      reducedMoods.push('Intense')
+    }
+
+    if (/(less|not as)\s+(intense|dark|suspenseful|gritty)/i.test(lower)) {
+      reducedMoods.push('Intense')
+      reducedMoods.push('Dark')
+      reducedMoods.push('Suspenseful')
+    }
+
+    if (/(more|extra|bit more)\s+(funny|light|lighthearted|uplifting)/i.test(lower)) {
+      boostedMoods.push('Funny')
+      boostedMoods.push('Happy')
+    }
+
+    if (/(less|not as)\s+(funny|light|lighthearted)/i.test(lower)) {
+      reducedMoods.push('Funny')
+      reducedMoods.push('Happy')
+    }
+
+    return {
+      isContrastive,
+      boostedMoods: Array.from(new Set(boostedMoods)),
+      reducedMoods: Array.from(new Set(reducedMoods))
+    }
   }
 
   /**
@@ -428,7 +540,9 @@ export class PreferenceParser {
     referenceTitle: string[],
     actors: string[],
     moods: string[],
-    hasSituation: boolean
+    hasSituation: boolean,
+    isContrastiveReference: boolean,
+    noveltyIntent: boolean
   ): IntentClassification {
     const signals: IntentSignals = {
       foundReferenceTitle: referenceTitle.length > 0,
@@ -451,6 +565,10 @@ export class PreferenceParser {
     } else if (moods.length > 0 || hasSituation) {
       mode = 'mood'
       confidence = 0.75 + (hasSituation ? 0.15 : 0)
+    } else if (noveltyIntent) {
+      // Novelty discovery queries should not default to low-confidence mixed.
+      mode = 'mood'
+      confidence = 0.7
     } else {
       mode = 'mixed'
       confidence = 0.3  // Low confidence for empty/vague queries
@@ -462,12 +580,34 @@ export class PreferenceParser {
       referenceTitle.length > 0,
       moods.length > 0 && moods.length <= 1
     ]
-    signals.conflictingSignals = strongSignals.filter(s => s).length > 1
+    const signalCount = strongSignals.filter(s => s).length
+
+    const isActorMoodCompatible = actors.length > 0 && moods.length === 1 && referenceTitle.length === 0
+    const isReferenceContrastCompatible =
+      referenceTitle.length > 0 && moods.length === 1 && isContrastiveReference && actors.length === 0
+
+    signals.conflictingSignals =
+      signalCount > 1 && !isActorMoodCompatible && !isReferenceContrastCompatible
 
     // If conflicting signals, lower confidence and mark as ambiguous
     if (signals.conflictingSignals) {
       confidence = Math.max(0.4, confidence - 0.2)
       mode = 'mixed'
+    } else if (isActorMoodCompatible) {
+      // Compatible dual-signal queries should stay talent-primary.
+      mode = 'talent'
+      confidence = Math.max(0.78, confidence - 0.05)
+    } else if (isReferenceContrastCompatible) {
+      // Contrastive reference requests are explicit enough to keep reference mode.
+      mode = 'reference'
+      confidence = Math.max(0.76, confidence - 0.08)
+    }
+
+    // Multiple mood targets without an anchor are often ambiguous and should clarify.
+    if (actors.length === 0 && referenceTitle.length === 0 && moods.length > 1) {
+      mode = 'mixed'
+      confidence = Math.min(confidence, 0.58)
+      signals.conflictingSignals = true
     }
 
     return {
@@ -493,15 +633,46 @@ export class PreferenceParser {
     options?: string[]
   }> | null {
     const CONFIDENCE_THRESHOLD = 0.65
+    const MIXED_SAFE_THRESHOLD = 0.72
     const confidence = preferences.intentConfidence ?? 0.5
-
-    // On first round, ask only if confidence is low
-    if (clarificationRound === 0 && confidence >= CONFIDENCE_THRESHOLD) {
-      return null  // No clarification needed
-    }
 
     // On follow-up rounds, always return recommendations
     if (clarificationRound > 0) {
+      return null
+    }
+
+    // Contrastive reference requests need a directional target to rank properly.
+    if (
+      preferences.isContrastiveReference &&
+      preferences.referenceTitle &&
+      preferences.referenceTitle.length > 0 &&
+      (preferences.boostedMoods?.length || 0) === 0 &&
+      (preferences.reducedMoods?.length || 0) === 0
+    ) {
+      return [
+        {
+          id: 'contrastive_target',
+          question: `You asked for something like "${preferences.referenceTitle[0]}" with a different vibe. Which direction should I prioritize?`,
+          type: 'select',
+          options: ['More relaxing', 'More intense', 'Funnier', 'Darker']
+        }
+      ]
+    }
+
+    // Mixed intent near threshold is fragile; ask one disambiguation question.
+    if (preferences.discoveryMode === 'mixed' && confidence < MIXED_SAFE_THRESHOLD) {
+      return [
+        {
+          id: 'mixed_disambiguation',
+          question: 'To improve the recommendations, what should I prioritize first?',
+          type: 'select',
+          options: ['Specific actor or cast', 'Similar to a reference title', 'Mood or vibe']
+        }
+      ]
+    }
+
+    // On first round, ask only if confidence is low after specialized checks.
+    if (clarificationRound === 0 && confidence >= CONFIDENCE_THRESHOLD) {
       return null
     }
 
