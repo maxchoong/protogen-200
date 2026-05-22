@@ -35,6 +35,7 @@ export interface TMDBTitle {
   media_type: 'movie' | 'tv'
   genre_ids: number[]
   vote_average: number
+  vote_count?: number
   adult: boolean
   original_language: string
 }
@@ -53,11 +54,34 @@ export interface SearchQuery {
 
 export class TMDBClient {
   private apiKey: string
+  private readAccessToken: string
   private baseUrl: string
 
   constructor() {
     this.apiKey = config.tmdb.apiKey
+    this.readAccessToken = config.tmdb.readAccessToken
     this.baseUrl = config.tmdb.baseUrl
+  }
+
+  isEnabled(): boolean {
+    return this.apiKey !== 'demo-key' || Boolean(this.readAccessToken)
+  }
+
+  private applyAuth(params: URLSearchParams): URLSearchParams {
+    if (!this.readAccessToken) {
+      params.set('api_key', this.apiKey)
+    }
+    return params
+  }
+
+  private buildAuthHeaders(): Record<string, string> {
+    if (!this.readAccessToken) {
+      return {}
+    }
+
+    return {
+      Authorization: `Bearer ${this.readAccessToken}`
+    }
   }
 
   /**
@@ -67,23 +91,25 @@ export class TMDBClient {
     query: string,
     options: Partial<SearchQuery> = {}
   ): Promise<TMDBTitle[]> {
-    // If using demo key, return empty
-    if (this.apiKey === 'demo-key') {
+    // If no valid auth is configured, return empty.
+    if (!this.isEnabled()) {
       console.log('[TMDB]', `Would search: "${query}"`)
       return []
     }
 
     try {
-      const params = new URLSearchParams({
-        api_key: this.apiKey,
+      const params = this.applyAuth(new URLSearchParams({
         query: query,
         include_adult: String(!options.excludeAdult),
         region: config.tmdb.region
-      })
+      }))
 
       const response = await fetch(
         `${this.baseUrl}/search/multi?${params}`,
-        { signal: AbortSignal.timeout(5000) }
+        {
+          signal: AbortSignal.timeout(5000),
+          headers: this.buildAuthHeaders()
+        }
       )
 
       if (!response.ok) {
@@ -105,8 +131,8 @@ export class TMDBClient {
     genres: string[],
     options: Partial<SearchQuery> = {}
   ): Promise<TMDBTitle[]> {
-    // If using demo key, return empty
-    if (this.apiKey === 'demo-key') {
+    // If no valid auth is configured, return empty.
+    if (!this.isEnabled()) {
       console.log('[TMDB]', `Would discover genres: ${genres.join(', ')}`)
       return []
     }
@@ -138,21 +164,23 @@ export class TMDBClient {
   async getTrending(
     timeWindow: 'day' | 'week' = 'week'
   ): Promise<TMDBTitle[]> {
-    // If using demo key, return empty
-    if (this.apiKey === 'demo-key') {
+    // If no valid auth is configured, return empty.
+    if (!this.isEnabled()) {
       console.log('[TMDB]', `Would fetch trending (${timeWindow})`)
       return []
     }
 
     try {
-      const params = new URLSearchParams({
-        api_key: this.apiKey,
+      const params = this.applyAuth(new URLSearchParams({
         include_adult: 'false'
-      })
+      }))
 
       const response = await fetch(
         `${this.baseUrl}/trending/all/${timeWindow}?${params}`,
-        { signal: AbortSignal.timeout(5000) }
+        {
+          signal: AbortSignal.timeout(5000),
+          headers: this.buildAuthHeaders()
+        }
       )
 
       if (!response.ok) {
@@ -174,19 +202,20 @@ export class TMDBClient {
     titleId: number,
     mediaType: 'movie' | 'tv'
   ): Promise<TMDBTitle | null> {
-    // If using demo key, return null
-    if (this.apiKey === 'demo-key') {
+    // If no valid auth is configured, return null.
+    if (!this.isEnabled()) {
       return null
     }
 
     try {
-      const params = new URLSearchParams({
-        api_key: this.apiKey
-      })
+      const params = this.applyAuth(new URLSearchParams())
 
       const response = await fetch(
         `${this.baseUrl}/${mediaType}/${titleId}?${params}`,
-        { signal: AbortSignal.timeout(5000) }
+        {
+          signal: AbortSignal.timeout(5000),
+          headers: this.buildAuthHeaders()
+        }
       )
 
       if (!response.ok) {
@@ -208,20 +237,22 @@ export class TMDBClient {
     titleId: number,
     mediaType: 'movie' | 'tv'
   ): Promise<{ key: string; type: string }[]> {
-    // If using demo key, return empty
-    if (this.apiKey === 'demo-key') {
+    // If no valid auth is configured, return empty.
+    if (!this.isEnabled()) {
       return []
     }
 
     try {
-      const params = new URLSearchParams({
-        api_key: this.apiKey,
+      const params = this.applyAuth(new URLSearchParams({
         language: 'en-US'
-      })
+      }))
 
       const response = await fetch(
         `${this.baseUrl}/${mediaType}/${titleId}/videos?${params}`,
-        { signal: AbortSignal.timeout(5000) }
+        {
+          signal: AbortSignal.timeout(5000),
+          headers: this.buildAuthHeaders()
+        }
       )
 
       if (!response.ok) {
@@ -236,6 +267,56 @@ export class TMDBClient {
     }
   }
 
+  async getExternalIds(
+    titleId: number,
+    mediaType: 'movie' | 'tv'
+  ): Promise<{ imdbId?: string }> {
+    if (!this.isEnabled()) {
+      return {}
+    }
+
+    try {
+      const params = this.applyAuth(new URLSearchParams())
+
+      const response = await fetch(
+        `${this.baseUrl}/${mediaType}/${titleId}/external_ids?${params}`,
+        {
+          signal: AbortSignal.timeout(5000),
+          headers: this.buildAuthHeaders()
+        }
+      )
+
+      if (!response.ok) {
+        return {}
+      }
+
+      const data = await response.json() as { imdb_id?: string }
+      return {
+        imdbId: data.imdb_id || undefined
+      }
+    } catch (error) {
+      console.error('[TMDB] External IDs error:', error)
+      return {}
+    }
+  }
+
+  mapGenreIdsToNames(genreIds: number[]): string[] {
+    if (!genreIds || genreIds.length === 0) {
+      return []
+    }
+
+    const reverseGenreMap = new Map<number, string>()
+    for (const [name, id] of Object.entries(GENRE_MAP)) {
+      reverseGenreMap.set(id, name)
+    }
+
+    return Array.from(new Set(
+      genreIds
+        .map(id => reverseGenreMap.get(id))
+        .filter((name): name is string => Boolean(name))
+    ))
+  }
+
   /**
    * Get trailer URL by IMDb ID
    */
@@ -243,7 +324,7 @@ export class TMDBClient {
     imdbId: string,
     type: 'movie' | 'tv' = 'movie'
   ): Promise<string | undefined> {
-    if (this.apiKey === 'demo-key') {
+    if (!this.isEnabled()) {
       return undefined
     }
 
@@ -251,14 +332,16 @@ export class TMDBClient {
       console.log(`[TMDB] Fetching trailer for ${imdbId} (${type})`)
 
       // TMDB supports querying by IMDb ID using find endpoint
-      const params = new URLSearchParams({
-        api_key: this.apiKey,
+      const params = this.applyAuth(new URLSearchParams({
         external_source: 'imdb_id'
-      })
+      }))
 
       const findResponse = await fetch(
         `${this.baseUrl}/find/${imdbId}?${params}`,
-        { signal: AbortSignal.timeout(8000) }
+        {
+          signal: AbortSignal.timeout(8000),
+          headers: this.buildAuthHeaders()
+        }
       )
 
       if (!findResponse.ok) {
@@ -325,17 +408,19 @@ export class TMDBClient {
   ): Promise<TMDBTitle[]> {
     if (!options.includeMovies) return []
 
-    const params = new URLSearchParams({
-      api_key: this.apiKey,
+    const params = this.applyAuth(new URLSearchParams({
       with_genres: genreIds,
       include_adult: String(!options.excludeAdult),
       sort_by: 'popularity.desc',
       page: '1'
-    })
+    }))
 
     const response = await fetch(
       `${this.baseUrl}/discover/movie?${params}`,
-      { signal: AbortSignal.timeout(5000) }
+      {
+        signal: AbortSignal.timeout(5000),
+        headers: this.buildAuthHeaders()
+      }
     )
 
     if (!response.ok) return []
@@ -350,17 +435,19 @@ export class TMDBClient {
   ): Promise<TMDBTitle[]> {
     if (!options.includeTV) return []
 
-    const params = new URLSearchParams({
-      api_key: this.apiKey,
+    const params = this.applyAuth(new URLSearchParams({
       with_genres: genreIds,
       include_adult: String(!options.excludeAdult),
       sort_by: 'popularity.desc',
       page: '1'
-    })
+    }))
 
     const response = await fetch(
       `${this.baseUrl}/discover/tv?${params}`,
-      { signal: AbortSignal.timeout(5000) }
+      {
+        signal: AbortSignal.timeout(5000),
+        headers: this.buildAuthHeaders()
+      }
     )
 
     if (!response.ok) return []
@@ -403,6 +490,7 @@ export class TMDBClient {
       media_type: mediaType,
       genre_ids: data.genre_ids || [],
       vote_average: data.vote_average || 0,
+      vote_count: data.vote_count || 0,
       adult: data.adult || false,
       original_language: data.original_language || 'en'
     }

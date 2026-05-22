@@ -37,6 +37,92 @@ export class RecommendationEngine {
   // Cache for reference titles (Phase 2.2)
   private referenceTitlesCache: Map<string, any> = new Map()
 
+  private isImdbId(id: string): boolean {
+    return /^tt\d{5,}$/.test(id)
+  }
+
+  private async searchWithTmdbPrimary(
+    searchTerms: string[],
+    typeFilter?: 'movie' | 'series'
+  ): Promise<any[]> {
+    if (!tmdbClient.isEnabled()) {
+      return []
+    }
+
+    const includeMovies = typeFilter !== 'series'
+    const includeTV = typeFilter !== 'movie'
+
+    const tmdbSearches = await Promise.all(
+      searchTerms.map(term =>
+        tmdbClient.searchTitles(term, {
+          includeMovies,
+          includeTV,
+          excludeAdult: true
+        })
+      )
+    )
+
+    const deduped = Array.from(
+      new Map(
+        tmdbSearches
+          .flat()
+          .map(item => [`${item.media_type}:${item.id}`, item])
+      ).values()
+    )
+
+    const limited = deduped.slice(0, 30)
+
+    const converted = await Promise.all(
+      limited.map(async item => {
+        const mediaType = item.media_type === 'tv' ? 'tv' : 'movie'
+        const externalIds = await tmdbClient.getExternalIds(item.id, mediaType)
+        const yearRaw = mediaType === 'movie' ? item.release_date : item.first_air_date
+        const year = yearRaw ? parseInt(yearRaw.split('-')[0], 10) || 0 : 0
+        const id = externalIds.imdbId || `tmdb:${mediaType}:${item.id}`
+
+        return {
+          id,
+          tmdbId: item.id,
+          tmdbMediaType: mediaType,
+          title: item.title || item.name,
+          year,
+          type: mediaType === 'tv' ? 'series' : 'movie',
+          poster: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : undefined,
+          rating: item.vote_average || undefined,
+          plot: item.overview || undefined,
+          genres: tmdbClient.mapGenreIdsToNames(item.genre_ids || []),
+          rated: undefined,
+          director: undefined,
+          actors: undefined,
+          voteCount: item.vote_count || 0
+        }
+      })
+    )
+
+    return converted.filter(item => !!item.title && !!item.plot)
+  }
+
+  private async searchWithOmdbFallback(
+    searchTerms: string[],
+    typeFilter?: 'movie' | 'series'
+  ): Promise<any[]> {
+    const searchPromises = searchTerms.map(term =>
+      fmdbClient.searchWithDetails(term, typeFilter, 5)
+    )
+
+    const allResults = await Promise.all(searchPromises)
+    const flatResults = allResults.flat()
+    return flatResults.map(r => fmdbClient.convertToInternal(r))
+  }
+
+  private matchesRequestedActors(title: any, requestedActors: string[]): boolean {
+    if (requestedActors.length === 0) {
+      return false
+    }
+
+    return TalentMatcher.findTalentMatchForActors(title, requestedActors).actorOverlap > 0
+  }
+
   private deriveReferenceGenres(referenceTitles: any[]): string[] {
     const broadGenres = new Set(['Drama', 'Comedy', 'Romance', 'Action', 'Adventure'])
     const collected = referenceTitles.flatMap(referenceTitle => referenceTitle?.genres || [])
@@ -166,18 +252,14 @@ export class RecommendationEngine {
                       preferences.contentType === 'movie' ? 'movie' : 
                       undefined
 
-    // Search FM-DB for each term
-    const searchPromises = searchTerms.map(term =>
-      fmdbClient.searchWithDetails(term, typeFilter, 5)
-    )
-
-    const allResults = await Promise.all(searchPromises)
-    const flatResults = allResults.flat()
-
-    console.log(`[Engine] Found ${flatResults.length} raw results from FM-DB`)
-
-    // Convert to internal format
-    const candidates = flatResults.map(r => fmdbClient.convertToInternal(r))
+    // Search TMDB first when configured, fallback to OMDb for reliability.
+    let candidates = await this.searchWithTmdbPrimary(searchTerms, typeFilter)
+    if (candidates.length > 0) {
+      console.log(`[Engine] Found ${candidates.length} raw results from TMDB`)
+    } else {
+      candidates = await this.searchWithOmdbFallback(searchTerms, typeFilter)
+      console.log(`[Engine] Found ${candidates.length} raw results from FM-DB`)
+    }
 
     // Remove duplicates by ID
     const uniqueCandidates = Array.from(
@@ -196,12 +278,18 @@ export class RecommendationEngine {
       ...title,
       talentMatchScore: referenceTitles.length > 0
         ? TalentMatcher.findTalentMatch(title, referenceTitles).combinedScore
-        : 0
+        : (preferences.detectedActors && preferences.detectedActors.length > 0)
+          ? TalentMatcher.findTalentMatchForActors(title, preferences.detectedActors).combinedScore
+          : 0
     }))
 
     // Rank and limit
     const ranked = this.rankTitles(titlesWithTalentScores, preferences, referenceTitles)
-    const final = ranked.slice(0, limit)
+    const filteredRanked =
+      preferences.discoveryMode === 'talent' && preferences.detectedActors && preferences.detectedActors.length > 0
+        ? ranked.filter(title => this.matchesRequestedActors(title, preferences.detectedActors || []))
+        : ranked
+    const final = filteredRanked.slice(0, limit)
 
     console.log(`[Engine] Returning ${final.length} recommendations`)
 
@@ -245,9 +333,11 @@ export class RecommendationEngine {
     let availabilityData = new Map<string, StreamingAvailability[]>()
     if (final.length > 0) {
       try {
-        const imdbIds = final.map(item => item.id)
+        const imdbIds = final.map(item => item.id).filter(id => this.isImdbId(id))
         const country = (request.region || 'US').toLowerCase()
-        availabilityData = await streamingClient.getAvailabilityBatch(imdbIds, country)
+        if (imdbIds.length > 0) {
+          availabilityData = await streamingClient.getAvailabilityBatch(imdbIds, country)
+        }
       } catch (error) {
         console.warn('[Engine] Streaming availability fetch failed')
       }
@@ -257,11 +347,26 @@ export class RecommendationEngine {
     let trailerData = new Map<string, string>()
     if (final.length > 0) {
       try {
-        const items = final.map(item => ({
+        const imdbItems = final
+          .filter(item => this.isImdbId(item.id))
+          .map(item => ({
           imdbId: item.id,
           type: (item.type === 'series' ? 'tv' : 'movie') as 'movie' | 'tv'
         }))
-        trailerData =await tmdbClient.getTrailersBatch(items)
+
+        if (imdbItems.length > 0) {
+          trailerData = await tmdbClient.getTrailersBatch(imdbItems)
+        }
+
+        // Fallback path for TMDB-only IDs when IMDb mapping is unavailable.
+        const tmdbOnlyItems = final.filter(item => !this.isImdbId(item.id) && item.tmdbId)
+        for (const item of tmdbOnlyItems) {
+          const mediaType = item.tmdbMediaType === 'tv' ? 'tv' : 'movie'
+          const videos = await tmdbClient.getVideos(item.tmdbId, mediaType)
+          if (videos.length > 0) {
+            trailerData.set(item.id, `https://www.youtube.com/watch?v=${videos[0].key}`)
+          }
+        }
       } catch (error) {
         console.warn('[Engine] Trailer fetch failed')
       }
