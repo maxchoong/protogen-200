@@ -25,6 +25,12 @@ interface ResultsPageProps {
   activeConstraints?: string[]
   refinementSuggestions?: string[]
   onRefine?: (refinementText: string) => Promise<void>
+  retrievalDiagnostics?: {
+    tmdbEnabled: boolean
+    usedTmdb: boolean
+    usedOmdb: boolean
+    omdbFallbackUsed: boolean
+  }
 }
 
 export default function ResultsPage({
@@ -34,7 +40,8 @@ export default function ResultsPage({
   conversationMessages = [],
   activeConstraints = [],
   refinementSuggestions = [],
-  onRefine
+  onRefine,
+  retrievalDiagnostics
 }: ResultsPageProps) {
   const [trailerModal, setTrailerModal] = useState<{ isOpen: boolean; url: string; title: string }>({
     isOpen: false,
@@ -115,6 +122,30 @@ export default function ResultsPage({
         <p className="mb-8 max-w-2xl text-[15px] leading-relaxed text-text-muted">
           Based on: <span className="italic">"{query}"</span>
         </p>
+
+        {retrievalDiagnostics && (
+          <section
+            className={`mb-6 rounded-lg border px-4 py-3 text-sm ${
+              retrievalDiagnostics.omdbFallbackUsed || (!retrievalDiagnostics.tmdbEnabled && retrievalDiagnostics.usedOmdb)
+                ? 'border-amber-300/40 bg-amber-100/10 text-amber-100'
+                : 'border-border bg-surface-2 text-text'
+            }`}
+            aria-label="Catalog source diagnostics"
+          >
+            <p className="font-semibold">Catalog source diagnostics</p>
+            <p className="mt-1">
+              {retrievalDiagnostics.omdbFallbackUsed
+                ? 'OMDB fallback engaged (TMDB available but no usable TMDB candidates for this request).'
+                : !retrievalDiagnostics.tmdbEnabled && retrievalDiagnostics.usedOmdb
+                  ? 'Using OMDB because TMDB is not configured in this environment.'
+                  : retrievalDiagnostics.usedTmdb && !retrievalDiagnostics.usedOmdb
+                    ? 'Using TMDB results.'
+                    : retrievalDiagnostics.usedTmdb && retrievalDiagnostics.usedOmdb
+                      ? 'Using mixed TMDB + OMDB retrieval.'
+                      : 'Catalog source unavailable for this response.'}
+            </p>
+          </section>
+        )}
 
         {conversationMessages.length > 0 && (
           <section className="mb-8 rounded-lg border border-border bg-surface p-6 shadow-card" aria-label="Conversation thread">

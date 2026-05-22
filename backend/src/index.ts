@@ -82,6 +82,12 @@ interface ApiResponse {
     mode: 'mood' | 'reference' | 'talent' | 'mixed'
     confidence: number                  // 0-1
   }
+  retrievalDiagnostics?: {
+    tmdbEnabled: boolean
+    usedTmdb: boolean
+    usedOmdb: boolean
+    omdbFallbackUsed: boolean
+  }
 }
 
 type ParsedPreferencesSnapshot = ReturnType<typeof PreferenceParser.parse>
@@ -507,6 +513,7 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
       } : undefined,
       clarificationContext: clarificationContext
     })
+    const retrievalDiagnostics = recommendationEngine.getLastRetrievalDiagnostics()
 
     const shouldBypassWeakSet = shouldBypassWeakSetForReference(
       recommendations,
@@ -553,7 +560,8 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
                   mode: parsedPreferences.discoveryMode,
                   confidence: parsedPreferences.intentConfidence
                 }
-              : undefined
+              : undefined,
+            retrievalDiagnostics
           })
         }
       }
@@ -569,7 +577,8 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
             mode: parsedPreferences.discoveryMode,
             confidence: parsedPreferences.intentConfidence
           }
-        : undefined
+        : undefined,
+      retrievalDiagnostics
     })
   } catch (error) {
     console.error('Error in /recommendations:', error)

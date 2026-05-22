@@ -23,6 +23,12 @@ interface ConversationalHomeProps {
     detectedIntent?: DetectedIntent
     refinementSuggestions?: string[]
     appliedConstraints?: string[]
+    retrievalDiagnostics?: {
+      tmdbEnabled: boolean
+      usedTmdb: boolean
+      usedOmdb: boolean
+      omdbFallbackUsed: boolean
+    }
   }>
   onNavigateToResults?: (
     recommendations: any[],
@@ -30,6 +36,12 @@ interface ConversationalHomeProps {
     options?: {
       refinementSuggestions?: string[]
       appliedConstraints?: string[]
+      retrievalDiagnostics?: {
+        tmdbEnabled: boolean
+        usedTmdb: boolean
+        usedOmdb: boolean
+        omdbFallbackUsed: boolean
+      }
     }
   ) => void
 }
@@ -141,7 +153,8 @@ export default function ConversationalHome({
         if (onNavigateToResults) {
           onNavigateToResults(response.recommendations, state.lastQuery || trimmed, {
             refinementSuggestions: response.refinementSuggestions,
-            appliedConstraints: response.appliedConstraints
+            appliedConstraints: response.appliedConstraints,
+            retrievalDiagnostics: response.retrievalDiagnostics
           })
         }
       } else {

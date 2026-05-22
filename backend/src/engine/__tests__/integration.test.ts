@@ -658,7 +658,7 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
 
     const searchCandidatesSpy = jest
       .spyOn(recommendationEngine as any, 'searchCandidates')
-      .mockResolvedValue([])
+      .mockResolvedValue({ results: [], source: 'omdb' })
 
     const recommendations = await recommendationEngine.getRecommendations({
       description: 'Like Blade Runner but warmer',
@@ -699,7 +699,7 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
     ])
     const broadSearchSpy = jest
       .spyOn(recommendationEngine as any, 'searchCandidates')
-      .mockResolvedValue([])
+      .mockResolvedValue({ results: [], source: 'omdb' })
     const externalIdsSpy = jest
       .spyOn(tmdbClient, 'getExternalIds')
       .mockResolvedValue({})
@@ -725,36 +725,39 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
     const tmdbEnabledSpy = jest.spyOn(tmdbClient, 'isEnabled').mockReturnValue(false)
     const searchCandidatesSpy = jest
       .spyOn(recommendationEngine as any, 'searchCandidates')
-      .mockResolvedValue([
-        {
-          id: 'tt9990001',
-          title: 'Comedy Placeholder One',
-          year: 2019,
-          type: 'movie',
-          poster: 'N/A',
-          rating: 7.2,
-          plot: 'A witty comedic story with quirky misunderstandings and big laughs.',
-          genres: ['Comedy'],
-          rated: 'PG-13',
-          director: 'Director Name',
-          actors: 'Another Actor, Different Person',
-          voteCount: 1200
-        },
-        {
-          id: 'tt9990002',
-          title: 'Comedy Placeholder Two',
-          year: 2017,
-          type: 'movie',
-          poster: 'N/A',
-          rating: 6.9,
-          plot: 'A funny caper featuring oddball friends and chaotic plans.',
-          genres: ['Comedy', 'Crime'],
-          rated: 'PG-13',
-          director: 'Director Name',
-          actors: 'Another Actor, Different Person',
-          voteCount: 980
-        }
-      ])
+      .mockResolvedValue({
+        source: 'omdb',
+        results: [
+          {
+            id: 'tt9990001',
+            title: 'Comedy Placeholder One',
+            year: 2019,
+            type: 'movie',
+            poster: 'N/A',
+            rating: 7.2,
+            plot: 'A witty comedic story with quirky misunderstandings and big laughs.',
+            genres: ['Comedy'],
+            rated: 'PG-13',
+            director: 'Director Name',
+            actors: 'Another Actor, Different Person',
+            voteCount: 1200
+          },
+          {
+            id: 'tt9990002',
+            title: 'Comedy Placeholder Two',
+            year: 2017,
+            type: 'movie',
+            poster: 'N/A',
+            rating: 6.9,
+            plot: 'A funny caper featuring oddball friends and chaotic plans.',
+            genres: ['Comedy', 'Crime'],
+            rated: 'PG-13',
+            director: 'Director Name',
+            actors: 'Another Actor, Different Person',
+            voteCount: 980
+          }
+        ]
+      })
 
     const recommendations = await recommendationEngine.getRecommendations({
       description: 'Something funny with Ryan Gosling',

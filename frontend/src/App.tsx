@@ -26,6 +26,12 @@ interface RecommendationResponse {
   recommendations?: any[]
   refinementSuggestions?: string[]
   appliedConstraints?: string[]
+  retrievalDiagnostics?: {
+    tmdbEnabled: boolean
+    usedTmdb: boolean
+    usedOmdb: boolean
+    omdbFallbackUsed: boolean
+  }
   requiresClarification?: {
     questions: Array<{
       id: string
@@ -50,6 +56,7 @@ function App() {
   const [query, setQuery] = useState<string>('')
   const [activeConstraints, setActiveConstraints] = useState<string[]>([])
   const [refinementSuggestions, setRefinementSuggestions] = useState<string[]>([])
+  const [retrievalDiagnostics, setRetrievalDiagnostics] = useState<RecommendationResponse['retrievalDiagnostics']>()
 
   const inferRegionFromLocale = (): string => {
     const locale = navigator.language || 'en-US'
@@ -105,12 +112,14 @@ function App() {
     options?: {
       refinementSuggestions?: string[]
       appliedConstraints?: string[]
+      retrievalDiagnostics?: RecommendationResponse['retrievalDiagnostics']
     }
   ) => {
     setResults(recommendations)
     setQuery(queryText)
     setRefinementSuggestions(options?.refinementSuggestions || [])
     setActiveConstraints(options?.appliedConstraints || [])
+    setRetrievalDiagnostics(options?.retrievalDiagnostics)
     setCurrentPage('results')
   }
 
@@ -147,6 +156,7 @@ function App() {
         setResults(response.recommendations)
         setActiveConstraints(response.appliedConstraints || nextConstraints)
         setRefinementSuggestions(response.refinementSuggestions || [])
+        setRetrievalDiagnostics(response.retrievalDiagnostics)
 
         conversation.addMessage({
           role: 'assistant',
@@ -211,6 +221,7 @@ function App() {
           activeConstraints={activeConstraints}
           refinementSuggestions={refinementSuggestions}
           onRefine={handleRefineResults}
+          retrievalDiagnostics={retrievalDiagnostics}
         />
       )}
     </div>

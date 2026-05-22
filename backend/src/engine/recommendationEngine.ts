@@ -30,6 +30,13 @@ export interface Recommendation {
   scoringFactors?: ScoringFactors
 }
 
+export interface RetrievalDiagnostics {
+  tmdbEnabled: boolean
+  usedTmdb: boolean
+  usedOmdb: boolean
+  omdbFallbackUsed: boolean
+}
+
 /**
  * Core recommendation engine using FM-DB API
  */
@@ -41,6 +48,12 @@ export class RecommendationEngine {
 
   // Cache for reference titles (Phase 2.2)
   private referenceTitlesCache: Map<string, any> = new Map()
+  private lastRetrievalDiagnostics: RetrievalDiagnostics = {
+    tmdbEnabled: false,
+    usedTmdb: false,
+    usedOmdb: false,
+    omdbFallbackUsed: false
+  }
 
   private isImdbId(id: string): boolean {
     return /^tt\d{5,}$/.test(id)
@@ -199,9 +212,9 @@ export class RecommendationEngine {
     typeFilter?: 'movie' | 'series',
     discoveryMode?: DiscoveryMode,
     preferredGenres: string[] = []
-  ): Promise<any[]> {
+  ): Promise<{ results: any[]; source: 'tmdb' | 'omdb' }> {
     if (searchTerms.length === 0) {
-      return []
+      return { results: [], source: tmdbClient.isEnabled() ? 'tmdb' : 'omdb' }
     }
 
     if (tmdbClient.isEnabled()) {
@@ -211,13 +224,20 @@ export class RecommendationEngine {
         discoveryMode,
         preferredGenres
       )
-      console.log(`[Engine] Found ${results.length} raw results from TMDB`)
-      return results
+      if (results.length > 0) {
+        console.log(`[Engine] Found ${results.length} raw results from TMDB`)
+        return { results, source: 'tmdb' }
+      }
+
+      console.log('[Engine] TMDB returned no results; falling back to FM-DB')
+      const omdbFallbackResults = await this.searchWithOmdbFallback(searchTerms, typeFilter)
+      console.log(`[Engine] Found ${omdbFallbackResults.length} raw results from FM-DB`)
+      return { results: omdbFallbackResults, source: 'omdb' }
     }
 
     const results = await this.searchWithOmdbFallback(searchTerms, typeFilter)
     console.log(`[Engine] Found ${results.length} raw results from FM-DB`)
-    return results
+    return { results, source: 'omdb' }
   }
 
   private buildBackfillSearchTerms(
@@ -386,6 +406,13 @@ export class RecommendationEngine {
     request: RecommendationRequest,
     limit: number = 10
   ): Promise<Recommendation[]> {
+        const diagnostics: RetrievalDiagnostics = {
+          tmdbEnabled: tmdbClient.isEnabled(),
+          usedTmdb: false,
+          usedOmdb: false,
+          omdbFallbackUsed: false
+        }
+
     console.log(`[Engine] Processing request: "${request.description.substring(0, 50)}..."`)
     if (request.clarificationContext) {
       console.log(`[Engine] Clarification round ${request.clarificationContext.clarificationRound}`)
@@ -525,6 +552,7 @@ export class RecommendationEngine {
       )
 
       if (actorFilmographyCandidates.length > 0) {
+        diagnostics.usedTmdb = true
         console.log(`[Engine] Talent mode: retrieved ${actorFilmographyCandidates.length} actor filmography candidates from TMDB`)
       }
     }
@@ -549,12 +577,20 @@ export class RecommendationEngine {
       candidates = [...previousCandidates]
       console.log('[Engine] Reuse mode: skipping broad retrieval (sufficient prior candidates)')
     } else {
-      const searchedCandidates = await this.searchCandidates(
+      const searched = await this.searchCandidates(
         searchTerms,
         typeFilter,
         preferences.discoveryMode,
         preferences.genres || []
       )
+      if (searched.source === 'tmdb') {
+        diagnostics.usedTmdb = true
+      } else {
+        diagnostics.usedOmdb = true
+        diagnostics.omdbFallbackUsed = diagnostics.tmdbEnabled
+      }
+
+      const searchedCandidates = searched.results
       candidates = [...previousCandidates, ...actorFilmographyCandidates, ...searchedCandidates]
     }
 
@@ -570,13 +606,20 @@ export class RecommendationEngine {
           `[Engine] Thin candidate pool (${candidates.length}); backfilling with: ${backfillTerms.join(', ')}`
         )
 
-        const backfillCandidates = await this.searchCandidates(
+        const backfill = await this.searchCandidates(
           backfillTerms,
           typeFilter,
           preferences.discoveryMode,
           preferences.genres || []
         )
-        candidates = [...candidates, ...backfillCandidates]
+        if (backfill.source === 'tmdb') {
+          diagnostics.usedTmdb = true
+        } else {
+          diagnostics.usedOmdb = true
+          diagnostics.omdbFallbackUsed = diagnostics.tmdbEnabled
+        }
+
+        candidates = [...candidates, ...backfill.results]
       }
     }
 
@@ -628,6 +671,8 @@ export class RecommendationEngine {
       )
 
       if (actorSeedCandidates.length > 0) {
+        diagnostics.usedOmdb = true
+        diagnostics.omdbFallbackUsed = diagnostics.tmdbEnabled
         const recoveredSafe = this.filterContent(actorSeedCandidates)
         const recoveredWithTalent = recoveredSafe.map(title => ({
           ...title,
@@ -657,6 +702,12 @@ export class RecommendationEngine {
 
     const finalCandidates = this.selectFinalResults(effectiveRanked, limit)
     const final = await this.resolveImdbIds(finalCandidates)
+
+    this.lastRetrievalDiagnostics = {
+      ...diagnostics,
+      // Treat this as fallback only when TMDB was available in this run.
+      omdbFallbackUsed: diagnostics.tmdbEnabled && diagnostics.usedOmdb
+    }
 
     console.log(`[Engine] Returning ${final.length} recommendations`)
 
@@ -751,6 +802,10 @@ export class RecommendationEngine {
         referenceTitles
       )
     )
+  }
+
+  getLastRetrievalDiagnostics(): RetrievalDiagnostics {
+    return { ...this.lastRetrievalDiagnostics }
   }
 
   /**
