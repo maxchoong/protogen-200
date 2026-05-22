@@ -69,7 +69,7 @@ export default function ResultsPage({ results, query, onBackHome }: ResultsPageP
           ← Back to search
         </button>
 
-        <h1 className="mb-2 text-4xl font-semibold tracking-[-0.03em] text-text">
+        <h1 className="mb-2 font-serif text-4xl font-medium tracking-[-0.03em] text-text">
           Recommendations
         </h1>
         <p className="mb-8 text-text-muted">

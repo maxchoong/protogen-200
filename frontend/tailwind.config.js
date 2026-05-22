@@ -25,6 +25,7 @@ export default {
       },
       fontFamily: {
         sans: ["var(--font-ui)"],
+        serif: ["var(--font-display)"],
         mono: ["var(--font-mono)"],
       },
       boxShadow: {
