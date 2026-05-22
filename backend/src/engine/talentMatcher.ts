@@ -119,6 +119,53 @@ export class TalentMatcher {
   }
 
   /**
+   * Calculate talent overlap between a candidate and directly requested actors.
+   * Used for talent-mode queries such as "with Ryan Gosling" where there is no
+   * reference title to compare against.
+   */
+  static findTalentMatchForActors(
+    candidateTitle: any,
+    targetActors: string[]
+  ): TalentMatchResult {
+    if (targetActors.length === 0) {
+      return {
+        actorOverlap: 0,
+        directorMatch: false,
+        combinedScore: 0
+      }
+    }
+
+    const candidateTalent = this.extractTalent(candidateTitle)
+    if (candidateTalent.actors.length === 0) {
+      return {
+        actorOverlap: 0,
+        directorMatch: false,
+        combinedScore: 0
+      }
+    }
+
+    const normalizedTargets = targetActors
+      .map(actor => actor.trim().toLowerCase())
+      .filter(actor => actor.length > 0)
+
+    const intersection = normalizedTargets.filter(targetActor =>
+      candidateTalent.actors.some(candidateActor =>
+        candidateActor.includes(targetActor) || targetActor.includes(candidateActor)
+      )
+    ).length
+
+    const actorOverlap = normalizedTargets.length > 0
+      ? intersection / normalizedTargets.length
+      : 0
+
+    return {
+      actorOverlap,
+      directorMatch: false,
+      combinedScore: actorOverlap * 0.7
+    }
+  }
+
+  /**
    * Cache talent data by title ID
    * Useful for avoiding repeated extraction
    */

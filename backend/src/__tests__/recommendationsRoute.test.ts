@@ -128,8 +128,8 @@ describe('POST /recommendations route guardrails', () => {
 
     expect(response.status).toBe(200)
     expect(response.body.success).toBe(true)
-    expect(response.body.requiresClarification).toBeDefined()
-    expect(response.body.requiresClarification.questions[0].id).toBe('quality_format_focus')
+    expect(response.body.requiresClarification).toBeUndefined()
+    expect(response.body.recommendations).toHaveLength(2)
   })
 
   it('should stop asking clarification after max turns and return best available recommendations', async () => {
@@ -216,8 +216,47 @@ describe('POST /recommendations route guardrails', () => {
 
     expect(response.status).toBe(200)
     expect(response.body.success).toBe(true)
-    expect(response.body.requiresClarification).toBeDefined()
-    expect(response.body.requiresClarification.questions[0].id).toBe('quality_format_focus')
+    expect(response.body.requiresClarification).toBeUndefined()
+    expect(response.body.recommendations).toHaveLength(2)
+  })
+
+  it('should not ask for genre or type when talent intent already inferred comedy', async () => {
+    const mockRecommendations = [
+      {
+        id: 'tt3799694',
+        title: 'The Nice Guys',
+        year: '2016',
+        type: 'movie',
+        synopsis: 'A mismatched pair investigates a conspiracy in 1970s Los Angeles.',
+        score: 7.4,
+        scoringFactors: { composite: 0.33 }
+      },
+      {
+        id: 'tt1951265',
+        title: 'The Place Beyond the Pines',
+        year: '2012',
+        type: 'movie',
+        synopsis: 'An outlaw motorcycle stunt rider turns to robbing banks.',
+        score: 7.3,
+        scoringFactors: { composite: 0.29 }
+      }
+    ]
+
+    jest
+      .spyOn(recommendationEngine, 'getRecommendations')
+      .mockResolvedValue(mockRecommendations as any)
+
+    const response = await request(app)
+      .post('/recommendations')
+      .send({
+        description: 'Something funny with Ryan Gosling',
+        region: 'US'
+      })
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+    expect(response.body.requiresClarification).toBeUndefined()
+    expect(response.body.recommendations).toHaveLength(2)
   })
 
   it('should finalize when a freeform answer resolves multiple clarification dimensions', async () => {

@@ -139,6 +139,48 @@ describe('TalentMatcher - Phase 2 Tests', () => {
     })
   })
 
+  describe('findTalentMatchForActors', () => {
+    it('should score an exact requested actor match', () => {
+      const candidate = {
+        title: 'The Nice Guys',
+        actors: 'Ryan Gosling, Russell Crowe, Angourie Rice',
+        director: 'Shane Black'
+      }
+
+      const result = TalentMatcher.findTalentMatchForActors(candidate, ['Ryan Gosling'])
+
+      expect(result.actorOverlap).toBe(1)
+      expect(result.directorMatch).toBe(false)
+      expect(result.combinedScore).toBe(0.7)
+    })
+
+    it('should score no match when the requested actor is absent', () => {
+      const candidate = {
+        title: 'The Nice Guys',
+        actors: 'Russell Crowe, Angourie Rice',
+        director: 'Shane Black'
+      }
+
+      const result = TalentMatcher.findTalentMatchForActors(candidate, ['Ryan Gosling'])
+
+      expect(result.actorOverlap).toBe(0)
+      expect(result.combinedScore).toBe(0)
+    })
+
+    it('should handle partial matches across multiple requested actors', () => {
+      const candidate = {
+        title: 'Barbie',
+        actors: 'Ryan Gosling, Margot Robbie, America Ferrera',
+        director: 'Greta Gerwig'
+      }
+
+      const result = TalentMatcher.findTalentMatchForActors(candidate, ['Ryan Gosling', 'Emma Stone'])
+
+      expect(result.actorOverlap).toBe(0.5)
+      expect(result.combinedScore).toBe(0.35)
+    })
+  })
+
   describe('caching', () => {
     it('should cache talent match results', () => {
       const candidate = {

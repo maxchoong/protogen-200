@@ -131,6 +131,7 @@ const inferClarificationState = (
   ]
 
   const axisResolved =
+    mode === 'talent' ||
     askedQuestionIds.has('quality_reference_axis') ||
     askedQuestionIds.has('quality_disambiguate_intent') ||
     hasKeywordMatch(lowerAnswer, [
@@ -138,9 +139,7 @@ const inferClarificationState = (
       'genre similarity', 'genre', 'actor', 'title', 'reference title'
     ])
 
-  const formatResolved =
-    askedQuestionIds.has('quality_format_focus') ||
-    hasKeywordMatch(lowerAnswer, ['movie', 'movies', 'film', 'series', 'show', 'tv', 'either'])
+  const formatResolved = true
 
   const paceResolved =
     askedQuestionIds.has('quality_runtime_focus') ||
@@ -254,21 +253,6 @@ const buildWeakMatchClarification = (
     }
   ]
 
-  const referenceFollowUps: ClarificationQuestion[] = [
-    {
-      id: 'quality_format_focus',
-      question: 'Do you want a movie, series, or either?',
-      type: 'select',
-      options: ['Movie', 'Series', 'Either', 'Other (type your own)']
-    },
-    {
-      id: 'quality_runtime_focus',
-      question: 'Do you prefer a faster pace or a slower, more relaxed pace?',
-      type: 'select',
-      options: ['Faster pace', 'Balanced pace', 'Slower pace', 'No preference', 'Other (type your own)']
-    }
-  ]
-
   const roundTwoGeneric: ClarificationQuestion[] = [
     {
       id: 'quality_runtime_focus',
@@ -296,15 +280,6 @@ const buildWeakMatchClarification = (
     } else if (modeKey === 'mixed') {
       primaryCandidates = [roundOneFollowUps[0]]
     }
-  } else if (!state.formatResolved) {
-    primaryCandidates = [
-      {
-        id: 'quality_format_focus',
-        question: 'Do you want a movie, series, or either?',
-        type: 'select',
-        options: ['Movie', 'Series', 'Either', 'Other (type your own)']
-      }
-    ]
   } else if (!state.paceResolved && !hasInferredMoodShift) {
     primaryCandidates = [roundTwoGeneric[0]]
   } else if (!state.eraResolved && clarificationRound >= 2) {
