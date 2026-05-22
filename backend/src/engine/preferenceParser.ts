@@ -72,6 +72,14 @@ export interface RecommendationRequest {
  * Extracts: genres, moods, reference titles, excluded preferences, constraints
  */
 export class PreferenceParser {
+  private static readonly MOVIE_HINT_KEYWORDS = [
+    'movie', 'movies', 'film', 'films', 'cinema', 'feature'
+  ]
+
+  private static readonly TV_HINT_KEYWORDS = [
+    'tv', 'series', 'show', 'shows', 'season', 'seasons', 'episode', 'episodes'
+  ]
+
   private static readonly GENRE_KEYWORDS: Record<string, string[]> = {
     'Action': ['action', 'fight', 'explosion', 'adventure', 'heroic', 'thrilling', 'combat'],
     'Comedy': ['funny', 'laugh', 'comedy', 'humorous', 'hilarious', 'comic'],
@@ -305,7 +313,7 @@ export class PreferenceParser {
     const preferences: ParsedPreferences = {
       genres: [],
       mood: [],
-      contentType: request.preferences?.contentType || 'both',
+      contentType: this.inferContentType(analysisText, request.preferences?.contentType),
       maxRating: request.preferences?.maxRating || 'R',
       referenceTitle: [],
       excludedGenres: [],
@@ -402,13 +410,13 @@ export class PreferenceParser {
     // Store original description for later use
     preferences.description = analysisText
 
-    // If no genres found, use broad fallback genres only for non-reference discovery.
+    // If no genres found, infer genre hints from mood/novelty for non-reference discovery.
     if (
       preferences.genres.length === 0 &&
       !request.preferences?.genres &&
       (preferences.referenceTitle?.length || 0) === 0
     ) {
-      preferences.genres = ['Drama', 'Comedy', 'Action']
+      preferences.genres = this.inferFallbackGenresFromMood(preferences)
     }
 
     return preferences
@@ -423,6 +431,61 @@ export class PreferenceParser {
     }
 
     return `${base} ${clarification}`.trim()
+  }
+
+  private static inferContentType(
+    description: string,
+    explicitType?: 'movie' | 'tv' | 'both'
+  ): 'movie' | 'tv' | 'both' {
+    if (explicitType) {
+      return explicitType
+    }
+
+    const lower = description.toLowerCase()
+    const hasMovieHint = this.MOVIE_HINT_KEYWORDS.some(keyword => lower.includes(keyword))
+    const hasTVHint = this.TV_HINT_KEYWORDS.some(keyword => lower.includes(keyword))
+
+    if (hasMovieHint && !hasTVHint) {
+      return 'movie'
+    }
+
+    if (hasTVHint && !hasMovieHint) {
+      return 'tv'
+    }
+
+    return 'both'
+  }
+
+  private static inferFallbackGenresFromMood(preferences: ParsedPreferences): string[] {
+    const moodToGenres: Record<string, string[]> = {
+      'Relaxing': ['Drama', 'Romance', 'Documentary', 'Indie'],
+      'Funny': ['Comedy'],
+      'Thoughtful': ['Drama', 'Documentary', 'Indie'],
+      'Intense': ['Action', 'Thriller'],
+      'Suspenseful': ['Thriller', 'Mystery', 'Crime'],
+      'Dark': ['Thriller', 'Crime', 'Horror'],
+      'Romantic': ['Romance', 'Drama'],
+      'Happy': ['Comedy', 'Family'],
+      'Sad': ['Drama'],
+      'Surprising': ['Indie', 'Mystery', 'Thriller']
+    }
+
+    const inferred = new Set<string>()
+
+    for (const mood of preferences.mood || []) {
+      const mappedGenres = moodToGenres[mood] || []
+      mappedGenres.forEach(genre => inferred.add(genre))
+    }
+
+    if (preferences.noveltyIntent) {
+      inferred.add('Indie')
+    }
+
+    if (inferred.size === 0) {
+      return ['Drama', 'Comedy']
+    }
+
+    return Array.from(inferred).slice(0, 4)
   }
 
   private static hasNoveltyIntent(description: string): boolean {

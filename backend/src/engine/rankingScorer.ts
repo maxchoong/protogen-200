@@ -151,7 +151,9 @@ export class RankingScorer {
   static moodMatchScore(
     plotText: string | undefined,
     preferredMoods: string[],
-    moodStrength: Map<string, number> | undefined
+    moodStrength: Map<string, number> | undefined,
+    boostedMoods: string[] = [],
+    reducedMoods: string[] = []
   ): number {
     if (!plotText || plotText.length === 0 || preferredMoods.length === 0) return 0
 
@@ -181,8 +183,16 @@ export class RankingScorer {
       const matched = keywords.some(kw => plotLower.includes(kw))
       if (!matched) continue
 
-      // Weight by mood confidence
-      const confidence = moodStrength?.get(mood) ?? 0.8
+      // Weight by mood confidence and contrastive preference adjustments.
+      let confidence = moodStrength?.get(mood) ?? 0.8
+      if (boostedMoods.includes(mood)) {
+        confidence *= 1.2
+      }
+      if (reducedMoods.includes(mood)) {
+        confidence *= 0.5
+      }
+
+      confidence = Math.max(0, Math.min(1, confidence))
       totalScore += confidence
       matchCount++
     }
@@ -269,19 +279,31 @@ export class RankingScorer {
 
     // Calculate individual factors - explicitly ensure all are numbers
     const genreScore = Number(this.genreMatchScore(title.genres || [], preferences.genres)) || 0
-    const moodScore = Number(this.moodMatchScore(title.plot, preferences.mood || [], preferences.moodStrength)) || 0
+    const moodScore = Number(
+      this.moodMatchScore(
+        title.plot,
+        preferences.mood || [],
+        preferences.moodStrength,
+        preferences.boostedMoods || [],
+        preferences.reducedMoods || []
+      )
+    ) || 0
     const talentScore = Number(this.talentMatchScore(title.talentMatchScore)) || 0
     const ratingScore = Number(this.ratingScore(title.rating)) || 0
     const popularityScore = Number(this.popularityScore(title.voteCount)) || 0
     const recencyBoost = Number(this.recencyBoost(title.year)) || 0
 
     // Calculate composite score
+    const popularitySignal = preferences.noveltyIntent
+      ? (1 - popularityScore)
+      : popularityScore
+
     const composite =
       genreScore * finalConfig.weights.genre +
       moodScore * finalConfig.weights.mood +
       talentScore * finalConfig.weights.talent +
       ratingScore * finalConfig.weights.rating +
-      popularityScore * finalConfig.weights.popularity +
+      popularitySignal * finalConfig.weights.popularity +
       recencyBoost * finalConfig.weights.recency
 
     return {

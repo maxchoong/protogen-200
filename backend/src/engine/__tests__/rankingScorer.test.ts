@@ -93,6 +93,19 @@ describe('RankingScorer - Phase 3 Tests', () => {
       expect(RankingScorer.moodMatchScore('', ['Funny'], new Map())).toBe(0)
       expect(RankingScorer.moodMatchScore('Plot text', [], new Map())).toBe(0)
     })
+
+    it('should boost and reduce moods for contrastive requests', () => {
+      const plot = 'A gentle and peaceful story that stays calm.'
+      const moods = ['Relaxing']
+      const moodStrength = new Map([['Relaxing', 0.7]])
+
+      const neutral = RankingScorer.moodMatchScore(plot, moods, moodStrength)
+      const boosted = RankingScorer.moodMatchScore(plot, moods, moodStrength, ['Relaxing'], [])
+      const reduced = RankingScorer.moodMatchScore(plot, moods, moodStrength, [], ['Relaxing'])
+
+      expect(boosted).toBeGreaterThan(neutral)
+      expect(reduced).toBeLessThan(neutral)
+    })
   })
 
   describe('ratingScore', () => {
@@ -217,6 +230,36 @@ describe('RankingScorer - Phase 3 Tests', () => {
       const factors = RankingScorer.calculateCompositeScore(poorMatch, defaultPrefs)
       expect(factors.composite).toBeGreaterThanOrEqual(0)
       expect(factors.composite).toBeLessThanOrEqual(1.0)
+    })
+
+    it('should favor lower-popularity titles when novelty intent is set', () => {
+      const noveltyPrefs: ParsedPreferences = {
+        ...defaultPrefs,
+        noveltyIntent: true
+      }
+
+      const highPopularity = {
+        id: 'ttA',
+        title: 'High Popularity',
+        genres: ['Comedy', 'Drama'],
+        plot: 'A hilarious and thoughtful film',
+        rating: 8.0,
+        voteCount: 1000000,
+        year: 2024,
+        talentMatchScore: 0
+      }
+
+      const lowPopularity = {
+        ...highPopularity,
+        id: 'ttB',
+        title: 'Low Popularity',
+        voteCount: 200
+      }
+
+      const highFactors = RankingScorer.calculateCompositeScore(highPopularity, noveltyPrefs)
+      const lowFactors = RankingScorer.calculateCompositeScore(lowPopularity, noveltyPrefs)
+
+      expect(lowFactors.composite).toBeGreaterThan(highFactors.composite)
     })
   })
 

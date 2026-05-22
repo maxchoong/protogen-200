@@ -171,8 +171,8 @@ const inferClarificationState = (
   const enoughContextToFinalize =
     (mode === 'reference' && axisResolved && genreResolved && (paceResolved || formatResolved)) ||
     (mode === 'mood' && genreResolved && (paceResolved || formatResolved)) ||
-    (mode === 'talent' && genreResolved && formatResolved) ||
-    (mode === 'mixed' && axisResolved && (genreResolved || moodResolved) && (paceResolved || formatResolved))
+    (mode === 'talent' && genreResolved) ||
+    (mode === 'mixed' && axisResolved && (genreResolved || moodResolved))
 
   return {
     axisResolved,
@@ -276,8 +276,8 @@ const buildWeakMatchClarification = (
 
   let primaryCandidates: ClarificationQuestion[] = []
 
-  // For weak talent results on round 0, always ask talent-genre focus
-  if (clarificationRound === 0 && modeKey === 'talent') {
+  // For weak talent results on round 0, ask talent-genre focus only if genre intent is still unresolved.
+  if (clarificationRound === 0 && modeKey === 'talent' && !state.genreResolved) {
     primaryCandidates = [roundOneByMode.talent[0]]
   } else if (clarificationRound === 0 && !state.axisResolved) {
     primaryCandidates = roundOneByMode[modeKey]

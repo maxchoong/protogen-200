@@ -192,6 +192,9 @@ describe('Phase 5: Intent Classification & Clarification', () => {
       const preferences = PreferenceParser.parse(request)
 
       expect(preferences.discoveryMode).toBe('mood')
+      expect(preferences.contentType).toBe('movie')
+      expect(preferences.genres).not.toContain('Action')
+      expect(preferences.genres).toEqual(expect.arrayContaining(['Drama', 'Romance']))
       expect((preferences.intentConfidence || 0)).toBeGreaterThanOrEqual(0.85)
       expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull()
     })
@@ -206,6 +209,15 @@ describe('Phase 5: Intent Classification & Clarification', () => {
       expect(preferences.genres).toContain('Indie')
       expect((preferences.intentConfidence || 0)).toBeGreaterThanOrEqual(0.65)
       expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull()
+    })
+
+    it('should infer tv content type from show-oriented wording', () => {
+      const request: RecommendationRequest = {
+        description: 'A cozy weekend series'
+      }
+      const preferences = PreferenceParser.parse(request)
+
+      expect(preferences.contentType).toBe('tv')
     })
   })
 })
