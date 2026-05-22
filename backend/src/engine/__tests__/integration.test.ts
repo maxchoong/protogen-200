@@ -6,6 +6,7 @@
 import { PreferenceParser } from '../preferenceParser'
 import { recommendationEngine } from '../recommendationEngine'
 import { fmdbClient } from '../../clients/fmdb'
+import { tmdbClient } from '../../clients/tmdb'
 
 describe('End-to-End Recommendation Flow - Phase 5 Integration', () => {
   describe('Query: "funny heist like Ocean\'s Eleven"', () => {
@@ -677,5 +678,46 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
 
     getDetailsSpy.mockRestore()
     searchCandidatesSpy.mockRestore()
+  })
+
+  it('should return actor-led comedy matches for talent-mode prompts', async () => {
+    const isEnabledSpy = jest.spyOn(tmdbClient, 'isEnabled').mockReturnValue(true)
+    const actorSearchSpy = jest.spyOn(tmdbClient, 'searchTitlesForPerson').mockResolvedValue([
+      {
+        id: 101,
+        title: 'The Nice Guys',
+        media_type: 'movie',
+        poster_path: '/test.jpg',
+        overview: 'A private eye and enforcer investigate a missing girl in 1970s Los Angeles.',
+        release_date: '2016-05-20',
+        genre_ids: [35, 80],
+        vote_average: 7.4,
+        vote_count: 3800,
+        adult: false,
+        original_language: 'en'
+      } as any
+    ])
+    const broadSearchSpy = jest
+      .spyOn(recommendationEngine as any, 'searchCandidates')
+      .mockResolvedValue([])
+    const externalIdsSpy = jest
+      .spyOn(tmdbClient, 'getExternalIds')
+      .mockResolvedValue({})
+
+    const recommendations = await recommendationEngine.getRecommendations({
+      description: 'Something funny with Ryan Gosling',
+      region: 'US'
+    })
+
+    expect(actorSearchSpy).toHaveBeenCalled()
+    expect(recommendations.length).toBeGreaterThan(0)
+    expect(recommendations.some(r => r.title === 'The Nice Guys')).toBe(true)
+    expect(recommendations.every(r => r.type === 'movie' || r.type === 'tv')).toBe(true)
+    expect(broadSearchSpy).toHaveBeenCalled()
+
+    isEnabledSpy.mockRestore()
+    actorSearchSpy.mockRestore()
+    broadSearchSpy.mockRestore()
+    externalIdsSpy.mockRestore()
   })
 })

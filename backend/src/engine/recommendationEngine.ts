@@ -102,29 +102,7 @@ export class RecommendationEngine {
     const limited = deduped.slice(0, 30)
 
     const converted = await Promise.all(
-      limited.map(async item => {
-        const mediaType = item.media_type === 'tv' ? 'tv' : 'movie'
-        const yearRaw = mediaType === 'movie' ? item.release_date : item.first_air_date
-        const year = yearRaw ? parseInt(yearRaw.split('-')[0], 10) || 0 : 0
-        const id = `tmdb:${mediaType}:${item.id}`
-
-        return {
-          id,
-          tmdbId: item.id,
-          tmdbMediaType: mediaType,
-          title: item.title || item.name,
-          year,
-          type: mediaType === 'tv' ? 'series' : 'movie',
-          poster: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : undefined,
-          rating: item.vote_average || undefined,
-          plot: item.overview || undefined,
-          genres: tmdbClient.mapGenreIdsToNames(item.genre_ids || []),
-          rated: undefined,
-          director: undefined,
-          actors: undefined,
-          voteCount: item.vote_count || 0
-        }
-      })
+      limited.map(async item => this.convertTmdbResult(item))
     )
 
     return converted.filter(item => !!item.title && !!item.plot)
@@ -151,6 +129,31 @@ export class RecommendationEngine {
           .filter(Boolean)
       )
     ).slice(0, limit)
+  }
+
+  private convertTmdbResult(item: any, actorHints: string[] = []): any {
+    const mediaType = item.media_type === 'tv' ? 'tv' : 'movie'
+    const yearRaw = mediaType === 'movie' ? item.release_date : item.first_air_date
+    const year = yearRaw ? parseInt(yearRaw.split('-')[0], 10) || 0 : 0
+    const id = `tmdb:${mediaType}:${item.id}`
+
+    return {
+      id,
+      tmdbId: item.id,
+      tmdbMediaType: mediaType,
+      title: item.title || item.name,
+      year,
+      type: mediaType === 'tv' ? 'series' : 'movie',
+      poster: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : undefined,
+      rating: item.vote_average || undefined,
+      plot: item.overview || undefined,
+      genres: tmdbClient.mapGenreIdsToNames(item.genre_ids || []),
+      rated: undefined,
+      director: undefined,
+      actors: actorHints.length > 0 ? actorHints.join(', ') : undefined,
+      requestedActorHit: actorHints.length > 0,
+      voteCount: item.vote_count || 0
+    }
   }
 
   private async hydratePreviousRecommendations(
@@ -225,6 +228,10 @@ export class RecommendationEngine {
   }
 
   private matchesRequestedActors(title: any, requestedActors: string[]): boolean {
+    if (title?.requestedActorHit) {
+      return true
+    }
+
     if (requestedActors.length === 0) {
       return false
     }
@@ -471,6 +478,34 @@ export class RecommendationEngine {
                       preferences.contentType === 'movie' ? 'movie' : 
                       undefined
 
+    let actorFilmographyCandidates: any[] = []
+    if (preferences.discoveryMode === 'talent' && preferences.detectedActors && preferences.detectedActors.length > 0 && tmdbClient.isEnabled()) {
+      const includeMovies = typeFilter !== 'series'
+      const includeTV = typeFilter !== 'movie'
+
+      const actorResultSets = await Promise.all(
+        preferences.detectedActors.map(actor =>
+          tmdbClient.searchTitlesForPerson(
+            actor,
+            {
+              includeMovies,
+              includeTV,
+              excludeAdult: true
+            },
+            20
+          )
+        )
+      )
+
+      actorFilmographyCandidates = actorResultSets.flatMap((results, index) =>
+        results.map(item => this.convertTmdbResult(item, [preferences.detectedActors![index]]))
+      )
+
+      if (actorFilmographyCandidates.length > 0) {
+        console.log(`[Engine] Talent mode: retrieved ${actorFilmographyCandidates.length} actor filmography candidates from TMDB`)
+      }
+    }
+
     const previousRecommendationIds = request.clarificationContext?.previousRecommendationIds || []
     const shouldReusePreviousCandidates =
       (request.clarificationContext?.clarificationRound ?? 0) > 0 &&
@@ -497,7 +532,7 @@ export class RecommendationEngine {
         preferences.discoveryMode,
         preferences.genres || []
       )
-      candidates = [...previousCandidates, ...searchedCandidates]
+      candidates = [...previousCandidates, ...actorFilmographyCandidates, ...searchedCandidates]
     }
 
     if (candidates.length < RecommendationEngine.MIN_CANDIDATE_POOL) {
@@ -540,7 +575,9 @@ export class RecommendationEngine {
       talentMatchScore: referenceTitles.length > 0
         ? TalentMatcher.findTalentMatch(title, referenceTitles).combinedScore
         : (preferences.detectedActors && preferences.detectedActors.length > 0)
-          ? TalentMatcher.findTalentMatchForActors(title, preferences.detectedActors).combinedScore
+          ? (title.requestedActorHit
+            ? 1
+            : TalentMatcher.findTalentMatchForActors(title, preferences.detectedActors).combinedScore)
           : 0
     }))
 

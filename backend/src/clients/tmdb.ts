@@ -40,6 +40,28 @@ export interface TMDBTitle {
   original_language: string
 }
 
+interface TMDBPersonSearchResult {
+  id: number
+  name: string
+  known_for_department?: string
+}
+
+interface TMDBPersonCredit {
+  id: number
+  title?: string
+  name?: string
+  poster_path?: string
+  overview?: string
+  release_date?: string
+  first_air_date?: string
+  media_type?: 'movie' | 'tv'
+  genre_ids?: number[]
+  vote_average?: number
+  vote_count?: number
+  adult?: boolean
+  original_language?: string
+}
+
 export interface SearchQuery {
   query?: string
   includeMovies: boolean
@@ -300,6 +322,85 @@ export class TMDBClient {
     }
   }
 
+  /**
+   * Finds titles associated with an actor/person name.
+   * Uses person search + cast credits to support talent-mode recommendations.
+   */
+  async searchTitlesForPerson(
+    personName: string,
+    options: Partial<SearchQuery> = {},
+    limit: number = 30
+  ): Promise<TMDBTitle[]> {
+    if (!this.isEnabled()) {
+      return []
+    }
+
+    try {
+      const personId = await this.searchPersonId(personName)
+      if (!personId) {
+        return []
+      }
+
+      const params = this.applyAuth(new URLSearchParams())
+      const response = await fetch(
+        `${this.baseUrl}/person/${personId}/combined_credits?${params}`,
+        {
+          signal: AbortSignal.timeout(5000),
+          headers: this.buildAuthHeaders()
+        }
+      )
+
+      if (!response.ok) {
+        throw new Error(`TMDB credits API error: ${response.status}`)
+      }
+
+      const data = await response.json() as { cast?: TMDBPersonCredit[] }
+      const castCredits = data.cast || []
+
+      const normalized = castCredits
+        .map((credit): TMDBTitle | null => {
+          const mediaType = credit.media_type === 'tv' ? 'tv' : credit.media_type === 'movie' ? 'movie' : undefined
+          if (!mediaType) {
+            return null
+          }
+
+          return {
+            id: credit.id,
+            title: credit.title || credit.name || '',
+            name: credit.name,
+            poster_path: credit.poster_path,
+            overview: credit.overview || '',
+            release_date: credit.release_date,
+            first_air_date: credit.first_air_date,
+            media_type: mediaType,
+            genre_ids: credit.genre_ids || [],
+            vote_average: credit.vote_average || 0,
+            vote_count: credit.vote_count || 0,
+            adult: credit.adult || false,
+            original_language: credit.original_language || 'en'
+          }
+        })
+        .filter((item): item is TMDBTitle => item !== null)
+
+      const filtered = this.filterTitles(normalized, {
+        includeMovies: options.includeMovies ?? true,
+        includeTV: options.includeTV ?? true,
+        excludeAdult: options.excludeAdult ?? true
+      })
+
+      const deduped = Array.from(
+        new Map(filtered.map(item => [`${item.media_type}:${item.id}`, item])).values()
+      )
+
+      return deduped
+        .sort((a, b) => (b.vote_count || 0) - (a.vote_count || 0))
+        .slice(0, limit)
+    } catch (error) {
+      console.error('[TMDB] Person filmography search error:', error)
+      return []
+    }
+  }
+
   mapGenreIdsToNames(genreIds: number[]): string[] {
     if (!genreIds || genreIds.length === 0) {
       return []
@@ -401,6 +502,39 @@ export class TMDBClient {
   }
 
   // ===== Private methods =====
+
+  private async searchPersonId(personName: string): Promise<number | undefined> {
+    const params = this.applyAuth(new URLSearchParams({
+      query: personName,
+      include_adult: 'false'
+    }))
+
+    const response = await fetch(
+      `${this.baseUrl}/search/person?${params}`,
+      {
+        signal: AbortSignal.timeout(5000),
+        headers: this.buildAuthHeaders()
+      }
+    )
+
+    if (!response.ok) {
+      return undefined
+    }
+
+    const data = await response.json() as { results?: TMDBPersonSearchResult[] }
+    const results = data.results || []
+    if (results.length === 0) {
+      return undefined
+    }
+
+    const ranked = [...results].sort((a, b) => {
+      const aActing = a.known_for_department === 'Acting' ? 1 : 0
+      const bActing = b.known_for_department === 'Acting' ? 1 : 0
+      return bActing - aActing
+    })
+
+    return ranked[0].id
+  }
 
   private async discoverMovies(
     genreIds: string,
