@@ -2,6 +2,7 @@ import { useState } from 'react'
 import ConversationalHome from './pages/ConversationalHome'
 import ResultsPage from './pages/ResultsPage'
 import { useTheme } from './hooks/useTheme'
+import { useConversation } from './hooks/useConversation'
 
 interface RecommendationRequest {
   description: string
@@ -10,6 +11,8 @@ interface RecommendationRequest {
     clarificationRound: number
     userClarification: string
     askedQuestionIds?: string[]
+    previousRecommendationIds?: string[]
+    cumulativeConstraints?: string[]
   }
   preferences?: {
     genres?: string[]
@@ -21,6 +24,8 @@ interface RecommendationRequest {
 
 interface RecommendationResponse {
   recommendations?: any[]
+  refinementSuggestions?: string[]
+  appliedConstraints?: string[]
   requiresClarification?: {
     questions: Array<{
       id: string
@@ -39,9 +44,12 @@ interface RecommendationResponse {
 
 function App() {
   const { theme, toggleTheme } = useTheme()
+  const conversation = useConversation()
   const [currentPage, setCurrentPage] = useState<'home' | 'results'>('home')
   const [results, setResults] = useState<any[]>([])
   const [query, setQuery] = useState<string>('')
+  const [activeConstraints, setActiveConstraints] = useState<string[]>([])
+  const [refinementSuggestions, setRefinementSuggestions] = useState<string[]>([])
 
   const inferRegionFromLocale = (): string => {
     const locale = navigator.language || 'en-US'
@@ -58,6 +66,8 @@ function App() {
       clarificationRound: number
       userClarification: string
       askedQuestionIds?: string[]
+      previousRecommendationIds?: string[]
+      cumulativeConstraints?: string[]
     }
   ): Promise<RecommendationResponse> => {
     const payload: RecommendationRequest = {
@@ -89,16 +99,89 @@ function App() {
     }
   }
 
-  const handleNavigateToResults = (recommendations: any[], queryText: string) => {
+  const handleNavigateToResults = (
+    recommendations: any[],
+    queryText: string,
+    options?: {
+      refinementSuggestions?: string[]
+      appliedConstraints?: string[]
+    }
+  ) => {
     setResults(recommendations)
     setQuery(queryText)
+    setRefinementSuggestions(options?.refinementSuggestions || [])
+    setActiveConstraints(options?.appliedConstraints || [])
     setCurrentPage('results')
+  }
+
+  const handleRefineResults = async (refinementText: string): Promise<void> => {
+    const trimmed = refinementText.trim()
+    if (!trimmed || !query) {
+      return
+    }
+
+    conversation.addMessage({
+      role: 'user',
+      text: trimmed,
+      timestamp: Date.now()
+    })
+    conversation.setLoading(true)
+    conversation.setError(null)
+
+    const nextConstraints = [...activeConstraints, trimmed]
+
+    const askedQuestionIds = conversation.state.messages.flatMap(message =>
+      (message.clarificationQuestions || []).map(question => question.id)
+    )
+
+    try {
+      const response = await handleConversationSubmit(query, {
+        clarificationRound: 1,
+        userClarification: trimmed,
+        askedQuestionIds,
+        previousRecommendationIds: results.map(item => item.id).filter(Boolean),
+        cumulativeConstraints: nextConstraints
+      })
+
+      if (response.recommendations && response.recommendations.length > 0) {
+        setResults(response.recommendations)
+        setActiveConstraints(response.appliedConstraints || nextConstraints)
+        setRefinementSuggestions(response.refinementSuggestions || [])
+
+        conversation.addMessage({
+          role: 'assistant',
+          text: `Updated results using your refinement: "${trimmed}".`,
+          timestamp: Date.now(),
+          recommendations: response.recommendations,
+          detectedIntent: response.detectedIntent
+        })
+
+        if (response.detectedIntent) {
+          conversation.updateLastIntent(response.detectedIntent)
+        }
+
+        return
+      }
+
+      conversation.addMessage({
+        role: 'assistant',
+        text: 'I could not improve the results from that refinement. Try being more specific about mood, era, or popularity.',
+        timestamp: Date.now(),
+        detectedIntent: response.detectedIntent
+      })
+
+      throw new Error('No refined recommendations returned. Try a different refinement.')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to refine results right now.'
+      conversation.setError(message)
+      throw error
+    } finally {
+      conversation.setLoading(false)
+    }
   }
 
   const handleBackHome = () => {
     setCurrentPage('home')
-    setResults([])
-    setQuery('')
   }
 
   return (
@@ -115,11 +198,20 @@ function App() {
 
       {currentPage === 'home' ? (
         <ConversationalHome 
+          conversation={conversation}
           onSubmit={handleConversationSubmit}
           onNavigateToResults={handleNavigateToResults}
         />
       ) : (
-        <ResultsPage results={results} query={query} onBackHome={handleBackHome} />
+        <ResultsPage
+          results={results}
+          query={query}
+          onBackHome={handleBackHome}
+          conversationMessages={conversation.state.messages}
+          activeConstraints={activeConstraints}
+          refinementSuggestions={refinementSuggestions}
+          onRefine={handleRefineResults}
+        />
       )}
     </div>
   )

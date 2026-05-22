@@ -219,5 +219,39 @@ describe('Phase 5: Intent Classification & Clarification', () => {
 
       expect(preferences.contentType).toBe('tv')
     })
+
+    it('should parse blockbuster refinement as mainstream popularity preference', () => {
+      const request: RecommendationRequest = {
+        description: 'Like Inception but more relaxing',
+        clarificationContext: {
+          clarificationRound: 1,
+          userClarification: 'please prioritize blockbusters'
+        }
+      }
+
+      const preferences = PreferenceParser.parse(request)
+
+      expect(preferences.popularityPreference).toBe('mainstream')
+      expect(preferences.constraints).toContain('popularity:mainstream')
+    })
+
+    it('should parse decade refinement from cumulative constraints', () => {
+      const request: RecommendationRequest = {
+        description: 'Like Blade Runner but warmer',
+        clarificationContext: {
+          clarificationRound: 1,
+          userClarification: 'show me movies from the 80s',
+          cumulativeConstraints: ['prioritize blockbusters']
+        }
+      }
+
+      const preferences = PreferenceParser.parse(request)
+
+      expect(preferences.yearRange).toBeDefined()
+      expect(preferences.yearRange?.min).toBe(1980)
+      expect(preferences.yearRange?.max).toBe(1989)
+      expect(preferences.constraints).toContain('decade:1980s')
+      expect(preferences.constraints).toContain('popularity:mainstream')
+    })
   })
 })

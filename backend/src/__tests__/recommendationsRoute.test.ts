@@ -7,7 +7,7 @@ describe('POST /recommendations route guardrails', () => {
     jest.restoreAllMocks()
   })
 
-  it('should request clarification when recommendation quality is weak', async () => {
+  it('should return weak recommendations with refinement suggestions', async () => {
     const mockRecommendations = [
       {
         id: 'tt1234567',
@@ -42,11 +42,50 @@ describe('POST /recommendations route guardrails', () => {
 
     expect(response.status).toBe(200)
     expect(response.body.success).toBe(true)
-    expect(response.body.recommendations).toBeUndefined()
-    expect(response.body.requiresClarification).toBeDefined()
-    expect(response.body.requiresClarification.questions.length).toBeGreaterThan(0)
-    expect(response.body.requiresClarification.context).toContain('one more detail')
-    expect(response.body.requiresClarification.questions[0].options).not.toContain('Mood/tone')
+    expect(response.body.requiresClarification).toBeUndefined()
+    expect(response.body.recommendations).toHaveLength(2)
+    expect(response.body.refinementSuggestions).toBeDefined()
+    expect(response.body.refinementSuggestions.length).toBeGreaterThan(0)
+  })
+
+  it('should bypass first-turn clarification for high-confidence non-mixed intent', async () => {
+    const mockRecommendations = [
+      {
+        id: 'tt1856101',
+        title: 'Blade Runner 2049',
+        year: '2017',
+        type: 'movie',
+        synopsis: 'A replicant hunter uncovers a buried secret.',
+        score: 8.0,
+        scoringFactors: { composite: 0.61 }
+      },
+      {
+        id: 'tt0137523',
+        title: 'Fight Club',
+        year: '1999',
+        type: 'movie',
+        synopsis: 'An office worker forms an underground fight club.',
+        score: 8.8,
+        scoringFactors: { composite: 0.57 }
+      }
+    ]
+
+    const getRecommendationsSpy = jest
+      .spyOn(recommendationEngine, 'getRecommendations')
+      .mockResolvedValue(mockRecommendations as any)
+
+    const response = await request(app)
+      .post('/recommendations')
+      .send({
+        description: 'Like Blade Runner but warmer',
+        region: 'US'
+      })
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+    expect(response.body.requiresClarification).toBeUndefined()
+    expect(response.body.recommendations).toHaveLength(2)
+    expect(getRecommendationsSpy).toHaveBeenCalledTimes(1)
   })
 
   it('should return recommendations when quality is strong', async () => {
@@ -86,6 +125,63 @@ describe('POST /recommendations route guardrails', () => {
     expect(response.body.success).toBe(true)
     expect(response.body.requiresClarification).toBeUndefined()
     expect(response.body.recommendations).toHaveLength(2)
+  })
+
+  it('should forward iterative refinement context to recommendation engine', async () => {
+    const mockRecommendations = [
+      {
+        id: 'tt2468101',
+        title: 'Strong Match One',
+        year: '2019',
+        type: 'movie',
+        synopsis: 'A strongly relevant recommendation.',
+        score: 7.9,
+        scoringFactors: { composite: 0.62 }
+      },
+      {
+        id: 'tt1357913',
+        title: 'Strong Match Two',
+        year: '2020',
+        type: 'movie',
+        synopsis: 'Another strongly relevant recommendation.',
+        score: 7.8,
+        scoringFactors: { composite: 0.57 }
+      }
+    ]
+
+    const getRecommendationsSpy = jest
+      .spyOn(recommendationEngine, 'getRecommendations')
+      .mockResolvedValue(mockRecommendations as any)
+
+    const response = await request(app)
+      .post('/recommendations')
+      .send({
+        description: 'Like Inception but more relaxing',
+        region: 'US',
+        clarificationContext: {
+          clarificationRound: 1,
+          userClarification: 'prioritize blockbusters',
+          previousRecommendationIds: ['tt1375666', 'tt0816692'],
+          cumulativeConstraints: ['show me movies from the 80s']
+        }
+      })
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+    expect(response.body.requiresClarification).toBeUndefined()
+    expect(response.body.recommendations).toHaveLength(2)
+    expect(getRecommendationsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: 'Like Inception but more relaxing',
+        region: 'US',
+        clarificationContext: expect.objectContaining({
+          clarificationRound: 1,
+          userClarification: 'prioritize blockbusters',
+          previousRecommendationIds: ['tt1375666', 'tt0816692'],
+          cumulativeConstraints: ['show me movies from the 80s']
+        })
+      })
+    )
   })
 
   it('should ask the next unresolved follow-up question when a meaningful gap remains', async () => {
@@ -301,5 +397,80 @@ describe('POST /recommendations route guardrails', () => {
     expect(response.body.success).toBe(true)
     expect(response.body.requiresClarification).toBeUndefined()
     expect(response.body.recommendations).toHaveLength(2)
+  })
+
+  it('should return near-threshold reference recommendations without clarification', async () => {
+    const mockRecommendations = [
+      {
+        id: 'tt3315342',
+        title: 'Logan',
+        year: '2017',
+        type: 'movie',
+        synopsis: 'Mutant drama with sci-fi themes.',
+        score: 8.1,
+        scoringFactors: { composite: 0.444 }
+      },
+      {
+        id: 'tt0816692',
+        title: 'Interstellar',
+        year: '2014',
+        type: 'movie',
+        synopsis: 'Explorers travel through a wormhole in space.',
+        score: 8.4,
+        scoringFactors: { composite: 0.443 }
+      },
+      {
+        id: 'tt0338013',
+        title: 'Eternal Sunshine of the Spotless Mind',
+        year: '2004',
+        type: 'movie',
+        synopsis: 'A surreal romance blending memory and science fiction.',
+        score: 8.3,
+        scoringFactors: { composite: 0.436 }
+      },
+      {
+        id: 'tt6644200',
+        title: 'A Quiet Place',
+        year: '2018',
+        type: 'movie',
+        synopsis: 'A family survives in silence under alien threat.',
+        score: 7.5,
+        scoringFactors: { composite: 0.434 }
+      },
+      {
+        id: 'tt2543164',
+        title: 'Arrival',
+        year: '2016',
+        type: 'movie',
+        synopsis: 'A linguist helps communicate with extraterrestrials.',
+        score: 7.9,
+        scoringFactors: { composite: 0.432 }
+      },
+      {
+        id: 'tt1798709',
+        title: 'Her',
+        year: '2013',
+        type: 'movie',
+        synopsis: 'A gentle futuristic romance with reflective pacing.',
+        score: 8.0,
+        scoringFactors: { composite: 0.431 }
+      }
+    ]
+
+    jest
+      .spyOn(recommendationEngine, 'getRecommendations')
+      .mockResolvedValue(mockRecommendations as any)
+
+    const response = await request(app)
+      .post('/recommendations')
+      .send({
+        description: 'Like Inception but more relaxing',
+        region: 'US'
+      })
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+    expect(response.body.requiresClarification).toBeUndefined()
+    expect(response.body.recommendations).toHaveLength(6)
   })
 })

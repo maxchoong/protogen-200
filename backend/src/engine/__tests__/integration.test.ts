@@ -5,6 +5,7 @@
 
 import { PreferenceParser } from '../preferenceParser'
 import { recommendationEngine } from '../recommendationEngine'
+import { fmdbClient } from '../../clients/fmdb'
 
 describe('End-to-End Recommendation Flow - Phase 5 Integration', () => {
   describe('Query: "funny heist like Ocean\'s Eleven"', () => {
@@ -478,5 +479,203 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
 
     expect(ranked).toHaveLength(1)
     expect(ranked[0].id).toBe('tt3000001')
+  })
+
+  it('should keep a broader set of extracted search terms for mixed queries', () => {
+    const terms = (recommendationEngine as any).extractSearchTerms(
+      'funny mystery sci-fi thriller with robots and conspiracies',
+      ['Comedy', 'Sci-Fi']
+    )
+
+    expect(terms.length).toBeGreaterThan(3)
+    expect(terms).toContain('funny')
+    expect(terms).toContain('mystery')
+    expect(terms).toContain('sci')
+  })
+
+  it('should diversify the final selection inside the rerank window', () => {
+    const ranked = [
+      {
+        id: 'tt1',
+        title: 'Comedy One',
+        genres: ['Comedy', 'Drama'],
+        year: 2019,
+        scoringFactors: { composite: 0.91 }
+      },
+      {
+        id: 'tt2',
+        title: 'Comedy Two',
+        genres: ['Comedy', 'Drama'],
+        year: 2018,
+        scoringFactors: { composite: 0.9 }
+      },
+      {
+        id: 'tt3',
+        title: 'Comedy Three',
+        genres: ['Comedy', 'Drama'],
+        year: 2017,
+        scoringFactors: { composite: 0.89 }
+      },
+      {
+        id: 'tt4',
+        title: 'Sci-Fi Break',
+        genres: ['Sci-Fi', 'Mystery'],
+        year: 2016,
+        scoringFactors: { composite: 0.87 }
+      },
+      {
+        id: 'tt5',
+        title: 'Thriller Break',
+        genres: ['Thriller', 'Crime'],
+        year: 2015,
+        scoringFactors: { composite: 0.86 }
+      },
+      {
+        id: 'tt6',
+        title: 'Drama Tail',
+        genres: ['Drama'],
+        year: 2014,
+        scoringFactors: { composite: 0.7 }
+      }
+    ]
+
+    const final = (recommendationEngine as any).selectFinalResults(ranked, 4)
+    const finalIds = final.map((item: any) => item.id)
+
+    expect(finalIds).toContain('tt4')
+    expect(finalIds).toContain('tt5')
+    expect(finalIds).not.toEqual(['tt1', 'tt2', 'tt3', 'tt4'])
+  })
+
+  it('should boost mainstream titles when blockbuster refinement is provided', () => {
+    const preferences = PreferenceParser.parse({
+      description: 'Like Inception but more relaxing',
+      clarificationContext: {
+        clarificationRound: 1,
+        userClarification: 'prioritize blockbusters'
+      }
+    })
+
+    const titles = [
+      {
+        id: 'ttA111111',
+        title: 'High Popularity Pick',
+        genres: ['Drama', 'Sci-Fi'],
+        plot: 'A calm and reflective science-fiction story.',
+        rating: 7.4,
+        voteCount: 1200000,
+        year: 2017,
+        talentMatchScore: 0.2
+      },
+      {
+        id: 'ttB222222',
+        title: 'Low Popularity Pick',
+        genres: ['Drama', 'Sci-Fi'],
+        plot: 'A calm and reflective science-fiction story.',
+        rating: 7.6,
+        voteCount: 1200,
+        year: 2017,
+        talentMatchScore: 0.2
+      }
+    ]
+
+    const ranked = (recommendationEngine as any).rankTitles(titles, preferences, [])
+
+    expect(ranked[0].id).toBe('ttA111111')
+    expect(ranked[0].scoringFactors.composite).toBeGreaterThan(ranked[1].scoringFactors.composite)
+  })
+
+  it('should boost 80s titles when decade refinement is provided', () => {
+    const preferences = PreferenceParser.parse({
+      description: 'Like Blade Runner but warmer',
+      clarificationContext: {
+        clarificationRound: 1,
+        userClarification: 'show me movies from the 80s'
+      }
+    })
+
+    const titles = [
+      {
+        id: 'ttC333333',
+        title: '1980s Match',
+        genres: ['Drama', 'Sci-Fi'],
+        plot: 'A warm and thoughtful science fiction character study.',
+        rating: 7.2,
+        voteCount: 40000,
+        year: 1984,
+        talentMatchScore: 0.1
+      },
+      {
+        id: 'ttD444444',
+        title: 'Modern Match',
+        genres: ['Drama', 'Sci-Fi'],
+        plot: 'A warm and thoughtful science fiction character study.',
+        rating: 7.2,
+        voteCount: 40000,
+        year: 2019,
+        talentMatchScore: 0.1
+      }
+    ]
+
+    const ranked = (recommendationEngine as any).rankTitles(titles, preferences, [])
+
+    expect(ranked[0].id).toBe('ttC333333')
+    expect(ranked[0].scoringFactors.composite).toBeGreaterThan(ranked[1].scoringFactors.composite)
+  })
+
+  it('should reuse previous recommendations and skip broad retrieval when pool is sufficient', async () => {
+    const previousIds = [
+      'tt0083658',
+      'tt0088247',
+      'tt0090605',
+      'tt0081505',
+      'tt0086190',
+      'tt0081398',
+      'tt0082971',
+      'tt0086250',
+      'tt0091763',
+      'tt0092005',
+      'tt0093058',
+      'tt0095016'
+    ]
+
+    const getDetailsSpy = jest
+      .spyOn(fmdbClient, 'getDetails')
+      .mockImplementation(async (id: string) => ({
+        imdbID: id,
+        Title: `Hydrated ${id}`,
+        Year: '1984',
+        Type: 'movie',
+        Plot: 'A warm and thoughtful science fiction story with reflective pacing.',
+        Genre: 'Sci-Fi, Drama',
+        imdbRating: '7.4',
+        Poster: 'N/A',
+        Rated: 'PG-13',
+        Director: 'N/A',
+        Actors: 'N/A'
+      } as any))
+
+    const searchCandidatesSpy = jest
+      .spyOn(recommendationEngine as any, 'searchCandidates')
+      .mockResolvedValue([])
+
+    const recommendations = await recommendationEngine.getRecommendations({
+      description: 'Like Blade Runner but warmer',
+      region: 'US',
+      clarificationContext: {
+        clarificationRound: 1,
+        userClarification: 'prioritize blockbusters from the 80s',
+        previousRecommendationIds: previousIds,
+        cumulativeConstraints: ['prioritize blockbusters', 'show me movies from the 80s']
+      }
+    })
+
+    expect(recommendations.length).toBeGreaterThan(0)
+    expect(recommendations.length).toBeLessThanOrEqual(10)
+    expect(getDetailsSpy).toHaveBeenCalledTimes(previousIds.length + 1)
+    expect(searchCandidatesSpy).not.toHaveBeenCalled()
+
+    getDetailsSpy.mockRestore()
+    searchCandidatesSpy.mockRestore()
   })
 })

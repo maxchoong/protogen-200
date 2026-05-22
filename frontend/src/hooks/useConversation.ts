@@ -99,3 +99,5 @@ export function useConversation() {
     reset
   }
 }
+
+export type ConversationController = ReturnType<typeof useConversation>

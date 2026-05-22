@@ -1,14 +1,17 @@
 import { useRef, useState, type KeyboardEvent } from 'react'
-import { useConversation, ClarificationQuestion, DetectedIntent } from '../hooks/useConversation'
+import { ClarificationQuestion, ConversationController, DetectedIntent } from '../hooks/useConversation'
 import './ConversationalHome.css'
 
 interface ConversationalHomeProps {
+  conversation: ConversationController
   onSubmit: (
     description: string,
     clarificationContext?: {
       clarificationRound: number
       userClarification: string
       askedQuestionIds?: string[]
+      previousRecommendationIds?: string[]
+      cumulativeConstraints?: string[]
     }
   ) => Promise<{
     recommendations?: any[]
@@ -18,17 +21,26 @@ interface ConversationalHomeProps {
       confidenceScore?: number
     }
     detectedIntent?: DetectedIntent
+    refinementSuggestions?: string[]
+    appliedConstraints?: string[]
   }>
-  onNavigateToResults?: (recommendations: any[], query: string) => void
+  onNavigateToResults?: (
+    recommendations: any[],
+    query: string,
+    options?: {
+      refinementSuggestions?: string[]
+      appliedConstraints?: string[]
+    }
+  ) => void
 }
 
 type PendingPhase = 'initial' | 'slow' | 'delayed' | null
 
 export default function ConversationalHome({
+  conversation,
   onSubmit,
   onNavigateToResults
 }: ConversationalHomeProps) {
-  const conversation = useConversation()
   const { state } = conversation
   const [inputValue, setInputValue] = useState('')
   const [pendingPhase, setPendingPhase] = useState<PendingPhase>(null)
@@ -127,7 +139,10 @@ export default function ConversationalHome({
         conversation.updateClarificationRound(0)
 
         if (onNavigateToResults) {
-          onNavigateToResults(response.recommendations, state.lastQuery || trimmed)
+          onNavigateToResults(response.recommendations, state.lastQuery || trimmed, {
+            refinementSuggestions: response.refinementSuggestions,
+            appliedConstraints: response.appliedConstraints
+          })
         }
       } else {
         // Handle empty results (no recommendations, no clarification)
@@ -194,10 +209,10 @@ export default function ConversationalHome({
     latestMessage?.role === 'assistant' && latestMessage?.clarificationQuestions
   const pendingLabel =
     pendingPhase === 'delayed'
-      ? 'This is taking longer than usual.'
+      ? 'Still curating your next pass.'
       : pendingPhase === 'slow'
-        ? 'Still working on this request.'
-        : 'Generating response.'
+        ? 'Shaping your selections.'
+        : 'Curating your selections.'
 
   return (
     <div className="conversational-home min-h-screen flex flex-col bg-bg text-text">
@@ -206,7 +221,7 @@ export default function ConversationalHome({
         <div className="max-w-4xl mx-auto">
           <h1 className="font-serif text-2xl font-medium tracking-[-0.03em] text-text">Film and TV Advisor</h1>
           <p className="mt-1 text-sm text-text-muted">
-            Tell me what you're looking for and I'll find the perfect thing to watch
+            Describe the mood and we will shape a tailored viewing list.
           </p>
         </div>
       </div>
@@ -216,8 +231,9 @@ export default function ConversationalHome({
         <div className="mx-auto max-w-4xl space-y-5">
           {state.messages.length === 0 && (
             <div className="mt-10 rounded-lg border border-border bg-surface px-6 py-8 text-center shadow-card">
-              <p className="mb-3 text-lg font-semibold text-text">Start by describing what you want to watch.</p>
-              <p className="text-sm text-text-muted">Examples:</p>
+              <p className="mb-1 text-xs uppercase tracking-[0.16em] text-text-muted">Opening brief</p>
+              <p className="mb-3 font-serif text-2xl font-medium tracking-[-0.02em] text-text">What are you in the mood for?</p>
+              <p className="text-sm text-text-muted">Try a prompt:</p>
               <div className="mt-4 flex flex-wrap justify-center gap-3">
                 {[
                   'Something funny with Ryan Gosling',
@@ -229,7 +245,7 @@ export default function ConversationalHome({
                     key={i}
                     onClick={() => void submitMessage(example)}
                     disabled={state.isLoading}
-                    className="rounded-pill border border-border bg-surface-2 px-4 py-2 text-sm text-text transition-colors hover:border-accent hover:text-text disabled:opacity-50"
+                    className="rounded-pill border border-border bg-surface-2 px-4 py-2 text-sm text-text transition-colors hover:border-accent disabled:opacity-50"
                   >
                     {example}
                   </button>
@@ -310,7 +326,7 @@ export default function ConversationalHome({
                       onClick={handleCancelPending}
                       className="rounded-pill border border-border px-3 py-1 text-xs text-text transition-colors hover:border-accent"
                     >
-                      Cancel request
+                      Cancel curation
                     </button>
                   </div>
                 )}
@@ -345,8 +361,8 @@ export default function ConversationalHome({
               onKeyPress={handleKeyPress}
               placeholder={
                 showClarification
-                  ? 'Select or type your answer...'
-                  : 'Tell me what you want to watch...'
+                  ? 'Add your note or select a direction...'
+                  : 'Write your viewing brief...'
               }
               disabled={state.isLoading}
               rows={3}
@@ -357,10 +373,10 @@ export default function ConversationalHome({
               disabled={!inputValue.trim() || state.isLoading}
               className="h-fit rounded-pill border border-border bg-surface-2 px-4 py-2 font-medium text-text transition-colors hover:border-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {state.isLoading ? 'Sending...' : 'Send'}
+              {state.isLoading ? 'Curating...' : 'Submit'}
             </button>
           </div>
-          <p className="mt-2 text-xs text-text-muted">Press Enter to send, Shift+Enter for new line.</p>
+          <p className="mt-2 text-xs text-text-muted">Press Enter to submit, Shift+Enter for a new line.</p>
         </div>
       </div>
     </div>

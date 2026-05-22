@@ -29,9 +29,11 @@ interface RecommendationRequest {
   clarificationContext?: {
     clarificationRound: number          // 0 = first, 1+ = follow-up
     previousRecommendationId?: string
+    previousRecommendationIds?: string[]
     userClarification?: string           // User's answer to clarification question
     clarificationIndex?: number          // Which question answered (0-based)
     askedQuestionIds?: string[]
+    cumulativeConstraints?: string[]
   }
 }
 
@@ -72,6 +74,8 @@ interface ApiResponse {
   success: boolean
   recommendations?: Recommendation[]
   requiresClarification?: RequiresClarification
+  refinementSuggestions?: string[]
+  appliedConstraints?: string[]
   message?: string
   // Phase 5: Intent metadata (informational)
   detectedIntent?: {
@@ -85,6 +89,62 @@ type ParsedPreferencesSnapshot = ReturnType<typeof PreferenceParser.parse>
 const MIN_TOP_COMPOSITE = 0.45
 const MIN_STRONG_MATCH_COUNT = 2
 const MAX_CLARIFICATION_TURNS = 3
+const RESULTS_FIRST_CONFIDENCE_THRESHOLD = 0.8
+const REFERENCE_NEAR_THRESHOLD_TOP_COMPOSITE = 0.43
+const REFERENCE_NEAR_THRESHOLD_FLOOR_COMPOSITE = 0.4
+const REFERENCE_NEAR_THRESHOLD_MIN_COUNT = 5
+
+const buildWeakResultRefinementSuggestions = (
+  mode: 'mood' | 'reference' | 'talent' | 'mixed' | undefined
+): string[] => {
+  switch (mode) {
+    case 'reference':
+      return [
+        'Prioritize cast/director similarity',
+        'Lean more mainstream blockbusters',
+        'Focus on titles from the 80s or 90s'
+      ]
+    case 'talent':
+      return [
+        'Prioritize a specific genre',
+        'Only include movies (or only series)',
+        'Prefer recent releases'
+      ]
+    case 'mood':
+      return [
+        'Adjust the intensity (calmer or more intense)',
+        'Prioritize faster or slower pacing',
+        'Constrain to a specific decade'
+      ]
+    default:
+      return [
+        'Prioritize mood/tone first',
+        'Prioritize genre first',
+        'Constrain to a specific era or decade'
+      ]
+  }
+}
+
+const shouldPreferResultsFirst = (
+  clarificationQuestions: ClarificationQuestion[] | null,
+  clarificationRound: number,
+  mode: 'mood' | 'reference' | 'talent' | 'mixed' | undefined,
+  confidence: number | undefined
+): boolean => {
+  if (!clarificationQuestions || clarificationQuestions.length === 0) {
+    return false
+  }
+
+  if (clarificationRound > 0) {
+    return false
+  }
+
+  if (!mode || mode === 'mixed') {
+    return false
+  }
+
+  return (confidence ?? 0) >= RESULTS_FIRST_CONFIDENCE_THRESHOLD
+}
 
 const isWeakRecommendationSet = (recommendations: Recommendation[]): boolean => {
   if (recommendations.length === 0) {
@@ -99,6 +159,33 @@ const isWeakRecommendationSet = (recommendations: Recommendation[]): boolean => 
   const strongMatches = compositeScores.filter(score => score >= MIN_TOP_COMPOSITE).length
 
   return topComposite < MIN_TOP_COMPOSITE || strongMatches < MIN_STRONG_MATCH_COUNT
+}
+
+const shouldBypassWeakSetForReference = (
+  recommendations: Recommendation[],
+  mode: 'mood' | 'reference' | 'talent' | 'mixed' | undefined
+): boolean => {
+  if (mode !== 'reference' || recommendations.length === 0) {
+    return false
+  }
+
+  const compositeScores = recommendations
+    .map(r => r.scoringFactors?.composite)
+    .filter((value): value is number => typeof value === 'number')
+
+  if (compositeScores.length === 0) {
+    return false
+  }
+
+  const topComposite = Math.max(...compositeScores)
+  const nearThresholdMatches = compositeScores.filter(
+    score => score >= REFERENCE_NEAR_THRESHOLD_FLOOR_COMPOSITE
+  ).length
+
+  return (
+    topComposite >= REFERENCE_NEAR_THRESHOLD_TOP_COMPOSITE &&
+    nearThresholdMatches >= REFERENCE_NEAR_THRESHOLD_MIN_COUNT
+  )
 }
 
 const nextUnaskedQuestion = (
@@ -377,7 +464,14 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
       clarificationRound
     )
 
-    if (clarificationQuestions) {
+    const bypassInitialClarification = shouldPreferResultsFirst(
+      clarificationQuestions,
+      clarificationRound,
+      parsedPreferences.discoveryMode,
+      parsedPreferences.intentConfidence
+    )
+
+    if (clarificationQuestions && !bypassInitialClarification) {
       console.log(`[${new Date().toISOString()}] Clarification suggested with ${clarificationQuestions.length} questions`)
       return res.json({
         success: true,
@@ -395,6 +489,12 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
       })
     }
 
+    if (clarificationQuestions && bypassInitialClarification) {
+      console.log(
+        `[${new Date().toISOString()}] Results-first override applied for high-confidence first-turn request`
+      )
+    }
+
     // Use real recommendation engine
     const recommendations = await recommendationEngine.getRecommendations({
       description: normalizedDescription,
@@ -408,7 +508,18 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
       clarificationContext: clarificationContext
     })
 
-    const weakResultSet = isWeakRecommendationSet(recommendations)
+    const shouldBypassWeakSet = shouldBypassWeakSetForReference(
+      recommendations,
+      parsedPreferences.discoveryMode
+    )
+    const weakResultSet = isWeakRecommendationSet(recommendations) && !shouldBypassWeakSet
+
+    if (shouldBypassWeakSet) {
+      console.log(
+        `[${new Date().toISOString()}] Weak-result bypass applied for near-threshold reference recommendations`
+      )
+    }
+
     if (weakResultSet) {
       const round = clarificationContext?.clarificationRound ?? 0
       const askedQuestionIds = new Set(clarificationContext?.askedQuestionIds || [])
@@ -423,13 +534,20 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
         )
 
         if (clarification) {
-          console.log(`[${new Date().toISOString()}] Weak recommendation set detected; requesting clarification`) 
+          console.log(
+            `[${new Date().toISOString()}] Weak recommendation set detected; returning best available results with refinement suggestions`
+          )
+          const appliedConstraints = [
+            ...(clarificationContext?.cumulativeConstraints || []),
+            ...(clarificationContext?.userClarification ? [clarificationContext.userClarification] : [])
+          ]
+
           return res.json({
             success: true,
-            requiresClarification: {
-              ...clarification,
-              confidenceScore: parsedPreferences.intentConfidence
-            },
+            recommendations,
+            refinementSuggestions: clarification.questions[0]?.options?.slice(0, 3) ||
+              buildWeakResultRefinementSuggestions(parsedPreferences.discoveryMode),
+            appliedConstraints,
             detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence !== undefined
               ? {
                   mode: parsedPreferences.discoveryMode,

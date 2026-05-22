@@ -34,6 +34,11 @@ export interface Recommendation {
  * Core recommendation engine using FM-DB API
  */
 export class RecommendationEngine {
+  private static readonly SEARCH_TERM_LIMIT = 6
+  private static readonly BACKFILL_SEARCH_TERM_LIMIT = 3
+  private static readonly MIN_CANDIDATE_POOL = 12
+  private static readonly DIVERSITY_WINDOW_MULTIPLIER = 3
+
   // Cache for reference titles (Phase 2.2)
   private referenceTitlesCache: Map<string, any> = new Map()
 
@@ -43,7 +48,9 @@ export class RecommendationEngine {
 
   private async searchWithTmdbPrimary(
     searchTerms: string[],
-    typeFilter?: 'movie' | 'series'
+    typeFilter?: 'movie' | 'series',
+    discoveryMode?: DiscoveryMode,
+    preferredGenres: string[] = []
   ): Promise<any[]> {
     if (!tmdbClient.isEnabled()) {
       return []
@@ -52,19 +59,41 @@ export class RecommendationEngine {
     const includeMovies = typeFilter !== 'series'
     const includeTV = typeFilter !== 'movie'
 
-    const tmdbSearches = await Promise.all(
-      searchTerms.map(term =>
-        tmdbClient.searchTitles(term, {
+    const shouldUseGenreDiscover =
+      preferredGenres.length > 0 &&
+      (discoveryMode === 'mood' || discoveryMode === 'reference' || discoveryMode === 'mixed')
+
+    const tmdbResultSets: any[][] = []
+
+    if (shouldUseGenreDiscover) {
+      const discoverResults = await tmdbClient.discoverByGenres(
+        preferredGenres.slice(0, 3),
+        {
           includeMovies,
           includeTV,
           excludeAdult: true
-        })
+        }
       )
-    )
+      tmdbResultSets.push(discoverResults)
+      console.log(`[Engine] TMDB genre discovery yielded ${discoverResults.length} titles`)
+    }
+
+    if (searchTerms.length > 0) {
+      const tmdbSearches = await Promise.all(
+        searchTerms.map(term =>
+          tmdbClient.searchTitles(term, {
+            includeMovies,
+            includeTV,
+            excludeAdult: true
+          })
+        )
+      )
+      tmdbResultSets.push(...tmdbSearches)
+    }
 
     const deduped = Array.from(
       new Map(
-        tmdbSearches
+        tmdbResultSets
           .flat()
           .map(item => [`${item.media_type}:${item.id}`, item])
       ).values()
@@ -75,10 +104,9 @@ export class RecommendationEngine {
     const converted = await Promise.all(
       limited.map(async item => {
         const mediaType = item.media_type === 'tv' ? 'tv' : 'movie'
-        const externalIds = await tmdbClient.getExternalIds(item.id, mediaType)
         const yearRaw = mediaType === 'movie' ? item.release_date : item.first_air_date
         const year = yearRaw ? parseInt(yearRaw.split('-')[0], 10) || 0 : 0
-        const id = externalIds.imdbId || `tmdb:${mediaType}:${item.id}`
+        const id = `tmdb:${mediaType}:${item.id}`
 
         return {
           id,
@@ -115,6 +143,87 @@ export class RecommendationEngine {
     return flatResults.map(r => fmdbClient.convertToInternal(r))
   }
 
+  private normalizeSearchTerms(searchTerms: string[], limit: number = RecommendationEngine.SEARCH_TERM_LIMIT): string[] {
+    return Array.from(
+      new Set(
+        searchTerms
+          .map(term => term.trim())
+          .filter(Boolean)
+      )
+    ).slice(0, limit)
+  }
+
+  private async hydratePreviousRecommendations(
+    recommendationIds: string[]
+  ): Promise<any[]> {
+    const imdbIds = Array.from(new Set(recommendationIds.filter(id => this.isImdbId(id))))
+
+    if (imdbIds.length === 0) {
+      return []
+    }
+
+    const detailed = await Promise.all(imdbIds.map(id => fmdbClient.getDetails(id)))
+    return detailed
+      .filter((item): item is any => !!item)
+      .map(item => fmdbClient.convertToInternal(item))
+  }
+
+  private async searchCandidates(
+    searchTerms: string[],
+    typeFilter?: 'movie' | 'series',
+    discoveryMode?: DiscoveryMode,
+    preferredGenres: string[] = []
+  ): Promise<any[]> {
+    if (searchTerms.length === 0) {
+      return []
+    }
+
+    if (tmdbClient.isEnabled()) {
+      const results = await this.searchWithTmdbPrimary(
+        searchTerms,
+        typeFilter,
+        discoveryMode,
+        preferredGenres
+      )
+      console.log(`[Engine] Found ${results.length} raw results from TMDB`)
+      return results
+    }
+
+    const results = await this.searchWithOmdbFallback(searchTerms, typeFilter)
+    console.log(`[Engine] Found ${results.length} raw results from FM-DB`)
+    return results
+  }
+
+  private buildBackfillSearchTerms(
+    query: string,
+    preferences: ParsedPreferences,
+    existingTerms: string[]
+  ): string[] {
+    const extras = new Set<string>()
+    const existing = new Set(existingTerms.map(term => term.toLowerCase()))
+
+    for (const actor of preferences.detectedActors || []) {
+      extras.add(actor)
+    }
+
+    for (const genre of preferences.genres || []) {
+      extras.add(genre)
+    }
+
+    for (const mood of preferences.mood || []) {
+      extras.add(mood)
+    }
+
+    for (const term of this.extractSearchTerms(query, preferences.genres, RecommendationEngine.SEARCH_TERM_LIMIT * 2)) {
+      extras.add(term)
+    }
+
+    return this.normalizeSearchTerms(
+      Array.from(extras).filter(term => !existing.has(term.toLowerCase())),
+      RecommendationEngine.BACKFILL_SEARCH_TERM_LIMIT
+    )
+  }
+
   private matchesRequestedActors(title: any, requestedActors: string[]): boolean {
     if (requestedActors.length === 0) {
       return false
@@ -130,6 +239,114 @@ export class RecommendationEngine {
     const specific = unique.filter(genre => !broadGenres.has(genre))
 
     return specific.length > 0 ? specific : unique
+  }
+
+  private getDecade(year: number | undefined): number | null {
+    if (!year || !Number.isFinite(year)) {
+      return null
+    }
+
+    return Math.floor(year / 10) * 10
+  }
+
+  private scoreDiversityAdjustment(candidate: any, selected: any[]): number {
+    if (selected.length < 2) {
+      return 0
+    }
+
+    const candidateGenres = (candidate.genres || []).map((genre: string) => genre.toLowerCase())
+    const selectedGenres = new Set(
+      selected.flatMap((item: any) => (item.genres || []).map((genre: string) => genre.toLowerCase()))
+    )
+
+    const samePrimaryGenreCount = selected.filter((item: any) => {
+      const selectedPrimaryGenre = item.genres?.[0]?.toLowerCase()
+      return selectedPrimaryGenre && selectedPrimaryGenre === candidateGenres[0]
+    }).length
+
+    const overlapCount = selected.filter((item: any) => {
+      const itemGenres = (item.genres || []).map((genre: string) => genre.toLowerCase())
+      if (candidateGenres.length === 0 || itemGenres.length === 0) {
+        return false
+      }
+
+      const overlap = candidateGenres.filter((genre: string) => itemGenres.includes(genre)).length
+      return overlap > 0 && overlap === Math.min(candidateGenres.length, itemGenres.length)
+    }).length
+
+    const candidateDecade = this.getDecade(candidate.year)
+    const sameDecadeCount = candidateDecade === null
+      ? 0
+      : selected.filter((item: any) => this.getDecade(item.year) === candidateDecade).length
+
+    const introducesNewGenre = candidateGenres.some((genre: string) => !selectedGenres.has(genre))
+
+    let adjustment = 0
+    if (introducesNewGenre) {
+      adjustment += 0.02
+    }
+
+    adjustment -= samePrimaryGenreCount * 0.035
+    adjustment -= overlapCount * 0.025
+
+    if (sameDecadeCount >= 2) {
+      adjustment -= 0.015
+    }
+
+    return adjustment
+  }
+
+  private selectFinalResults(ranked: any[], limit: number): any[] {
+    if (ranked.length <= limit) {
+      return ranked.slice(0, limit)
+    }
+
+    const windowSize = Math.max(limit * RecommendationEngine.DIVERSITY_WINDOW_MULTIPLIER, limit)
+    const candidateWindow = ranked.slice(0, windowSize)
+    const remaining = [...candidateWindow]
+    const selected: any[] = []
+
+    while (selected.length < limit && remaining.length > 0) {
+      let bestIndex = 0
+      let bestScore = Number.NEGATIVE_INFINITY
+
+      remaining.forEach((candidate, index) => {
+        const composite = candidate.scoringFactors?.composite || 0
+        const adjustedScore = composite + this.scoreDiversityAdjustment(candidate, selected)
+
+        if (adjustedScore > bestScore) {
+          bestScore = adjustedScore
+          bestIndex = index
+        }
+      })
+
+      selected.push(remaining.splice(bestIndex, 1)[0])
+    }
+
+    return selected
+  }
+
+  private async resolveImdbIds(titles: any[]): Promise<any[]> {
+    const resolved = await Promise.all(
+      titles.map(async title => {
+        if (this.isImdbId(title.id) || !title.tmdbId) {
+          return title
+        }
+
+        const mediaType = title.tmdbMediaType === 'tv' ? 'tv' : 'movie'
+        const externalIds = await tmdbClient.getExternalIds(title.tmdbId, mediaType)
+        if (!externalIds.imdbId) {
+          return title
+        }
+
+        return {
+          ...title,
+          id: externalIds.imdbId
+        }
+      })
+    )
+
+    return Array.from(new Map(resolved.map(item => [item.id, item])).values())
   }
 
   /**
@@ -245,6 +462,8 @@ export class RecommendationEngine {
       console.log(`[Engine] Mixed/default mode: extracted search terms`)
     }
 
+    searchTerms = this.normalizeSearchTerms(searchTerms)
+
     console.log(`[Engine] Search terms: ${searchTerms.join(', ')}`)
 
     // Determine type filter
@@ -252,13 +471,55 @@ export class RecommendationEngine {
                       preferences.contentType === 'movie' ? 'movie' : 
                       undefined
 
-    // Search TMDB first when configured, fallback to OMDb for reliability.
-    let candidates = await this.searchWithTmdbPrimary(searchTerms, typeFilter)
-    if (candidates.length > 0) {
-      console.log(`[Engine] Found ${candidates.length} raw results from TMDB`)
+    const previousRecommendationIds = request.clarificationContext?.previousRecommendationIds || []
+    const shouldReusePreviousCandidates =
+      (request.clarificationContext?.clarificationRound ?? 0) > 0 &&
+      previousRecommendationIds.length > 0
+
+    let previousCandidates: any[] = []
+    if (shouldReusePreviousCandidates) {
+      previousCandidates = await this.hydratePreviousRecommendations(previousRecommendationIds)
+      console.log(
+        `[Engine] Reuse mode: hydrated ${previousCandidates.length}/${previousRecommendationIds.length} previous recommendations`
+      )
+    }
+
+    let candidates: any[] = []
+
+    // On refinement turns, prefer re-ranking prior results before broad retrieval.
+    if (shouldReusePreviousCandidates && previousCandidates.length >= limit) {
+      candidates = [...previousCandidates]
+      console.log('[Engine] Reuse mode: skipping broad retrieval (sufficient prior candidates)')
     } else {
-      candidates = await this.searchWithOmdbFallback(searchTerms, typeFilter)
-      console.log(`[Engine] Found ${candidates.length} raw results from FM-DB`)
+      const searchedCandidates = await this.searchCandidates(
+        searchTerms,
+        typeFilter,
+        preferences.discoveryMode,
+        preferences.genres || []
+      )
+      candidates = [...previousCandidates, ...searchedCandidates]
+    }
+
+    if (candidates.length < RecommendationEngine.MIN_CANDIDATE_POOL) {
+      const backfillTerms = this.buildBackfillSearchTerms(
+        request.description,
+        preferences,
+        searchTerms
+      )
+
+      if (backfillTerms.length > 0) {
+        console.log(
+          `[Engine] Thin candidate pool (${candidates.length}); backfilling with: ${backfillTerms.join(', ')}`
+        )
+
+        const backfillCandidates = await this.searchCandidates(
+          backfillTerms,
+          typeFilter,
+          preferences.discoveryMode,
+          preferences.genres || []
+        )
+        candidates = [...candidates, ...backfillCandidates]
+      }
     }
 
     // Remove duplicates by ID
@@ -289,7 +550,8 @@ export class RecommendationEngine {
       preferences.discoveryMode === 'talent' && preferences.detectedActors && preferences.detectedActors.length > 0
         ? ranked.filter(title => this.matchesRequestedActors(title, preferences.detectedActors || []))
         : ranked
-    const final = filteredRanked.slice(0, limit)
+    const finalCandidates = this.selectFinalResults(filteredRanked, limit)
+    const final = await this.resolveImdbIds(finalCandidates)
 
     console.log(`[Engine] Returning ${final.length} recommendations`)
 
@@ -427,7 +689,7 @@ export class RecommendationEngine {
   /**
    * Extract meaningful search terms from natural language query
    */
-  private extractSearchTerms(query: string, genres: string[]): string[] {
+  private extractSearchTerms(query: string, genres: string[], maxTerms: number = RecommendationEngine.SEARCH_TERM_LIMIT): string[] {
     const terms = new Set<string>()
 
     // Remove stop words
@@ -457,8 +719,8 @@ export class RecommendationEngine {
       terms.add('popular')
     }
 
-    // Limit to avoid too many API calls (max 3 searches)
-    return Array.from(terms).slice(0, 3)
+    // Keep the search fanout bounded so API cost remains predictable.
+    return Array.from(terms).slice(0, maxTerms)
   }
 
   /**
@@ -649,13 +911,14 @@ export class RecommendationEngine {
     const penalizedRanked = ranked.map(r => {
       const penalty = exclusionPenalties.get(r.id) || 1.0
       const moodShiftMultiplier = this.calculateMoodShiftMultiplier(r, preferences)
+      const refinementMultiplier = this.calculateRefinementMultiplier(r, preferences)
       return {
         ...r,
         scoringFactors: {
           ...r.scoringFactors,
           composite: Math.max(
             0,
-            r.scoringFactors.composite * penalty * moodShiftMultiplier
+            r.scoringFactors.composite * penalty * moodShiftMultiplier * refinementMultiplier
           )
         }
       }
@@ -712,6 +975,52 @@ export class RecommendationEngine {
     }
 
     return Math.max(0.5, Math.min(1.3, multiplier))
+  }
+
+  private calculateRefinementMultiplier(title: any, preferences: ParsedPreferences): number {
+    let multiplier = 1.0
+
+    if (preferences.popularityPreference) {
+      const popularity = RankingScorer.popularityScore(title.voteCount)
+
+      if (preferences.popularityPreference === 'mainstream') {
+        if (popularity >= 0.75) {
+          multiplier += 0.2
+        } else if (popularity >= 0.6) {
+          multiplier += 0.1
+        } else if (popularity < 0.4) {
+          multiplier -= 0.12
+        }
+      }
+
+      if (preferences.popularityPreference === 'niche') {
+        if (popularity < 0.45) {
+          multiplier += 0.15
+        } else if (popularity > 0.75) {
+          multiplier -= 0.18
+        }
+      }
+    }
+
+    if (preferences.yearRange?.min !== undefined && preferences.yearRange?.max !== undefined && title.year) {
+      const year = Number(title.year)
+      if (Number.isFinite(year)) {
+        const inRange = year >= preferences.yearRange.min && year <= preferences.yearRange.max
+        if (inRange) {
+          multiplier += 0.28
+        } else {
+          const rangeCenter = (preferences.yearRange.min + preferences.yearRange.max) / 2
+          const distance = Math.abs(year - rangeCenter)
+          if (distance > 20) {
+            multiplier -= 0.22
+          } else if (distance > 10) {
+            multiplier -= 0.1
+          }
+        }
+      }
+    }
+
+    return Math.max(0.6, Math.min(1.4, multiplier))
   }
 
   /**

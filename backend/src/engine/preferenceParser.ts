@@ -52,6 +52,7 @@ export interface ParsedPreferences {
   boostedMoods?: string[]         // Moods to explicitly increase
   reducedMoods?: string[]         // Moods to explicitly de-emphasize
   noveltyIntent?: boolean         // true for discovery language like "indie gems"
+  popularityPreference?: 'mainstream' | 'niche'
 }
 
 export interface RecommendationRequest {
@@ -61,9 +62,11 @@ export interface RecommendationRequest {
   clarificationContext?: {
     clarificationRound: number
     previousRecommendationId?: string
+    previousRecommendationIds?: string[]
     userClarification?: string
     clarificationIndex?: number
     askedQuestionIds?: string[]
+    cumulativeConstraints?: string[]
   }
 }
 
@@ -179,6 +182,17 @@ export class PreferenceParser {
     'surprising',
     'unexpected',
     'unusual'
+  ]
+
+  private static readonly MAINSTREAM_KEYWORDS = [
+    'blockbuster',
+    'blockbusters',
+    'mainstream',
+    'popular hits',
+    'big hits',
+    'widely known',
+    'crowd-pleaser',
+    'crowd pleaser'
   ]
 
   private static readonly CONTRASTIVE_CONNECTORS = [
@@ -320,7 +334,8 @@ export class PreferenceParser {
       constraints: [],
       moodStrength: new Map(),
       boostedMoods: [],
-      reducedMoods: []
+      reducedMoods: [],
+      popularityPreference: undefined
     }
 
     // === PHASE 1 STEP 1.2: Extract reference titles ===
@@ -383,6 +398,20 @@ export class PreferenceParser {
     // Detect novelty-oriented discovery intent (e.g., "surprising indie gems").
     preferences.noveltyIntent = this.hasNoveltyIntent(description)
 
+    // Parse refinement-specific ranking preferences (e.g. blockbusters, 80s).
+    const refinementSignals = this.extractRefinementSignals(description)
+    if (refinementSignals.popularityPreference) {
+      preferences.popularityPreference = refinementSignals.popularityPreference
+    }
+    if (refinementSignals.yearRange) {
+      preferences.yearRange = refinementSignals.yearRange
+    }
+    if (refinementSignals.constraints.length > 0) {
+      preferences.constraints = Array.from(
+        new Set([...(preferences.constraints || []), ...refinementSignals.constraints])
+      )
+    }
+
     // If novelty intent is explicit, enrich retrieval hints without hardcoding a single prompt.
     if (preferences.noveltyIntent) {
       if (!preferences.genres.includes('Indie')) {
@@ -425,12 +454,72 @@ export class PreferenceParser {
   private static buildAnalysisText(request: RecommendationRequest): string {
     const base = request.description || ''
     const clarification = request.clarificationContext?.userClarification?.trim()
+    const cumulativeConstraints = request.clarificationContext?.cumulativeConstraints || []
 
-    if (!clarification) {
+    const cumulative = cumulativeConstraints
+      .map(value => value.trim())
+      .filter(Boolean)
+      .join(' ')
+
+    if (!clarification && !cumulative) {
       return base
     }
 
-    return `${base} ${clarification}`.trim()
+    return `${base} ${cumulative} ${clarification || ''}`.trim()
+  }
+
+  private static extractRefinementSignals(description: string): {
+    popularityPreference?: 'mainstream' | 'niche'
+    yearRange?: { min?: number; max?: number }
+    constraints: string[]
+  } {
+    const constraints: string[] = []
+    let popularityPreference: 'mainstream' | 'niche' | undefined
+
+    const hasMainstream = this.MAINSTREAM_KEYWORDS.some(keyword => description.includes(keyword))
+    const hasNiche = this.NOVELTY_KEYWORDS.some(keyword => description.includes(keyword))
+
+    if (/(not|less)\s+mainstream/.test(description) || hasNiche) {
+      popularityPreference = 'niche'
+    } else if (hasMainstream) {
+      popularityPreference = 'mainstream'
+    }
+
+    if (popularityPreference) {
+      constraints.push(`popularity:${popularityPreference}`)
+    }
+
+    const explicitDecades = Array.from(description.matchAll(/\b(19\d0|20\d0)s\b/g))
+      .map(match => parseInt(match[1], 10))
+
+    const shorthandDecades = Array.from(description.matchAll(/\b([6-9]0|00|10|20)s\b/g))
+      .map(match => {
+        const shortValue = parseInt(match[1], 10)
+        if (shortValue <= 30) {
+          return 2000 + shortValue
+        }
+        return 1900 + shortValue
+      })
+
+    const decades = Array.from(new Set([...explicitDecades, ...shorthandDecades]))
+      .filter(year => Number.isFinite(year) && year >= 1960 && year <= 2030)
+
+    const yearRange = decades.length > 0
+      ? {
+          min: Math.min(...decades),
+          max: Math.max(...decades) + 9
+        }
+      : undefined
+
+    if (yearRange?.min !== undefined) {
+      constraints.push(`decade:${yearRange.min}s`)
+    }
+
+    return {
+      popularityPreference,
+      yearRange,
+      constraints
+    }
   }
 
   private static inferContentType(
