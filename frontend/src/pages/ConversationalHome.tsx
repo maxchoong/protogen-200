@@ -193,9 +193,9 @@ export default function ConversationalHome({
   return (
     <div className="conversational-home min-h-screen flex flex-col bg-bg text-text">
       {/* Header */}
-      <div className="border-b border-border bg-surface px-4 py-4">
+      <div className="border-b border-border/80 bg-surface/85 px-4 py-4 backdrop-blur-sm">
         <div className="max-w-4xl mx-auto">
-          <h1 className="text-2xl font-bold text-text">Film and TV Advisor</h1>
+          <h1 className="text-2xl font-semibold tracking-[-0.03em] text-text">Film and TV Advisor</h1>
           <p className="mt-1 text-sm text-text-muted">
             Tell me what you're looking for and I'll find the perfect thing to watch
           </p>
@@ -203,13 +203,13 @@ export default function ConversationalHome({
       </div>
 
       {/* Messages Container */}
-      <div className="flex-1 overflow-y-auto px-4 py-6">
-        <div className="max-w-4xl mx-auto space-y-4">
+      <div className="flex-1 overflow-y-auto px-4 py-8">
+        <div className="mx-auto max-w-4xl space-y-5">
           {state.messages.length === 0 && (
-            <div className="mt-12 text-center text-text-muted">
-              <p className="mb-4 text-lg">Start by describing what you want to watch.</p>
-              <p className="text-sm">Examples:</p>
-              <div className="flex flex-wrap justify-center gap-2 mt-4">
+            <div className="mt-10 rounded-lg border border-border bg-surface px-6 py-8 text-center shadow-card">
+              <p className="mb-3 text-lg font-semibold text-text">Start by describing what you want to watch.</p>
+              <p className="text-sm text-text-muted">Examples:</p>
+              <div className="mt-4 flex flex-wrap justify-center gap-3">
                 {[
                   'Something funny with Ryan Gosling',
                   'Like Inception but more relaxing',
@@ -220,7 +220,7 @@ export default function ConversationalHome({
                     key={i}
                     onClick={() => void submitMessage(example)}
                     disabled={state.isLoading}
-                    className="rounded-md border border-border bg-surface px-3 py-2 text-sm text-text transition-colors hover:border-accent"
+                    className="rounded-pill border border-border bg-surface-2 px-4 py-2 text-sm text-text transition-colors hover:border-accent hover:text-text disabled:opacity-50"
                   >
                     {example}
                   </button>
@@ -235,7 +235,7 @@ export default function ConversationalHome({
               className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
               <div
-                className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
+                className={`max-w-xs lg:max-w-md px-4 py-3 rounded-lg shadow-card ${
                   msg.role === 'user'
                     ? 'bg-accent text-accent-contrast rounded-br-none'
                     : 'bg-surface text-text rounded-bl-none border border-border'
@@ -244,27 +244,29 @@ export default function ConversationalHome({
                 <p className="text-sm">{msg.text}</p>
 
                 {msg.detectedIntent && (
-                  <div className="mt-2 text-xs text-text-muted">
-                    <p>
-                      Intent mode: <span className="font-semibold">{msg.detectedIntent.mode}</span>{' '}
-                      ({(msg.detectedIntent.confidence * 100).toFixed(0)}%)
-                    </p>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-text-muted">
+                    <span className="rounded-pill border border-border bg-surface-2 px-2.5 py-1">
+                      Intent: <span className="font-semibold text-text">{msg.detectedIntent.mode}</span>
+                    </span>
+                    <span className="rounded-pill border border-border bg-surface-2 px-2.5 py-1">
+                      Confidence {(msg.detectedIntent.confidence * 100).toFixed(0)}%
+                    </span>
                   </div>
                 )}
 
                 {msg.clarificationQuestions && msg.clarificationQuestions.length > 0 && (
-                  <div className="mt-3 space-y-2">
+                  <div className="mt-4 space-y-3">
                     {msg.clarificationQuestions.map(q => (
-                      <div key={q.id}>
-                        <p className="font-semibold mb-1">{q.question}</p>
+                      <div key={q.id} className="rounded-lg border border-border bg-surface-2 p-3">
+                        <p className="mb-2 text-sm font-semibold text-text">{q.question}</p>
                         {q.type === 'select' && q.options && (
-                          <div className="space-y-1">
+                          <div className="space-y-2">
                             {q.options.map((option, i) => (
                               <button
                                 key={i}
                                 onClick={() => handleClarificationSelect(option)}
                                 disabled={state.isLoading}
-                                className="w-full rounded-md border border-border bg-surface-2 px-3 py-1 text-left text-sm text-text transition-colors hover:border-accent disabled:opacity-50"
+                                className="w-full rounded-pill border border-border bg-surface px-3 py-2 text-left text-sm text-text transition-colors hover:border-accent disabled:opacity-50"
                               >
                                 {option}
                               </button>
@@ -282,7 +284,7 @@ export default function ConversationalHome({
           {state.isLoading && (
             <div className="flex justify-start">
               <div
-                className="max-w-xs rounded-lg rounded-bl-none border border-border bg-surface px-4 py-3 text-text"
+                className="max-w-xs rounded-lg rounded-bl-none border border-border bg-surface px-4 py-3 text-text shadow-card"
                 aria-live="polite"
                 role="status"
               >
@@ -297,7 +299,7 @@ export default function ConversationalHome({
                   <div className="mt-3">
                     <button
                       onClick={handleCancelPending}
-                      className="rounded-md border border-border px-3 py-1 text-xs text-text transition-colors hover:border-accent"
+                      className="rounded-pill border border-border px-3 py-1 text-xs text-text transition-colors hover:border-accent"
                     >
                       Cancel request
                     </button>
@@ -308,13 +310,13 @@ export default function ConversationalHome({
           )}
 
           {state.error && (
-            <div className="rounded-lg border border-red-500/60 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
               <p>{state.error}</p>
               {lastSubmittedText && (
                 <button
                   onClick={handleRetry}
                   disabled={state.isLoading}
-                  className="mt-3 rounded-md border border-border px-3 py-1 text-xs text-text transition-colors hover:border-accent disabled:opacity-50"
+                  className="mt-3 rounded-pill border border-border px-3 py-1 text-xs text-text transition-colors hover:border-accent disabled:opacity-50"
                 >
                   Try again
                 </button>
@@ -325,9 +327,9 @@ export default function ConversationalHome({
       </div>
 
       {/* Input Area */}
-      <div className="border-t border-border bg-surface px-4 py-4">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex gap-2">
+      <div className="border-t border-border/80 bg-surface/95 px-4 py-4 backdrop-blur-sm">
+        <div className="mx-auto max-w-4xl">
+          <div className="flex gap-3 rounded-lg border border-border bg-surface px-3 py-3 shadow-card">
             <textarea
               value={inputValue}
               onChange={e => setInputValue(e.target.value)}
@@ -339,12 +341,12 @@ export default function ConversationalHome({
               }
               disabled={state.isLoading}
               rows={3}
-              className="flex-1 resize-none rounded-lg border border-border bg-surface-2 px-4 py-2 text-text placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-focus disabled:opacity-50"
+              className="flex-1 resize-none rounded-lg border border-border bg-surface-2 px-4 py-3 text-text placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-focus disabled:opacity-50"
             />
             <button
               onClick={handleSubmitMessage}
               disabled={!inputValue.trim() || state.isLoading}
-              className="h-fit rounded-md bg-accent px-4 py-2 font-medium text-accent-contrast transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="h-fit rounded-pill border border-border bg-surface-2 px-4 py-2 font-medium text-text transition-colors hover:border-accent disabled:cursor-not-allowed disabled:opacity-50"
             >
               {state.isLoading ? 'Sending...' : 'Send'}
             </button>

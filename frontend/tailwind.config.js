@@ -20,6 +20,7 @@ export default {
         sm: "var(--radius-sm)",
         md: "var(--radius-md)",
         lg: "var(--radius-lg)",
+        badge: "var(--radius-badge)",
         pill: "var(--radius-pill)",
       },
       fontFamily: {
@@ -27,8 +28,8 @@ export default {
         mono: ["var(--font-mono)"],
       },
       boxShadow: {
-        card: "0 0 20px rgba(0, 217, 255, 0.05)",
-        "card-hover": "0 0 28px rgba(0, 217, 255, 0.12)",
+        card: "var(--shadow-card)",
+        "card-hover": "var(--shadow-soft)",
       },
       ringColor: {
         focus: "var(--color-focus-ring)",

@@ -5,28 +5,30 @@
 :root {
   color-scheme: dark;
 
-  --color-bg: #0a0a0a;
-  --color-surface: #1a1a1a;
-  --color-surface-2: #121212;
-  --color-text: #e8e8e8;
-  --color-text-muted: #666666;
-  --color-border: #2d2d2d;
+  --color-bg: #26272c;
+  --color-surface: #1a1b1f;
+  --color-surface-2: #3b3c3e;
+  --color-text: #e0e0e0;
+  --color-text-muted: #62646a;
+  --color-border: #8a8c93;
   --color-accent: #00d9ff;
   --color-accent-contrast: #0a0a0a;
   --color-focus-ring: #00d9ff;
 
-  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  --text-xs: 12px;
-  --text-base: 16px;
-  --text-lg: 18px;
-  --text-2xl: 28px;
+  --text-xs: 11px;
+  --text-base: 14px;
+  --text-lg: 20px;
+  --text-2xl: 24px;
+  --text-display: 58px;
 
-  --tracking-xs: -0.25px;
-  --tracking-base: -0.1px;
-  --tracking-lg: -0.15px;
-  --tracking-2xl: -0.7px;
+  --tracking-xs: -0.004px;
+  --tracking-base: -0.01px;
+  --tracking-lg: -0.031px;
+  --tracking-2xl: -0.036px;
+  --tracking-display: 0.048px;
 
   --space-4: 4px;
   --space-8: 8px;
@@ -35,10 +37,14 @@
   --space-24: 24px;
   --space-32: 32px;
 
-  --radius-sm: 6px;
-  --radius-md: 8px;
+  --radius-sm: 4px;
+  --radius-md: 4px;
   --radius-lg: 12px;
-  --radius-pill: 999px;
+  --radius-pill: 48px;
+  --radius-badge: 22px;
+
+  --shadow-card: rgba(0, 0, 0, 0.12) 0px 12px 12px 0px;
+  --shadow-soft: rgba(4, 4, 7, 0.25) 0px 2px 4px 0px, rgba(4, 4, 7, 0.4) 0px 8px 24px 0px;
 }
 
 [data-theme="light"] {
@@ -63,7 +69,9 @@ body,
 
 body {
   margin: 0;
-  background: var(--color-bg);
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.03), transparent 35%),
+    var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-ui);
   font-size: var(--text-base);

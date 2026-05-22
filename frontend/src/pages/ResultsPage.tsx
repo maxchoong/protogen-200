@@ -63,13 +63,13 @@ export default function ResultsPage({ results, query, onBackHome }: ResultsPageP
         {/* Header */}
         <button
           onClick={onBackHome}
-          className="mb-6 rounded text-sm text-accent underline transition-opacity hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-focus"
+          className="mb-6 rounded-pill border border-border bg-surface px-4 py-2 text-sm text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus"
           aria-label="Back to search page"
         >
           ← Back to search
         </button>
 
-        <h1 className="mb-2 text-4xl font-bold text-text">
+        <h1 className="mb-2 text-4xl font-semibold tracking-[-0.03em] text-text">
           Recommendations
         </h1>
         <p className="mb-8 text-text-muted">
@@ -78,7 +78,7 @@ export default function ResultsPage({ results, query, onBackHome }: ResultsPageP
 
         {/* Results Grid */}
         {results.length === 0 ? (
-          <div className="text-center py-12" role="status" aria-live="polite">
+          <div className="rounded-lg border border-border bg-surface px-6 py-12 text-center shadow-card" role="status" aria-live="polite">
             <p className="text-lg text-text-muted">
               No recommendations found. Try adjusting your preferences and search again.
             </p>
@@ -98,7 +98,7 @@ export default function ResultsPage({ results, query, onBackHome }: ResultsPageP
                       <img
                         src={rec.posterUrl}
                         alt={`${rec.title} poster`}
-                        className="w-32 h-48 object-cover rounded-lg flex-shrink-0"
+                        className="h-48 w-32 flex-shrink-0 rounded-lg object-cover"
                         loading="lazy"
                       />
                     ) : (
@@ -113,7 +113,7 @@ export default function ResultsPage({ results, query, onBackHome }: ResultsPageP
 
                     {/* Content */}
                     <div className="flex-1">
-                      <h2 className="mb-2 text-2xl font-bold text-text">
+                      <h2 className="mb-2 text-2xl font-semibold tracking-[-0.03em] text-text">
                         {rec.title}
                       </h2>
                       <p className="mb-4 text-sm text-text-muted">
@@ -131,8 +131,8 @@ export default function ResultsPage({ results, query, onBackHome }: ResultsPageP
 
                       {/* Why This */}
                       {rec.whyThis && (
-                        <div className="mb-4 rounded border border-border bg-surface-2 p-4" role="complementary" aria-label="Recommendation explanation">
-                          <p className="mb-1 text-sm font-semibold text-accent">
+                        <div className="mb-4 rounded-lg border border-border bg-surface-2 p-4" role="complementary" aria-label="Recommendation explanation">
+                          <p className="mb-1 text-sm font-semibold text-text">
                             Why this recommendation?
                           </p>
                           <p className="text-sm text-text-muted">
@@ -182,7 +182,7 @@ export default function ResultsPage({ results, query, onBackHome }: ResultsPageP
                         <div>
                           <button
                             onClick={() => openTrailer(rec.trailerUrl!, rec.title)}
-                            className="inline-block rounded-md bg-accent px-4 py-2 text-sm text-accent-contrast transition-opacity hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-focus"
+                            className="inline-block rounded-pill border border-border bg-surface-2 px-4 py-2 text-sm text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus"
                             aria-label={`Watch trailer for ${rec.title}`}
                           >
                             Watch trailer
@@ -213,7 +213,7 @@ export default function ResultsPage({ results, query, onBackHome }: ResultsPageP
           >
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-border p-4">
-              <h2 id="trailer-title" className="text-xl font-bold text-text">
+              <h2 id="trailer-title" className="text-xl font-semibold tracking-[-0.03em] text-text">
                 {trailerModal.title} - Trailer
               </h2>
               <button
@@ -240,7 +240,7 @@ export default function ResultsPage({ results, query, onBackHome }: ResultsPageP
             <div className="border-t border-border p-4 text-center">
               <button
                 onClick={closeTrailer}
-                className="rounded-md border border-border bg-surface-2 px-6 py-2 text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus"
+                className="rounded-pill border border-border bg-surface-2 px-6 py-2 text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus"
                 aria-label="Close trailer modal"
               >
                 Close

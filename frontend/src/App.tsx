@@ -106,7 +106,7 @@ function App() {
       <div className="fixed right-4 top-4 z-40">
         <button
           onClick={toggleTheme}
-          className="rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus"
+          className="rounded-pill border border-border bg-surface px-4 py-2 text-sm font-medium text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus"
           aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
         >
           {theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
