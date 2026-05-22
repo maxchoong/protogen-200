@@ -232,9 +232,9 @@ export default function ConversationalHome({
       {/* Header */}
       <div className="border-b border-border/80 bg-surface/85 px-4 py-4 backdrop-blur-sm">
         <div className="max-w-4xl mx-auto">
-          <h1 className="font-serif text-2xl font-medium tracking-[-0.03em] text-text">Film and TV Advisor</h1>
+          <h1 className="font-serif text-2xl font-medium tracking-[-0.03em] text-text">Lumera</h1>
           <p className="mt-1 text-sm text-text-muted">
-            Describe the mood and we will shape a tailored viewing list.
+            Your taste, illuminated.
           </p>
         </div>
       </div>

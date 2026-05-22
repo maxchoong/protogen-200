@@ -72,10 +72,10 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
         {/* Header */}
         <div className="text-center mb-12">
           <h1 className="mb-4 text-5xl font-bold text-text">
-            Film and TV Advisor
+            Lumera
           </h1>
           <p className="text-xl text-text-muted">
-            Tell us what you're in the mood for and we'll find the perfect thing to watch
+            Your taste, illuminated.
           </p>
         </div>
 
