@@ -720,4 +720,50 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
     broadSearchSpy.mockRestore()
     externalIdsSpy.mockRestore()
   })
+
+  it('should avoid empty responses when talent strict-filter finds no actor metadata matches', async () => {
+    const tmdbEnabledSpy = jest.spyOn(tmdbClient, 'isEnabled').mockReturnValue(false)
+    const searchCandidatesSpy = jest
+      .spyOn(recommendationEngine as any, 'searchCandidates')
+      .mockResolvedValue([
+        {
+          id: 'tt9990001',
+          title: 'Comedy Placeholder One',
+          year: 2019,
+          type: 'movie',
+          poster: 'N/A',
+          rating: 7.2,
+          plot: 'A witty comedic story with quirky misunderstandings and big laughs.',
+          genres: ['Comedy'],
+          rated: 'PG-13',
+          director: 'Director Name',
+          actors: 'Another Actor, Different Person',
+          voteCount: 1200
+        },
+        {
+          id: 'tt9990002',
+          title: 'Comedy Placeholder Two',
+          year: 2017,
+          type: 'movie',
+          poster: 'N/A',
+          rating: 6.9,
+          plot: 'A funny caper featuring oddball friends and chaotic plans.',
+          genres: ['Comedy', 'Crime'],
+          rated: 'PG-13',
+          director: 'Director Name',
+          actors: 'Another Actor, Different Person',
+          voteCount: 980
+        }
+      ])
+
+    const recommendations = await recommendationEngine.getRecommendations({
+      description: 'Something funny with Ryan Gosling',
+      region: 'US'
+    })
+
+    expect(recommendations.length).toBeGreaterThan(0)
+
+    tmdbEnabledSpy.mockRestore()
+    searchCandidatesSpy.mockRestore()
+  })
 })

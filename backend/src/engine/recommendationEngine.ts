@@ -131,6 +131,29 @@ export class RecommendationEngine {
     ).slice(0, limit)
   }
 
+  private async buildActorSeedCandidates(
+    actors: string[],
+    description: string,
+    typeFilter?: 'movie' | 'series'
+  ): Promise<any[]> {
+    if (actors.length === 0 || !llmClient.isEnabled()) {
+      return []
+    }
+
+    const titleSeeds = await llmClient.suggestActorTitleSeeds(actors, description, 8)
+    if (titleSeeds.length === 0) {
+      return []
+    }
+
+    const seedSearches = await Promise.all(
+      titleSeeds.map(seed => fmdbClient.searchWithDetails(seed, typeFilter, 3))
+    )
+
+    return seedSearches
+      .flat()
+      .map(item => fmdbClient.convertToInternal(item))
+  }
+
   private convertTmdbResult(item: any, actorHints: string[] = []): any {
     const mediaType = item.media_type === 'tv' ? 'tv' : 'movie'
     const yearRaw = mediaType === 'movie' ? item.release_date : item.first_air_date
@@ -587,7 +610,52 @@ export class RecommendationEngine {
       preferences.discoveryMode === 'talent' && preferences.detectedActors && preferences.detectedActors.length > 0
         ? ranked.filter(title => this.matchesRequestedActors(title, preferences.detectedActors || []))
         : ranked
-    const finalCandidates = this.selectFinalResults(filteredRanked, limit)
+
+    let effectiveRanked = filteredRanked
+
+    if (
+      effectiveRanked.length === 0 &&
+      preferences.discoveryMode === 'talent' &&
+      preferences.detectedActors &&
+      preferences.detectedActors.length > 0
+    ) {
+      console.log('[Engine] Talent strict-filter produced no matches; attempting actor-seed recovery')
+
+      const actorSeedCandidates = await this.buildActorSeedCandidates(
+        preferences.detectedActors,
+        request.description,
+        typeFilter
+      )
+
+      if (actorSeedCandidates.length > 0) {
+        const recoveredSafe = this.filterContent(actorSeedCandidates)
+        const recoveredWithTalent = recoveredSafe.map(title => ({
+          ...title,
+          talentMatchScore: TalentMatcher.findTalentMatchForActors(
+            title,
+            preferences.detectedActors || []
+          ).combinedScore
+        }))
+
+        const recoveredRanked = this.rankTitles(recoveredWithTalent, preferences, referenceTitles)
+        const recoveredFiltered = recoveredRanked.filter(title =>
+          this.matchesRequestedActors(title, preferences.detectedActors || [])
+        )
+
+        if (recoveredFiltered.length > 0) {
+          effectiveRanked = recoveredFiltered
+          console.log(`[Engine] Talent recovery succeeded with ${recoveredFiltered.length} actor-matching titles`)
+        }
+      }
+
+      if (effectiveRanked.length === 0 && ranked.length > 0) {
+        // Last-resort fallback: avoid empty response loops when actor metadata is missing.
+        effectiveRanked = ranked
+        console.log('[Engine] Talent recovery fallback: returning best available non-empty ranked set')
+      }
+    }
+
+    const finalCandidates = this.selectFinalResults(effectiveRanked, limit)
     const final = await this.resolveImdbIds(finalCandidates)
 
     console.log(`[Engine] Returning ${final.length} recommendations`)

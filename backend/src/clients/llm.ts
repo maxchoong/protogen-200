@@ -374,6 +374,79 @@ Generate explanations as JSON object with numbered keys. Reference the matching 
   }
 
   /**
+   * Suggest likely title seeds for actor-focused talent queries.
+   * Used as a recovery path when catalog search cannot map actor names directly to filmography.
+   */
+  async suggestActorTitleSeeds(
+    actors: string[],
+    description: string,
+    limit: number = 8
+  ): Promise<string[]> {
+    if (!this.enabled || actors.length === 0) {
+      return []
+    }
+
+    const normalizedActors = actors
+      .map(actor => actor.trim())
+      .filter(actor => actor.length > 0)
+
+    if (normalizedActors.length === 0) {
+      return []
+    }
+
+    const cacheKey = `actor-seeds:${normalizedActors.join('|')}:${description.substring(0, 80)}`
+    const cached = this.getCache(cacheKey)
+    if (cached && Array.isArray(cached)) {
+      return cached.slice(0, limit)
+    }
+
+    try {
+      const messages: ChatCompletionMessageParam[] = [
+        {
+          role: 'system',
+          content: `You recommend movies and TV titles. Return only JSON with this shape:
+{
+  "titles": ["Title 1", "Title 2", "..."]
+}
+Rules:
+- Include only real titles that likely feature the requested actor(s).
+- Prioritize titles that fit the user's tone/genre request.
+- No commentary, no markdown, no extra keys.`
+        },
+        {
+          role: 'user',
+          content: `Actors: ${normalizedActors.join(', ')}\nUser request: ${description}\nReturn up to ${limit} titles.`
+        }
+      ]
+
+      const response = await this.client!.chat.completions.create({
+        model: GITHUB_MODEL,
+        messages,
+        temperature: 0.2,
+        max_tokens: 220,
+        response_format: { type: 'json_object' }
+      })
+
+      const content = response.choices[0]?.message?.content
+      if (!content) {
+        return []
+      }
+
+      const parsed = JSON.parse(content) as { titles?: unknown }
+      const titles = Array.isArray(parsed.titles)
+        ? parsed.titles.filter((value): value is string => typeof value === 'string').map(t => t.trim()).filter(Boolean)
+        : []
+
+      const deduped = Array.from(new Set(titles)).slice(0, limit)
+      this.setCache(cacheKey, deduped, 6 * 60 * 60 * 1000)
+      return deduped
+    } catch (error: any) {
+      console.error('[LLM] Actor title seed generation error:', error.message)
+      return []
+    }
+  }
+
+  /**
    * Get cached value if still valid
    */
   private getCache(key: string): any | null {
