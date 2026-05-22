@@ -113,7 +113,7 @@ export default function ResultsPage({ results, query, onBackHome }: ResultsPageP
 
                     {/* Content */}
                     <div className="flex-1">
-                      <h2 className="mb-2 text-2xl font-semibold tracking-[-0.03em] text-text">
+                      <h2 className="mb-2 font-serif text-2xl font-medium leading-tight tracking-[-0.02em] text-text md:text-[1.7rem]">
                         {rec.title}
                       </h2>
                       <p className="mb-4 text-sm text-text-muted">
