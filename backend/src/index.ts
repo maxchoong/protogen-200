@@ -139,7 +139,13 @@ const inferClarificationState = (
       'genre similarity', 'genre', 'actor', 'title', 'reference title'
     ])
 
-  const formatResolved = true
+  const formatResolved =
+    askedQuestionIds.has('quality_format_focus') ||
+    parsedPreferences.contentType === 'movie' ||
+    parsedPreferences.contentType === 'tv' ||
+    hasKeywordMatch(lowerAnswer, [
+      'movie', 'film', 'series', 'show', 'either', 'no preference'
+    ])
 
   const paceResolved =
     askedQuestionIds.has('quality_runtime_focus') ||
@@ -270,7 +276,10 @@ const buildWeakMatchClarification = (
 
   let primaryCandidates: ClarificationQuestion[] = []
 
-  if (clarificationRound === 0 && !state.axisResolved) {
+  // For weak talent results on round 0, always ask talent-genre focus
+  if (clarificationRound === 0 && modeKey === 'talent') {
+    primaryCandidates = [roundOneByMode.talent[0]]
+  } else if (clarificationRound === 0 && !state.axisResolved) {
     primaryCandidates = roundOneByMode[modeKey]
   } else if (!state.genreResolved) {
     if (modeKey === 'mood') {

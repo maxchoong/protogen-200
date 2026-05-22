@@ -129,6 +129,15 @@ export default function ConversationalHome({
         if (onNavigateToResults) {
           onNavigateToResults(response.recommendations, state.lastQuery || trimmed)
         }
+      } else {
+        // Handle empty results (no recommendations, no clarification)
+        conversation.addMessage({
+          role: 'assistant',
+          text: "I couldn't find good matches for that. Could you provide more details? For example, try mentioning a mood, genre, or similar title.",
+          timestamp: Date.now(),
+          detectedIntent: response.detectedIntent
+        })
+        conversation.updateClarificationRound(0)
       }
 
       if (state.clarificationRound === 0) {
