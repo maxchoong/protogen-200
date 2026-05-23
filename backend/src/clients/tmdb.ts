@@ -776,10 +776,13 @@ export class TMDBClient {
     titles: TMDBTitle[],
     options: Partial<SearchQuery> = {}
   ): TMDBTitle[] {
+    const includeMovies = options.includeMovies ?? true
+    const includeTV = options.includeTV ?? true
+
     return titles.filter(title => {
       // Filter by type
-      if (title.media_type === 'movie' && !options.includeMovies) return false
-      if (title.media_type === 'tv' && !options.includeTV) return false
+      if (title.media_type === 'movie' && !includeMovies) return false
+      if (title.media_type === 'tv' && !includeTV) return false
 
       // Filter by adult content
       if (options.excludeAdult && title.adult) return false

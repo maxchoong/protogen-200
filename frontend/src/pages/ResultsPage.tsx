@@ -50,14 +50,29 @@ interface ResultsPageProps {
   onNextPass: () => void
 }
 
-const editorialHighlights = [
-  { title: 'Quiet Rebellion', note: 'Character-forward drama', palette: 'from-[#d8d0c4] to-[#bdb0a0]' },
-  { title: 'Afterglow City', note: 'Noir mood, modern pacing', palette: 'from-[#bec8d2] to-[#8fa2b6]' },
-  { title: 'Winter Static', note: 'Minimal thriller tension', palette: 'from-[#ced2d9] to-[#a4adb9]' },
-  { title: 'Neon Orchard', note: 'Playful genre blend', palette: 'from-[#d8c8bc] to-[#b89b87]' },
-  { title: 'The Last Ferry', note: 'Slow-burn mystery', palette: 'from-[#c7d0cc] to-[#95aaa1]' },
-  { title: 'Paper Moons', note: 'Warm, intimate storytelling', palette: 'from-[#d7cdc2] to-[#b4a08f]' }
-]
+interface HighlightTile {
+  id: string
+  title: string
+  year?: string
+  type: 'movie' | 'tv'
+  rating: number
+  voteCount: number
+  posterUrl: string
+}
+
+const HIGHLIGHTS_STORAGE_KEY = 'lumera:session-highlights:v1'
+const HIGHLIGHT_COUNT = 6
+const MIN_HIGHLIGHT_RATING = 6.5
+const MIN_HIGHLIGHT_VOTE_COUNT = 200
+
+const pickRandomItems = <T,>(items: T[], count: number): T[] => {
+  const shuffled = [...items]
+  for (let i = shuffled.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+  }
+  return shuffled.slice(0, Math.min(count, shuffled.length))
+}
 
 const formatTurnOperation = (turnOperation?: TurnOperation): string => {
   if (!turnOperation) {
@@ -133,6 +148,7 @@ export default function ResultsPage({
     title: ''
   })
   const [roundMenuOpen, setRoundMenuOpen] = useState(false)
+  const [sessionHighlights, setSessionHighlights] = useState<HighlightTile[]>([])
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -144,6 +160,56 @@ export default function ResultsPage({
     document.addEventListener('keydown', handleEscape)
     return () => document.removeEventListener('keydown', handleEscape)
   }, [trailerModal.isOpen])
+
+  useEffect(() => {
+    if (results.length > 0) {
+      return
+    }
+
+    const loadHighlights = async () => {
+      const storedHighlights = sessionStorage.getItem(HIGHLIGHTS_STORAGE_KEY)
+      if (storedHighlights) {
+        try {
+          const parsed = JSON.parse(storedHighlights) as HighlightTile[]
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setSessionHighlights(parsed)
+            return
+          }
+        } catch {
+          // Ignore malformed session cache.
+        }
+      }
+
+      try {
+        const backendUrl =
+          import.meta.env.VITE_BACKEND_URL ||
+          (import.meta.env.DEV
+            ? 'http://localhost:3000'
+            : 'https://protogen-backend-1bvp.onrender.com')
+
+        const response = await fetch(`${backendUrl}/highlights`)
+        if (!response.ok) {
+          throw new Error('Highlights request failed')
+        }
+
+        const data = await response.json() as { success: boolean; highlights?: HighlightTile[] }
+        const highlights = data.highlights || []
+        const qualityFiltered = highlights.filter(item =>
+          item.rating >= MIN_HIGHLIGHT_RATING && item.voteCount >= MIN_HIGHLIGHT_VOTE_COUNT && !!item.posterUrl
+        )
+
+        const source = qualityFiltered.length >= HIGHLIGHT_COUNT ? qualityFiltered : highlights
+        const selected = pickRandomItems(source, HIGHLIGHT_COUNT)
+
+        setSessionHighlights(selected)
+        sessionStorage.setItem(HIGHLIGHTS_STORAGE_KEY, JSON.stringify(selected))
+      } catch {
+        setSessionHighlights([])
+      }
+    }
+
+    void loadHighlights()
+  }, [results.length])
 
   const openTrailer = (url: string, title: string) => {
     const videoId = url.split('v=')[1]?.split('&')[0]
@@ -288,15 +354,34 @@ export default function ResultsPage({
 
         {results.length === 0 ? (
           <div className="space-y-6" role="status" aria-live="polite">
-            <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3" role="list" aria-label="System highlight titles">
-              {editorialHighlights.map((item, idx) => (
-                <article key={`${item.title}-${idx}`} className="space-y-3" role="listitem">
-                  <div className={`aspect-[2/3] rounded-lg bg-gradient-to-b ${item.palette} shadow-card`} aria-hidden="true" />
-                  <p className="text-sm font-medium leading-snug tracking-[-0.01em] text-text">{item.title}</p>
-                  <p className="text-xs leading-relaxed tracking-[-0.004em] text-text-muted">{item.note}</p>
-                </article>
-              ))}
-            </div>
+            {sessionHighlights.length > 0 ? (
+              <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3" role="list" aria-label="Session highlight titles">
+                {sessionHighlights.map((item) => (
+                  <article key={item.id} className="space-y-3" role="listitem">
+                    <img
+                      src={item.posterUrl}
+                      alt={`${item.title} poster`}
+                      className="aspect-[2/3] w-full rounded-lg object-cover shadow-card"
+                      loading="lazy"
+                    />
+                    <p className="text-sm font-medium leading-snug tracking-[-0.01em] text-text">{item.title}</p>
+                    <p className="text-xs leading-relaxed tracking-[-0.004em] text-text-muted">
+                      {item.year || 'Unknown year'} • {item.type === 'tv' ? 'Series' : 'Film'} • {item.rating.toFixed(1)}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3" aria-hidden="true">
+                {Array.from({ length: HIGHLIGHT_COUNT }).map((_, idx) => (
+                  <div key={idx} className="space-y-3">
+                    <div className="aspect-[2/3] w-full rounded-lg bg-surface-2/70" />
+                    <div className="h-3 w-3/4 rounded bg-surface-2/70" />
+                    <div className="h-2 w-1/2 rounded bg-surface-2/60" />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ) : (
           <div className="grid gap-6" role="list" aria-label="Movie and TV show recommendations">

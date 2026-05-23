@@ -4,6 +4,7 @@ import 'dotenv/config'
 import { validateConfig } from './config.js'
 import { PreferenceParser } from './engine/preferenceParser.js'
 import { recommendationEngine } from './engine/recommendationEngine.js'
+import { tmdbClient } from './clients/tmdb.js'
 
 export const app: Express = express()
 const port = process.env.PORT || 3000
@@ -81,6 +82,7 @@ interface RequiresClarification {
 interface ApiResponse {
   success: boolean
   recommendations?: Recommendation[]
+  highlights?: HighlightTile[]
   requiresClarification?: RequiresClarification
   appliedConstraints?: string[]
   interpretationNote?: string
@@ -104,11 +106,24 @@ interface ApiResponse {
   }
 }
 
+interface HighlightTile {
+  id: string
+  title: string
+  year?: string
+  type: 'movie' | 'tv'
+  rating: number
+  voteCount: number
+  posterUrl: string
+}
+
 type ParsedPreferencesSnapshot = ReturnType<typeof PreferenceParser.parse>
 
 const MIN_TOP_COMPOSITE = 0.45
 const MIN_STRONG_MATCH_COUNT = 2
 const MAX_CLARIFICATION_TURNS = 3
+const MIN_HIGHLIGHT_RATING = 6.5
+const MIN_HIGHLIGHT_VOTE_COUNT = 200
+const TMDB_POSTER_BASE_URL = 'https://image.tmdb.org/t/p/w500'
 const RESULTS_FIRST_CONFIDENCE_THRESHOLD = 0.8
 const MIXED_RESULTS_FIRST_CONFIDENCE_THRESHOLD = 0.55
 const REFERENCE_NEAR_THRESHOLD_TOP_COMPOSITE = 0.43
@@ -432,6 +447,81 @@ const buildWeakMatchClarification = (
 // Routes
 app.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'OK' })
+})
+
+app.get('/highlights', async (req: Request, res: Response<ApiResponse>) => {
+  try {
+    if (!tmdbClient.isEnabled()) {
+      return res.json({ success: true, highlights: [] })
+    }
+
+    const [weeklyTrending, dailyTrending] = await Promise.all([
+      tmdbClient.getTrending('week'),
+      tmdbClient.getTrending('day')
+    ])
+
+    const merged = new Map<string, {
+      id: number
+      title: string
+      releaseDate?: string
+      firstAirDate?: string
+      mediaType: 'movie' | 'tv'
+      voteAverage: number
+      voteCount: number
+      posterPath: string
+    }>()
+
+    for (const item of [...weeklyTrending, ...dailyTrending]) {
+      if (!item.poster_path) {
+        continue
+      }
+
+      const mediaType = item.media_type === 'tv' ? 'tv' : 'movie'
+      const key = `${mediaType}-${item.id}`
+      if (!merged.has(key)) {
+        merged.set(key, {
+          id: item.id,
+          title: item.title || item.name || 'Untitled',
+          releaseDate: item.release_date,
+          firstAirDate: item.first_air_date,
+          mediaType,
+          voteAverage: item.vote_average || 0,
+          voteCount: item.vote_count || 0,
+          posterPath: item.poster_path
+        })
+      }
+    }
+
+    const highlights = Array.from(merged.values())
+      .filter(item =>
+        item.voteAverage >= MIN_HIGHLIGHT_RATING &&
+        item.voteCount >= MIN_HIGHLIGHT_VOTE_COUNT
+      )
+      .sort((a, b) => {
+        if (b.voteCount !== a.voteCount) {
+          return b.voteCount - a.voteCount
+        }
+        return b.voteAverage - a.voteAverage
+      })
+      .slice(0, 60)
+      .map<HighlightTile>(item => ({
+        id: `${item.mediaType}-${item.id}`,
+        title: item.title,
+        year: (item.mediaType === 'tv' ? item.firstAirDate : item.releaseDate)?.slice(0, 4),
+        type: item.mediaType,
+        rating: item.voteAverage,
+        voteCount: item.voteCount,
+        posterUrl: `${TMDB_POSTER_BASE_URL}${item.posterPath}`
+      }))
+
+    res.json({ success: true, highlights })
+  } catch (error) {
+    console.error('Error in /highlights:', error)
+    res.status(500).json({
+      success: false,
+      message: 'Unable to load highlights'
+    })
+  }
 })
 
 app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) => {
