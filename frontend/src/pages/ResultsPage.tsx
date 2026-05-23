@@ -11,6 +11,8 @@ interface Recommendation {
   runtimeMinutes?: number
   rating?: number
   voteCount?: number
+  mainCast?: string[]
+  directors?: string[]
   synopsis?: string
   whyThis?: string
   posterUrl?: string
@@ -36,15 +38,8 @@ interface ResultsPageProps {
   passCount: number
   triggerText?: string
   turnOperation?: TurnOperation
-  requiresDirectionConfirmation?: boolean
-  directionConfirmationChoice?: 'keep_direction' | 'pivot_direction'
-  confirmationTrace?: {
-    fromChoice: 'keep_direction' | 'pivot_direction'
-    outcomeContinuity?: TurnOperation['continuity']
-    aligned: boolean
-  }
   activeConstraints?: string[]
-  refinementSuggestions?: string[]
+  interpretationNote?: string
   retrievalDiagnostics?: {
     tmdbEnabled: boolean
     usedTmdb: boolean
@@ -91,6 +86,25 @@ const formatVoteCount = (voteCount?: number): string | null => {
   return voteCount.toLocaleString()
 }
 
+const languageDisplayNames =
+  typeof Intl !== 'undefined' && typeof Intl.DisplayNames !== 'undefined'
+    ? new Intl.DisplayNames(['en'], { type: 'language' })
+    : null
+
+const formatLanguageName = (languageCode?: string): string | null => {
+  if (!languageCode) {
+    return null
+  }
+
+  const normalized = languageCode.toLowerCase()
+  const fullName = languageDisplayNames?.of(normalized)
+  if (fullName && fullName.toLowerCase() !== normalized) {
+    return fullName
+  }
+
+  return normalized.toUpperCase()
+}
+
 export default function ResultsPage({
   results,
   query,
@@ -98,11 +112,8 @@ export default function ResultsPage({
   passCount,
   triggerText,
   turnOperation,
-  requiresDirectionConfirmation,
-  directionConfirmationChoice,
-  confirmationTrace,
   activeConstraints = [],
-  refinementSuggestions = [],
+  interpretationNote,
   retrievalDiagnostics,
   onPreviousPass,
   onNextPass
@@ -179,23 +190,6 @@ export default function ResultsPage({
               <p className="mt-2 text-xs text-text-muted">Latest note: {triggerText}</p>
             )}
             <p className="mt-2 text-xs text-text-muted">Turn type: {formatTurnOperation(turnOperation)}</p>
-            {requiresDirectionConfirmation && !directionConfirmationChoice && (
-              <p className="mt-2 rounded-sm border border-amber-300/40 bg-amber-100/10 px-2 py-1 text-xs text-amber-100">
-                Quick check pending in the conversation: stay close to this direction, or broaden the search.
-              </p>
-            )}
-            {directionConfirmationChoice && (
-              <p className="mt-2 text-xs text-text-muted">
-                Direction set: {directionConfirmationChoice === 'keep_direction' ? 'Stay close to this direction' : 'Broaden the search'}
-              </p>
-            )}
-            {confirmationTrace && (
-              <p
-                className={`mt-2 text-xs ${confirmationTrace.aligned ? 'text-emerald-300' : 'text-amber-200'}`}
-              >
-                Check-in: you picked {confirmationTrace.fromChoice === 'keep_direction' ? 'stay close to this direction' : 'broaden the search'}, and the next round came back as {confirmationTrace.outcomeContinuity?.replace('_', ' ') || 'unknown'} {confirmationTrace.aligned ? '(aligned)' : '(diverged)'}. 
-              </p>
-            )}
           </div>
         )}
 
@@ -215,19 +209,10 @@ export default function ResultsPage({
           </div>
         )}
 
-        {refinementSuggestions.length > 0 && (
+        {interpretationNote && (
           <div className="mb-5 rounded-lg border border-border bg-surface p-4 shadow-card">
-            <p className="mb-2 text-xs uppercase tracking-[0.14em] text-text-muted">Suggested follow-ups</p>
-            <div className="flex flex-wrap gap-2">
-              {refinementSuggestions.map((suggestion, idx) => (
-                <span
-                  key={`${suggestion}-${idx}`}
-                  className="rounded-pill border border-border bg-surface-2 px-3 py-1 text-xs text-text-muted"
-                >
-                  {suggestion}
-                </span>
-              ))}
-            </div>
+            <p className="mb-2 text-xs uppercase tracking-[0.14em] text-text-muted">Interpretation note</p>
+            <p className="text-sm text-text-muted">{interpretationNote}</p>
           </div>
         )}
 
@@ -254,7 +239,7 @@ export default function ResultsPage({
           </div>
         ) : (
           <div className="grid gap-5" role="list" aria-label="Movie and TV show recommendations">
-            {results.map((rec) => (
+            {results.map((rec, index) => (
               <article
                 key={rec.id}
                 className="overflow-hidden rounded-lg border border-border bg-surface shadow-card transition-shadow hover:shadow-card-hover"
@@ -290,16 +275,6 @@ export default function ResultsPage({
                             {formatVoteCount(rec.voteCount) ? ` • ${formatVoteCount(rec.voteCount)} votes` : ''}
                           </span>
                         )}
-                        {rec.genres && rec.genres.length > 0 && (
-                          <span className="rounded-pill border border-border bg-surface-2 px-2 py-1">
-                            {rec.genres.slice(0, 3).join(', ')}
-                          </span>
-                        )}
-                        {rec.originalLanguage && (
-                          <span className="rounded-pill border border-border bg-surface-2 px-2 py-1">
-                            Language {rec.originalLanguage.toUpperCase()}
-                          </span>
-                        )}
                         {formatRuntime(rec.runtimeMinutes) && (
                           <span className="rounded-pill border border-border bg-surface-2 px-2 py-1">
                             Runtime {formatRuntime(rec.runtimeMinutes)}
@@ -311,6 +286,44 @@ export default function ResultsPage({
                           </span>
                         )}
                       </div>
+
+                      {(rec.mainCast?.length || rec.directors?.length) ? (
+                        <p className="mb-3 text-xs text-text-muted">
+                          {rec.mainCast && rec.mainCast.length > 0 ? `Cast: ${rec.mainCast.slice(0, 2).join(', ')}` : ''}
+                          {rec.mainCast && rec.mainCast.length > 0 && rec.directors && rec.directors.length > 0 ? ' • ' : ''}
+                          {rec.directors && rec.directors.length > 0 ? `Director: ${rec.directors[0]}` : ''}
+                        </p>
+                      ) : null}
+
+                      {(rec.genres?.length || rec.originalLanguage || rec.mainCast?.length || rec.directors?.length) ? (
+                        <details className="mb-3 rounded-lg border border-border bg-surface-2 px-3 py-2" open={index === 0}>
+                          <summary className="cursor-pointer text-xs uppercase tracking-[0.12em] text-text-muted">
+                            Details
+                          </summary>
+                          <div className="mt-2 space-y-2 text-xs text-text-muted">
+                            {rec.genres && rec.genres.length > 0 && (
+                              <p>
+                                <span className="font-medium text-text">Genres:</span> {rec.genres.slice(0, 4).join(', ')}
+                              </p>
+                            )}
+                            {formatLanguageName(rec.originalLanguage) && (
+                              <p>
+                                <span className="font-medium text-text">Language:</span> {formatLanguageName(rec.originalLanguage)}
+                              </p>
+                            )}
+                            {rec.mainCast && rec.mainCast.length > 0 && (
+                              <p>
+                                <span className="font-medium text-text">Main cast:</span> {rec.mainCast.slice(0, 3).join(', ')}
+                              </p>
+                            )}
+                            {rec.directors && rec.directors.length > 0 && (
+                              <p>
+                                <span className="font-medium text-text">Director:</span> {rec.directors.join(', ')}
+                              </p>
+                            )}
+                          </div>
+                        </details>
+                      ) : null}
 
                       {rec.synopsis && (
                         <p className="mb-3 text-sm text-text-muted">{rec.synopsis}</p>

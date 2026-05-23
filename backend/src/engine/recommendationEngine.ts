@@ -24,6 +24,8 @@ export interface Recommendation {
   runtimeMinutes?: number
   rating?: number
   voteCount?: number
+  mainCast?: string[]
+  directors?: string[]
   synopsis: string
   posterUrl: string
   trailerUrl?: string
@@ -387,14 +389,54 @@ export class RecommendationEngine {
   private async resolveImdbIds(titles: any[]): Promise<any[]> {
     const resolved = await Promise.all(
       titles.map(async title => {
-        if (this.isImdbId(title.id) || !title.tmdbId) {
+        if (this.isImdbId(title.id) && !title.tmdbId) {
+          const typeHint = title.type === 'series' ? 'tv' : 'movie'
+          const match = await tmdbClient.findTitleByImdbId(title.id, typeHint)
+
+          if (!match) {
+            return title
+          }
+
+          const [details, credits] = await Promise.all([
+            tmdbClient.getTitleDetails(match.tmdbId, match.mediaType),
+            tmdbClient.getTitleCredits(match.tmdbId, match.mediaType)
+          ])
+
+          const runtimeMinutes = title.runtimeMinutes || details?.runtime
+          const originalLanguage = title.originalLanguage || details?.original_language
+          const genres = (title.genres && title.genres.length > 0)
+            ? title.genres
+            : tmdbClient.mapGenreIdsToNames(details?.genre_ids || [])
+          const mainCast = (title.mainCast && title.mainCast.length > 0)
+            ? title.mainCast
+            : credits.mainCast
+          const directors = (title.directors && title.directors.length > 0)
+            ? title.directors
+            : credits.directors
+
+          return {
+            ...title,
+            tmdbId: match.tmdbId,
+            tmdbMediaType: match.mediaType,
+            runtimeMinutes,
+            originalLanguage,
+            genres,
+            mainCast,
+            directors,
+            actors: title.actors || (mainCast.length > 0 ? mainCast.join(', ') : undefined),
+            director: title.director || (directors.length > 0 ? directors.join(', ') : undefined)
+          }
+        }
+
+        if (!title.tmdbId) {
           return title
         }
 
         const mediaType = title.tmdbMediaType === 'tv' ? 'tv' : 'movie'
-        const [externalIds, details] = await Promise.all([
+        const [externalIds, details, credits] = await Promise.all([
           tmdbClient.getExternalIds(title.tmdbId, mediaType),
-          tmdbClient.getTitleDetails(title.tmdbId, mediaType)
+          tmdbClient.getTitleDetails(title.tmdbId, mediaType),
+          tmdbClient.getTitleCredits(title.tmdbId, mediaType)
         ])
 
         const runtimeMinutes = title.runtimeMinutes || details?.runtime
@@ -402,13 +444,23 @@ export class RecommendationEngine {
         const genres = (title.genres && title.genres.length > 0)
           ? title.genres
           : tmdbClient.mapGenreIdsToNames(details?.genre_ids || [])
+        const mainCast = (title.mainCast && title.mainCast.length > 0)
+          ? title.mainCast
+          : credits.mainCast
+        const directors = (title.directors && title.directors.length > 0)
+          ? title.directors
+          : credits.directors
 
         return {
           ...title,
           id: externalIds.imdbId || title.id,
           runtimeMinutes,
           originalLanguage,
-          genres
+          genres,
+          mainCast,
+          directors,
+          actors: title.actors || (mainCast.length > 0 ? mainCast.join(', ') : undefined),
+          director: title.director || (directors.length > 0 ? directors.join(', ') : undefined)
         }
       })
     )
@@ -545,6 +597,21 @@ export class RecommendationEngine {
                       preferences.contentType === 'movie' ? 'movie' : 
                       undefined
 
+    const hasExactYearConstraint =
+      preferences.yearRange?.min !== undefined &&
+      preferences.yearRange?.max !== undefined &&
+      preferences.yearRange.min === preferences.yearRange.max
+
+    const useBlockbusterPaging =
+      tmdbClient.isEnabled() &&
+      preferences.popularityPreference === 'mainstream' &&
+      hasExactYearConstraint
+
+    const useCriticsYearProxy =
+      tmdbClient.isEnabled() &&
+      preferences.criticsIntent === true &&
+      hasExactYearConstraint
+
     let actorFilmographyCandidates: any[] = []
     if (preferences.discoveryMode === 'talent' && preferences.detectedActors && preferences.detectedActors.length > 0 && tmdbClient.isEnabled()) {
       const includeMovies = typeFilter !== 'series'
@@ -589,11 +656,54 @@ export class RecommendationEngine {
 
     let candidates: any[] = []
 
+    if (useBlockbusterPaging) {
+      const page = Math.max(1, preferences.blockbusterPage || 1)
+      const includeMovies = typeFilter !== 'series'
+      const includeTV = typeFilter !== 'movie'
+
+      const pagedMainstream = await tmdbClient.discoverPopularByYear(
+        preferences.yearRange!.min!,
+        {
+          includeMovies,
+          includeTV,
+          excludeAdult: true
+        },
+        page
+      )
+
+      candidates = pagedMainstream.map(item => this.convertTmdbResult(item))
+      diagnostics.usedTmdb = true
+      console.log(
+        `[Engine] Blockbuster paging: fetched ${candidates.length} candidates for year ${preferences.yearRange!.min} page ${page}`
+      )
+    }
+
+    if (useCriticsYearProxy) {
+      const includeMovies = typeFilter !== 'series'
+      const includeTV = typeFilter !== 'movie'
+
+      const criticsPool = await tmdbClient.discoverPopularByYear(
+        preferences.yearRange!.min!,
+        {
+          includeMovies,
+          includeTV,
+          excludeAdult: true
+        },
+        1
+      )
+
+      candidates = criticsPool.map(item => this.convertTmdbResult(item))
+      diagnostics.usedTmdb = true
+      console.log(
+        `[Engine] Critics proxy: fetched ${candidates.length} candidates for year ${preferences.yearRange!.min}`
+      )
+    }
+
     // On refinement turns, prefer re-ranking prior results before broad retrieval.
-    if (shouldReusePreviousCandidates && previousCandidates.length >= limit) {
+    if (!useBlockbusterPaging && !useCriticsYearProxy && shouldReusePreviousCandidates && previousCandidates.length >= limit) {
       candidates = [...previousCandidates]
       console.log('[Engine] Reuse mode: skipping broad retrieval (sufficient prior candidates)')
-    } else {
+    } else if (!useBlockbusterPaging && !useCriticsYearProxy) {
       const searched = await this.searchCandidates(
         searchTerms,
         typeFilter,
@@ -611,7 +721,7 @@ export class RecommendationEngine {
       candidates = [...previousCandidates, ...actorFilmographyCandidates, ...searchedCandidates]
     }
 
-    if (candidates.length < RecommendationEngine.MIN_CANDIDATE_POOL) {
+    if (!useBlockbusterPaging && !useCriticsYearProxy && candidates.length < RecommendationEngine.MIN_CANDIDATE_POOL) {
       const backfillTerms = this.buildBackfillSearchTerms(
         request.description,
         preferences,
@@ -637,6 +747,57 @@ export class RecommendationEngine {
         }
 
         candidates = [...candidates, ...backfill.results]
+      }
+    }
+
+    if (
+      !useBlockbusterPaging &&
+      !useCriticsYearProxy &&
+      tmdbClient.isEnabled() &&
+      preferences.popularityPreference === 'mainstream' &&
+      (candidates.length < RecommendationEngine.MIN_CANDIDATE_POOL || hasExactYearConstraint)
+    ) {
+      try {
+        const hasYearRange =
+          preferences.yearRange?.min !== undefined &&
+          preferences.yearRange?.max !== undefined
+
+        let mainstreamBackfill = hasYearRange
+          ? await tmdbClient.discoverPopularByYear(preferences.yearRange!.min!, {
+              includeMovies: typeFilter !== 'series',
+              includeTV: typeFilter !== 'movie',
+              excludeAdult: true
+            })
+          : await tmdbClient.getTrending('week')
+
+        if (
+          hasYearRange &&
+          preferences.yearRange!.min !== preferences.yearRange!.max
+        ) {
+          mainstreamBackfill = mainstreamBackfill.filter(item => {
+            const yearSource = item.media_type === 'tv' ? item.first_air_date : item.release_date
+            const year = yearSource ? Number(yearSource.split('-')[0]) : NaN
+            if (!Number.isFinite(year)) {
+              return false
+            }
+
+            return year >= preferences.yearRange!.min! && year <= preferences.yearRange!.max!
+          })
+        }
+
+        const convertedMainstream = mainstreamBackfill
+          .slice(0, 25)
+          .map(item => this.convertTmdbResult(item))
+
+        if (convertedMainstream.length > 0) {
+          candidates = [...candidates, ...convertedMainstream]
+          diagnostics.usedTmdb = true
+          console.log(
+            `[Engine] Mainstream fallback: added ${convertedMainstream.length} trending TMDB candidates`
+          )
+        }
+      } catch (error) {
+        console.warn('[Engine] Mainstream fallback fetch failed')
       }
     }
 
@@ -1040,6 +1201,63 @@ export class RecommendationEngine {
       }
     }
 
+    // Apply strict year filtering for explicit single-year intents (e.g., "from 2025").
+    if (
+      preferences.yearRange?.min !== undefined &&
+      preferences.yearRange?.max !== undefined &&
+      preferences.yearRange.min === preferences.yearRange.max
+    ) {
+      const targetYear = preferences.yearRange.min
+      const beforeCount = filtered.length
+      filtered = filtered.filter(t => Number(t.year) === targetYear)
+
+      if (beforeCount !== filtered.length) {
+        console.log(
+          `[Engine.Rank] Strict year filter (${targetYear}) removed ${beforeCount - filtered.length} titles`
+        )
+      }
+    }
+
+    // Apply stronger blockbuster gating when user explicitly asks for mainstream picks.
+    if (preferences.popularityPreference === 'mainstream' && filtered.length > 0) {
+      const beforeCount = filtered.length
+      const hasExactYearConstraint =
+        preferences.yearRange?.min !== undefined &&
+        preferences.yearRange?.max !== undefined &&
+        preferences.yearRange.min === preferences.yearRange.max
+
+      if (hasExactYearConstraint) {
+        const mainstreamYearPool = filtered.filter(t => {
+          const voteCount = Number(t.voteCount) || 0
+          const isTv = t.type === 'series'
+          return isTv ? voteCount >= 250 : voteCount >= 400
+        })
+
+        if (mainstreamYearPool.length > 0) {
+          filtered = mainstreamYearPool
+          console.log(
+            `[Engine.Rank] Mainstream year floor kept ${filtered.length}/${beforeCount} titles (broad vote-count threshold)`
+          )
+        }
+      }
+
+      if (!hasExactYearConstraint) {
+        const blockbusterCandidates = filtered.filter(t => {
+          const voteCount = Number(t.voteCount) || 0
+          const rating = Number(t.rating) || 0
+          return voteCount >= 8000 || (voteCount >= 4000 && rating >= 7)
+        })
+
+        // Keep strict only when we still have enough headroom.
+        if (blockbusterCandidates.length >= Math.min(5, beforeCount)) {
+          filtered = blockbusterCandidates
+          console.log(
+            `[Engine.Rank] Mainstream filter kept ${filtered.length}/${beforeCount} titles with strong popularity signals`
+          )
+        }
+      }
+    }
+
     // === PHASE 3.2: Exclusion Genre Penalty ===
     // Track exclusion penalties before scoring
     const exclusionPenalties = new Map<string, number>()
@@ -1135,6 +1353,43 @@ export class RecommendationEngine {
           })
         : undefined
     }
+
+    if (preferences.criticsIntent) {
+      const beforeCount = filtered.length
+      const strictPool = filtered.filter(t => {
+        const rating = Number(t.rating)
+        const voteCount = Number(t.voteCount) || 0
+        if (!Number.isFinite(rating)) {
+          return false
+        }
+
+        const minVotes = t.type === 'series' ? 120 : 250
+        return rating >= 6.5 && voteCount >= minVotes
+      })
+
+      const relaxedPool = filtered.filter(t => {
+        const rating = Number(t.rating)
+        const voteCount = Number(t.voteCount) || 0
+        if (!Number.isFinite(rating)) {
+          return false
+        }
+
+        const minVotes = t.type === 'series' ? 60 : 120
+        return rating >= 6.0 && voteCount >= minVotes
+      })
+
+      if (strictPool.length >= Math.min(5, beforeCount)) {
+        filtered = strictPool
+        console.log(
+          `[Engine.Rank] Critics proxy strict floor kept ${filtered.length}/${beforeCount} titles`
+        )
+      } else if (relaxedPool.length > 0) {
+        filtered = relaxedPool
+        console.log(
+          `[Engine.Rank] Critics proxy relaxed floor kept ${filtered.length}/${beforeCount} titles`
+        )
+      }
+    }
     
     if (scoringConfig && preferences.discoveryMode) {
       console.log(
@@ -1167,9 +1422,22 @@ export class RecommendationEngine {
     })
 
     // Re-sort after applying penalties
-    return penalizedRanked.sort(
+    const resorted = penalizedRanked.sort(
       (a, b) => b.scoringFactors.composite - a.scoringFactors.composite
     )
+
+    if (preferences.criticsIntent) {
+      return resorted.sort((a, b) => {
+        const ratingDelta = (Number(b.rating) || 0) - (Number(a.rating) || 0)
+        if (Math.abs(ratingDelta) > 0.001) {
+          return ratingDelta
+        }
+
+        return (Number(b.voteCount) || 0) - (Number(a.voteCount) || 0)
+      })
+    }
+
+    return resorted
   }
 
   private calculateMoodShiftMultiplier(title: any, preferences: ParsedPreferences): number {
@@ -1281,7 +1549,11 @@ export class RecommendationEngine {
     const year = item.year?.toString() || 'N/A'
 
     // Use LLM-generated explanation if available, otherwise fallback to rule-based
-    const whyThis = llmExplanations?.get(item.title) || this.generateWhyThis(item, preferences)
+    const llmWhyThis = llmExplanations?.get(item.title)
+    const whyThis =
+      llmWhyThis && llmWhyThis.trim() && llmWhyThis.trim().toLowerCase() !== 'null'
+        ? llmWhyThis
+        : this.generateWhyThis(item, preferences)
 
     // Get availability data if available
     const availability = availabilityData?.get(item.id) || undefined
@@ -1303,6 +1575,8 @@ export class RecommendationEngine {
       runtimeMinutes: item.runtimeMinutes || undefined,
       rating: item.rating || undefined,
       voteCount: item.voteCount || undefined,
+      mainCast: item.mainCast || undefined,
+      directors: item.directors || undefined,
       synopsis: item.plot || 'No synopsis available.',
       posterUrl: item.poster || 'https://via.placeholder.com/300x450?text=No+Poster',
       trailerUrl,

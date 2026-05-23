@@ -14,10 +14,10 @@
 - TypeScript 5
 
 ### External Services
-- OMDb API for catalog metadata and plots
-- GitHub Models `gpt-4o-mini` for preference parsing and recommendation explanations
+- TMDB for discovery, details enrichment, credits, trailers, and IMDb mapping
+- OMDb/FMDb path for search/details fallback and metadata compatibility
+- GitHub Models `gpt-4o-mini` for preference parsing and recommendation explanations (optional)
 - Streaming Availability API via RapidAPI for watch-platform availability
-- TMDB for trailer lookup when configured
 
 ---
 
@@ -33,10 +33,11 @@
 ### Backend Responsibilities
 - Validate request shape and input rules
 - Parse preferences with rule-based logic and optional LLM enhancement
-- Search OMDb and normalize title metadata
+- Retrieve candidate titles using TMDB and/or OMDb strategies
 - Apply content-safety filtering
 - Rank and shape recommendations
 - Enrich results with availability and trailers when optional APIs are configured
+- Attach applied constraints and interpretation notes for transparent conversational responses
 
 ---
 
@@ -67,6 +68,8 @@
 ```json
 {
   "success": true,
+  "appliedConstraints": ["year:2020", "ranking:critic_proxy"],
+  "interpretationNote": "Interpreting critics favourites using TMDB/IMDb rating and vote signals.",
   "recommendations": [
     {
       "id": "tt1375666",
@@ -95,24 +98,28 @@
 ## Recommendation Pipeline
 
 1. Validate request body.
-2. Parse preferences from explicit controls and free text.
-3. Optionally merge LLM-derived preferences and keywords.
-4. Search OMDb using extracted search terms.
-5. Convert OMDb records into internal recommendation candidates.
+2. Parse preferences from explicit controls and free text (including follow-up context).
+3. Detect refinement modes (e.g., mainstream paging, critics proxy, genre aliases).
+4. Retrieve candidates from TMDB and/or OMDb depending on intent and provider availability.
+5. Normalize and enrich candidates (runtime, genres, language, cast/director where available).
 6. Filter unsafe content.
-7. Rank by genre fit and rating.
+7. Rank with mode-aware scoring and hard constraints (year, genre, proxy quality floors).
 8. Generate "Why this?" explanations using LLM batch mode or fallback templates.
 9. Fetch availability using IMDb ID and lowercase country code.
-10. Fetch trailers using TMDB when `TMDB_API_KEY` is available.
+10. Fetch trailers using TMDB when possible.
+11. Return recommendations with `appliedConstraints`, intent metadata, diagnostics, and optional `interpretationNote`.
 
 ---
 
 ## Service Integration Notes
 
-### OMDb
-- Base URL: `http://www.omdbapi.com`
-- Development key: `trilogy`
-- Used for title search and detailed metadata lookup
+### TMDB
+- Used for year-based discovery, popularity retrieval, enrichment details, credits, and trailers.
+- Also used for IMDb-to-TMDB mapping and richer metadata hydration.
+
+### OMDb / FMDb path
+- Provides additional search/detail fallback and compatibility fields.
+- Supports recommendation continuity where TMDB is unavailable or sparse.
 
 ### GitHub Models
 - Base URL: `https://models.inference.ai.azure.com`
@@ -129,9 +136,14 @@
 - Response is read from `streamingOptions[country]`
 
 ### TMDB
-- Used only for trailer lookup
-- Optional in local/dev environments
-- Missing key should not break the recommendation flow
+- Core retrieval and enrichment path for multiple recommendation modes
+- Missing key or failures should degrade gracefully to other available signals
+
+## Transparency and Honesty Policy (Implemented)
+
+- Critics-style prompts are treated as proxy intent using available rating/vote signals.
+- Explicit external critic-source requests (e.g., Rotten Tomatoes, Metacritic) trigger clarification rather than fabricated source claims.
+- Responses can include `interpretationNote` to explain proxy assumptions to the user.
 
 ---
 

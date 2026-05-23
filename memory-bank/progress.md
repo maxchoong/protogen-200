@@ -9,6 +9,11 @@
 - [x] Phase 5 complete: Intent classification, conversational UI, multi-turn clarification
 - [x] Phase 6 complete: End-to-end testing, API integration validation
 - [x] Recommendation-quality refinement complete: dynamic clarification, anchor suppression, and reference-flow ranking improvements
+- [x] Follow-up reliability improvements shipped: deterministic blockbuster paging + TV-drift fix for "show me more"
+- [x] Genre intent parsing generalized (aliases/plurals/hyphenated forms)
+- [x] Meta-steering prompt removed from UX
+- [x] Refinement suggestion chips removed from UX
+- [x] Transparency policy implemented for critics-style requests (proxy explanation + unsupported-source guardrail)
 - [ ] Documentation fully aligned with current implementation
 - [x] Frontend lint configuration added
 - [ ] TMDB configured locally for trailer verification
@@ -108,6 +113,8 @@
 - [x] Backend returns localized availability data for supported titles
 - [x] Frontend can render availability links and fallback messaging
 - [x] Frontend lint runs with current config (non-blocking TypeScript support warning only)
+- [x] Critics-style query now returns explicit interpretation note when using proxy signals
+- [x] Explicit Rotten Tomatoes / Metacritic requests now trigger clarification instead of fabricated source coverage
 
 ---
 
@@ -202,6 +209,31 @@
 - [x] Frontend `npm run build` passing
 - [x] Changes committed and pushed to `origin/main` (`c3b590e`)
 
+## Post-Phase Hardening (May 2026)
+
+### Retrieval, Parsing, and Metadata
+- [x] TMDB enrichment for runtime, genres, language, cast, and director metadata
+- [x] TMDB IMDb-ID mapping and credits retrieval for richer result cards
+- [x] Deterministic blockbuster pagination via `blockbuster_page`
+- [x] Removed false TV intent trigger from generic "show/show me more" wording
+- [x] Added generalized genre alias parsing (`scifi`, `romcom`, plural/hyphenated variants)
+
+### UX Simplification
+- [x] Removed meta-steering "stay close / broaden" prompt and state tracking
+- [x] Removed results-page refinement suggestion chips
+- [x] Shifted all follow-up refinement to freeform user input
+
+### Honesty / Transparency
+- [x] Added critics-intent detection and explicit `ranking:critic_proxy` constraint
+- [x] Added interpretation note for critics-proxy mode (TMDB/IMDb rating + votes)
+- [x] Added unsupported-source guardrail for explicit Rotten Tomatoes / Metacritic / Letterboxd requests
+- [x] Added frontend display for interpretation note (chat + results panel)
+
+### Quality Safeguards
+- [x] Added critics-year retrieval path and quality floor (rating/votes)
+- [x] Added critics-mode ordering by rating then vote count
+- [x] Fixed literal `"null"` explanation leakage with deterministic fallback
+
 ### Build Verification
 - [x] Backend `npm run build` passes
 - [x] Frontend `npm run build` passes
@@ -212,11 +244,11 @@
 
 ## Open Follow-Ups
 
-- [ ] Refresh setup and summary docs that still mention OpenAI or JustWatch-era assumptions
-- [ ] Refresh `Film_Advisor_App_AllDocs.md` narrative sections to match implemented architecture and status
+- [ ] Refresh setup and summary docs that still mention legacy provider assumptions
+- [ ] Add automated regression tests for critics-intent transparency and unsupported-source guardrail
 - [ ] Rotate exposed development secrets
 - [ ] Consider backend pipeline optimization or refactoring if performance becomes an issue
-- [ ] Test full multi-turn flow end-to-end with live API
+- [ ] Test full multi-turn flow end-to-end with live API and browser snapshots
 - [ ] Run accessibility audit on new conversational UI
 - [ ] Run live smoke tests focused on conversational naturalness and dynamic follow-up heuristics
 - [ ] Plan v2 features if any (spoiler handling, user accounts, advanced filtering, etc.)

@@ -2,107 +2,95 @@
 
 ## Project Status
 
-**Date:** May 19, 2026  
-**Phase:** Phases 1-6 complete; recommendation quality and dynamic clarification refinement shipped
-**Overall Progress:** Full recommendation engine with intent-driven ranking, bounded multi-turn clarification, and conversational frontend UI. Core flows are implemented, validated, and pushed.
+**Date:** May 23, 2026  
+**Phase:** Post-Phase-6 quality hardening and transparency updates
+**Overall Progress:** Conversational recommendation engine is operational end-to-end with stronger follow-up behavior, TMDB enrichment, explicit transparency messaging, and simplified UX (freeform-only next turns).
 
 ---
 
 ## Current Reality
 
-- **Frontend & Backend:** Both build successfully with no TypeScript errors
-- **Frontend:** React 18 + Vite 5 with new ConversationalHome component replacing form-based HomePage
-- **Backend:** Node.js 20 + Express + TypeScript with intent classification and multi-turn support
-- **LLM:** GitHub Models `gpt-4o-mini` with rule-based fallback
-- **Catalog:** OMDb integration with live availability via RapidAPI
-- **Intent System:** 4-mode classification (mood | reference | talent | mixed) with confidence scoring
-- **Clarification:** Confidence-gated and quality-gated, single-endpoint design, dynamic follow-up selection based on unresolved dimensions from the latest freeform answer, capped to avoid loops
+- **Frontend & Backend:** Both build successfully with no TypeScript errors.
+- **Frontend:** Conversational flow is primary, meta-steering prompt removed, suggestion chips removed.
+- **Backend:** Intent-aware ranking + clarification + transparency safeguards in single endpoint (`POST /recommendations`).
+- **Data sources in practice:** TMDB + OMDb + IMDb-derived fields (via OMDb/FMDb and TMDB mappings), Streaming Availability API, optional LLM explanation generation.
+- **Transparency behavior:** Explicitly states proxy interpretation when user asks for critics-oriented results and explicitly clarifies unsupported external critic sources.
 
 ---
 
-## Recent Recommendation Quality Refinements
+## Recently Shipped Changes
 
-### Backend Additions
-- Removed static fallback recommendations from production API responses
-- Suppressed explicitly mentioned anchor titles by default for reference-style prompts unless rewatch intent is detected
-- Reused reference-title metadata earlier in ranking to improve similarity matching
-- Strengthened contrastive mood and pace handling for prompts like "Like Inception but more relaxing"
-- Added weak-result quality gates and dynamic clarification routing based on inferred unresolved dimensions
+### Retrieval and Enrichment
+- Added TMDB enrichment for runtime, genres, language, cast, and directors.
+- Added TMDB IMDb-ID mapping and credits retrieval for better metadata completeness.
+- Added deterministic blockbuster paging (`blockbuster_page`) for "show me more" flows.
 
-### Frontend Additions
-- Clarification option chips auto-submit instead of filling the composer
-- Example prompts auto-submit from the empty state
-- Conversation state now tracks asked clarification IDs so the backend can avoid redundant questions
+### Parsing and Follow-up Quality
+- Added generalized genre alias parsing (`romcom`, `scifi`, plurals, hyphenated variants).
+- Fixed false TV pivot from "show me more" by removing generic `show/shows` TV hint terms.
+- Added critics-intent parsing and proxy constraint tagging (`ranking:critic_proxy`).
+- Added movie-default behavior for critics-intent when user does not explicitly ask for TV.
 
-### Validation Snapshot
-- Backend tests passing: 87/87
-- Backend build passing
-- Frontend build passing
-- Dynamic clarification flow pushed to `origin/main` in commit `c3b590e`
+### Ranking and Critics Proxy
+- Added dedicated critics-year proxy retrieval path for exact-year critic-style prompts.
+- Added critics-proxy quality floor on rating + vote count.
+- Added critics-proxy deterministic sort by rating then vote count.
+
+### Honesty and UX Transparency
+- Added unsupported-source guardrail for explicit Rotten Tomatoes / Metacritic / Letterboxd requests.
+- Added response-level `interpretationNote` to explain proxy assumptions.
+- Surfaced `interpretationNote` in both chat response text and results panel.
+- Removed meta-steering choice and associated trace UI.
+- Removed refinement suggestion chips; users now refine entirely via freeform typing.
+
+### Robustness Fixes
+- Prevented literal `"null"` explanation strings from leaking to UI by forcing fallback template explanations.
+
+---
 
 ## Current Architecture Snapshot
 
 ### Backend
-- **Engine:** preferenceParser extracts intent signals, ranks by mode-specific weights via rankingScorer
-- **Intent Modes:** 
-  - Mood: keyword-based ("cozy", "dark", "funny"), confidence 0.5-0.9
-  - Reference: title mentions ("like X", "similar to X"), confidence 0.6-0.95
-  - Talent: actor extraction ("with X", "starring X"), confidence 0.6-0.95
-  - Mixed: multiple conflicting signals, confidence 0.4-0.7
-- **Clarification:** Initial ambiguity still uses confidence gating, but weak-result follow-ups now remain conversational and can continue for up to a bounded number of turns when the latest answer leaves important dimensions unresolved
-- **Ranking:** RankingScorer applies mode-specific weights, anchor-title suppression, reference-genre reuse, and stronger pace/mood contrast handling
+- **Parser (`preferenceParser`)**: intent, genre aliases, year handling, critics-proxy detection, blockbuster paging state.
+- **Engine (`recommendationEngine`)**: mode-aware search, TMDB enrichment, strict year filters, mainstream and critics proxy retrieval/ranking paths.
+- **API (`index.ts`)**: clarification gating, weak-result handling, applied constraints, interpretation notes, unsupported-source clarification flow.
 
 ### Frontend
-- **Home:** ConversationalHome with message thread (user/assistant bubbles, intent chips)
-- **Input:** Textarea with Enter/Shift+Enter handling; suggestion buttons on empty state
-- **Clarification:** Inline question rendering with auto-submitting option chips and asked-question tracking
-- **Results:** ResultsPage receives recommendations and query from conversation state
-- **State:** useConversation hook manages messages, clarificationRound, askedQuestionIds, lastQuery, and lastIntent
+- **Conversation:** freeform multi-turn interaction, clarification questions only when backend requests them.
+- **Results:** round navigation + active constraints + interpretation note + richer metadata display.
+- **State:** recommendation passes store constraints, turn operation, diagnostics, and interpretation note.
 
 ---
 
 ## Important Decisions
 
-- **Conversational Default:** App now starts with ConversationalHome instead of form-based HomePage
-- **Single Endpoint:** All flows use `POST /recommendations` with optional clarificationContext
-- **Confidence Threshold:** 0.65 gates clarification; < 0.65 asks questions, >= 0.65 returns results
-- **Bounded Dynamic Clarification:** weak-result follow-ups are selected from unresolved dimensions inferred from the latest answer rather than a fixed round ladder
-- **Loop Prevention:** asked question IDs and a max clarification turn limit prevent redundant or endless follow-ups
-- **Intent Transparency:** detectedIntent always in response so frontend can show mode/confidence to user
-- **Backward Compatibility:** Old request format (no clarificationContext) still works end-to-end
+- **Honesty-first policy:** Never imply unavailable critic-source data; explicitly disclose proxy interpretation.
+- **Freeform over control chips:** Removed meta-steering and refinement chips to reduce confusion and keep interaction natural.
+- **Single endpoint strategy:** Continue using one endpoint with optional `clarificationContext` and richer response metadata.
+- **Conservative fallback policy:** If explicit unavailable source is requested, ask user to confirm proxy mode before returning guessed results.
 
 ---
 
-## Build & Test Status
+## Validation Snapshot
 
-- [x] Backend TypeScript compilation: Clean
-- [x] Frontend TypeScript compilation: Clean  
-- [x] E2E test file created: test-phase5-conversation-e2e.ts
-- [x] Integration test file created: intentClassification.test.ts
-- [x] All 10 E2E test cases designed
-- [x] Intent classification Jest suite designed
-- [x] Route-level dynamic clarification regression tests passing
-- [x] Recommendation-quality regression tests passing for the relaxing-reference flow
+- [x] Backend build passes.
+- [x] Frontend build passes.
+- [x] `Critics favourites from 2020` now returns movie-only 2020 set with interpretation note and proxy constraint.
+- [x] Explicit unsupported source query (e.g., Rotten Tomatoes) returns clarification prompt instead of pretending source support.
+- [x] `Show me more` remains in blockbuster/year frame without TV drift.
 
 ---
 
 ## Remaining Gaps
 
-- [ ] Live E2E test execution (needs backend running)
-- [ ] Full multi-turn flow validation in browser
-- [ ] Accessibility audit on ConversationalHome (ARIA live regions, keyboard navigation)
-- [ ] Documentation refresh for Phases 5-6 and recommendation-quality refinements
-- [ ] Tune dynamic clarification heuristics further against live prompts if conversational feel still needs work
+- [ ] Run full browser smoke pass for all major conversational journeys after latest transparency changes.
+- [ ] Refresh older long-form memory docs where legacy assumptions still appear.
+- [ ] Add targeted automated tests for critics-intent guardrails and interpretation-note behavior.
 
 ---
 
 ## Next Steps
 
-1. **Live Validation:** Run browser and API smoke tests against real prompts to tune dynamic follow-up naturalness
-2. **Documentation:** Update README, phase summaries, and consolidated docs with the new clarification policy and recommendation-quality behavior
-3. **Deployment:** Redeploy if production should pick up commit `c3b590e`
-4. **v2 Planning:** User accounts, spoiler control, advanced filtering, personalization
-
-## Session Notes
-
-Dynamic clarification refinement is now shipped: freeform replies can satisfy multiple latent questions, redundant follow-ups are skipped, and weak-result loops are bounded. Backend tests and build are green, frontend build is green, and the changes are pushed to GitHub.
+1. Add regression tests for critics proxy and unsupported source clarification.
+2. Validate production/deployed behavior matches local changes.
+3. Continue documentation convergence (README/phase docs and memory-bank consolidated docs).

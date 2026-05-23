@@ -25,8 +25,8 @@ interface RecommendationRequest {
 
 interface RecommendationResponse {
   recommendations?: any[]
-  refinementSuggestions?: string[]
   appliedConstraints?: string[]
+  interpretationNote?: string
   retrievalDiagnostics?: {
     tmdbEnabled: boolean
     usedTmdb: boolean
@@ -86,7 +86,11 @@ function App() {
     }
 
     try {
-      const backendUrl = import.meta.env.VITE_BACKEND_URL || 'https://protogen-backend-1bvp.onrender.com'
+      const backendUrl =
+        import.meta.env.VITE_BACKEND_URL ||
+        (import.meta.env.DEV
+          ? 'http://localhost:3000'
+          : 'https://protogen-backend-1bvp.onrender.com')
       const response = await fetch(`${backendUrl}/recommendations`, {
         method: 'POST',
         headers: {
@@ -115,9 +119,8 @@ function App() {
       triggerText?: string
       detectedIntent?: RecommendationResponse['detectedIntent']
       turnOperation?: RecommendationResponse['turnOperation']
-      requiresDirectionConfirmation?: boolean
-      refinementSuggestions?: string[]
       appliedConstraints?: string[]
+      interpretationNote?: string
       retrievalDiagnostics?: RecommendationResponse['retrievalDiagnostics']
     }
   ) => {
@@ -127,9 +130,8 @@ function App() {
       recommendations,
       detectedIntent: options?.detectedIntent,
       turnOperation: options?.turnOperation,
-      requiresDirectionConfirmation: options?.requiresDirectionConfirmation,
       appliedConstraints: options?.appliedConstraints || [],
-      refinementSuggestions: options?.refinementSuggestions || [],
+      interpretationNote: options?.interpretationNote,
       retrievalDiagnostics: options?.retrievalDiagnostics
     })
   }
@@ -203,11 +205,8 @@ function App() {
             passCount={recommendationPasses.length}
             triggerText={activePass?.triggerText}
             turnOperation={activePass?.turnOperation}
-            requiresDirectionConfirmation={activePass?.requiresDirectionConfirmation}
-            directionConfirmationChoice={activePass?.directionConfirmationChoice}
-            confirmationTrace={activePass?.confirmationTrace}
             activeConstraints={activePass?.appliedConstraints || []}
-            refinementSuggestions={activePass?.refinementSuggestions || []}
+            interpretationNote={activePass?.interpretationNote}
             retrievalDiagnostics={activePass?.retrievalDiagnostics}
             onPreviousPass={() => conversation.setActivePassIndex(activePassIndex - 1)}
             onNextPass={() => conversation.setActivePassIndex(activePassIndex + 1)}

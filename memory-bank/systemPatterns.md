@@ -7,9 +7,10 @@ Frontend (React + TypeScript)
   -> POST /recommendations
 Backend API (Express + TypeScript)
   -> Preference parsing
-  -> OMDb search and enrichment
+  -> TMDB/OMDb retrieval strategy
   -> Content-safety filtering
   -> Ranking
+  -> Transparency guardrails + interpretation notes
   -> GitHub Models explanation generation
   -> Streaming Availability lookup
   -> TMDB trailer lookup
@@ -24,17 +25,23 @@ Backend API (Express + TypeScript)
 - Supports description-only and preferences-only flows
 - Normalizes region and request data before calling the engine
 - Applies confidence gating and weak-result clarification decisions
+- Applies honesty guardrails for unsupported explicit critic-source requests
+- Attaches interpretation notes when responses use proxy assumptions
 
 ### `src/engine/preferenceParser.ts`
 - Rule-based extraction of genres, moods, content type, and rating limits
 - Merges free-text clarification replies into the active preference analysis
 - Serves as the baseline parser even when LLM features are unavailable
+- Includes generalized genre alias parsing and critics-intent detection
+- Tracks pagination state for deterministic "show me more" behavior
 
 ### `src/engine/recommendationEngine.ts`
 - Central orchestration module
 - Combines parsing, search, filtering, ranking, explanations, availability, and trailers
 - Reuses reference-title metadata and suppresses anchor-title repeats for non-rewatch reference flows
 - Preserves graceful degradation when optional providers fail
+- Supports intent-specific retrieval paths (e.g., blockbuster paging and critics-year proxy)
+- Applies quality floors for critics-proxy mode to avoid low-signal/noisy results
 
 ### `src/clients/fmdb.ts`
 - OMDb client despite legacy filename
@@ -54,8 +61,8 @@ Backend API (Express + TypeScript)
 - Maps `streamingOptions[country]` into frontend-friendly availability objects
 
 ### `src/clients/tmdb.ts`
-- Trailer lookup by IMDb ID
-- Optional enrichment layer only
+- Year/popularity retrieval, details enrichment, credits, external-ID mapping, and trailers
+- Primary enrichment layer with graceful degradation behavior
 
 ---
 
@@ -66,15 +73,15 @@ Backend API (Express + TypeScript)
 - Infers region from browser locale
 - Manages loading, error, results, and page state
 
-### `frontend/src/pages/HomePage.tsx`
-- Collects description and optional preference controls
-- Enforces the current validation contract:
-  - description optional if preferences selected
-  - minimum length only when description is provided
+### `frontend/src/pages/ConversationalHome.tsx`
+- Primary interaction surface for freeform multi-turn conversation
+- Clarification options submit directly when backend asks follow-up questions
+- No meta-steering controls; next-turn refinement is freeform user text
 
 ### `frontend/src/pages/ResultsPage.tsx`
 - Renders result cards
 - Shows availability links or explicit fallback text
+- Displays active constraints and interpretation note when provided
 - Opens trailers inside a modal when trailer URLs exist
 
 ---
@@ -85,19 +92,21 @@ Backend API (Express + TypeScript)
 2. Frontend infers region from browser locale and includes it in request payload.
 3. Backend validates the request.
 4. Parser extracts preferences from the initial prompt and any clarification reply.
-5. Intent/confidence gating and weak-result quality checks decide whether to clarify or finalize.
-6. LLM optionally enriches parsing and explanations.
-7. OMDb returns title candidates and details.
-8. Engine filters unsafe content and ranks candidates with mode-specific and reference-aware heuristics.
-9. Engine enriches results with availability and trailers in batch-like workflows.
+5. Transparency guardrail checks explicit unsupported critic sources.
+6. Intent/confidence gating and weak-result quality checks decide whether to clarify or finalize.
+7. LLM optionally enriches parsing and explanations.
+8. TMDB/OMDb retrieval returns title candidates and details.
+9. Engine filters unsafe content and ranks candidates with mode-specific, reference-aware, and critics-proxy heuristics.
+10. Engine enriches results with availability and trailers in batch-like workflows.
+11. Backend returns applied constraints and interpretation note metadata for UI transparency.
 10. Frontend renders cards with graceful fallback for missing enrichments.
 
 ---
 
 ## Reliability Pattern
 
-- OMDb is the only required external data source for meaningful recommendations.
-- GitHub Models, RapidAPI, and TMDB are optional layers.
+- TMDB and OMDb are both used in retrieval/enrichment strategy with fallback behavior.
+- GitHub Models and RapidAPI enrichments remain optional layers.
 - If optional integrations fail:
   - recommendations still return
   - explanations fall back to templates
@@ -115,6 +124,7 @@ This pattern keeps the app functional under missing config, rate limits, or upst
 - Filter unsafe titles after OMDb normalization.
 - Keep adult-content blocking as a backend concern, not a frontend-only rule.
 - Prefer clarification over returning weak recommendation sets.
+- Never fabricate unavailable data-source support; disclose proxy behavior explicitly.
 
 ---
 

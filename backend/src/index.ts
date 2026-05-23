@@ -48,6 +48,8 @@ interface Recommendation {
   runtimeMinutes?: number
   rating?: number
   voteCount?: number
+  mainCast?: string[]
+  directors?: string[]
   synopsis?: string
   whyThis?: string
   posterUrl?: string
@@ -80,8 +82,8 @@ interface ApiResponse {
   success: boolean
   recommendations?: Recommendation[]
   requiresClarification?: RequiresClarification
-  refinementSuggestions?: string[]
   appliedConstraints?: string[]
+  interpretationNote?: string
   message?: string
   // Phase 5: Intent metadata (informational)
   detectedIntent?: {
@@ -113,35 +115,40 @@ const REFERENCE_NEAR_THRESHOLD_TOP_COMPOSITE = 0.43
 const REFERENCE_NEAR_THRESHOLD_FLOOR_COMPOSITE = 0.4
 const REFERENCE_NEAR_THRESHOLD_MIN_COUNT = 5
 
-const buildWeakResultRefinementSuggestions = (
-  mode: 'mood' | 'reference' | 'talent' | 'mixed' | undefined
+const buildAppliedConstraints = (
+  parsedPreferences: ParsedPreferencesSnapshot,
+  clarificationContext?: RecommendationRequest['clarificationContext']
 ): string[] => {
-  switch (mode) {
-    case 'reference':
-      return [
-        'Prioritise cast/director similarity',
-        'Lean more mainstream blockbusters',
-        'Focus on titles from the 80s or 90s'
-      ]
-    case 'talent':
-      return [
-        'Prioritise a specific genre',
-        'Only include movies (or only series)',
-        'Prefer recent releases'
-      ]
-    case 'mood':
-      return [
-        'Adjust the intensity (calmer or more intense)',
-        'Prioritise faster or slower pacing',
-        'Constrain to a specific decade'
-      ]
-    default:
-      return [
-        'Prioritise mood/tone first',
-        'Prioritise genre first',
-        'Constrain to a specific era or decade'
-      ]
+  const baseConstraints = clarificationContext?.cumulativeConstraints || []
+  const parsedConstraints = parsedPreferences.constraints || []
+  const pageConstraint = parsedPreferences.blockbusterPage
+    ? [`blockbuster_page:${parsedPreferences.blockbusterPage}`]
+    : []
+
+  return Array.from(new Set([...baseConstraints, ...parsedConstraints, ...pageConstraint]))
+}
+
+const EXPLICIT_UNSUPPORTED_CRITIC_SOURCES: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /\brotten\s*tomatoes\b|\brt\s*score\b/i, label: 'Rotten Tomatoes' },
+  { pattern: /\bmetacritic\b|\bmeta\s*score\b/i, label: 'Metacritic' },
+  { pattern: /\bletterboxd\b/i, label: 'Letterboxd' }
+]
+
+const detectUnsupportedCriticSource = (text: string): string | null => {
+  for (const source of EXPLICIT_UNSUPPORTED_CRITIC_SOURCES) {
+    if (source.pattern.test(text)) {
+      return source.label
+    }
   }
+  return null
+}
+
+const buildInterpretationNote = (parsedPreferences: ParsedPreferencesSnapshot): string | undefined => {
+  if (!parsedPreferences.criticsIntent) {
+    return undefined
+  }
+
+  return 'Interpreting "critics favourites" using available signals: TMDB/IMDb ratings and vote volume (not Rotten Tomatoes or Metacritic critic scores).'
 }
 
 const shouldPreferResultsFirst = (
@@ -236,8 +243,10 @@ const inferClarificationState = (
 ) => {
   const lowerAnswer = latestAnswer.toLowerCase()
   const genreKeywords = [
-    'action', 'comedy', 'drama', 'sci-fi', 'science fiction', 'thriller',
-    'romance', 'horror', 'fantasy', 'animation', 'documentary', 'indie'
+    'action', 'comedy', 'comedies', 'drama', 'sci-fi', 'sci fi', 'scifi', 'scifis',
+    'science fiction', 'thriller', 'thrillers', 'romance', 'romcom', 'romcoms',
+    'rom-com', 'rom-coms', 'horror', 'fantasy', 'animation', 'anime',
+    'documentary', 'documentaries', 'indie'
   ]
 
   const axisResolved =
@@ -479,6 +488,33 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
       preferences: preferencesObject,
       clarificationContext
     })
+    const appliedConstraints = buildAppliedConstraints(parsedPreferences, clarificationContext)
+    const interpretationNote = buildInterpretationNote(parsedPreferences)
+
+    const explicitUnsupportedSource = detectUnsupportedCriticSource(normalizedDescription)
+    if (explicitUnsupportedSource) {
+      return res.json({
+        success: true,
+        requiresClarification: {
+          context: `I can't directly rank by ${explicitUnsupportedSource} data in this build. I can continue using TMDB/IMDb rating and vote signals as a proxy if you want.`,
+          questions: [
+            {
+              id: 'critic_proxy_confirmation',
+              question: 'Continue with TMDB/IMDb rating-based proxy instead?',
+              type: 'select',
+              options: ['Yes, use TMDB/IMDb proxy', 'No, I will rephrase']
+            }
+          ]
+        },
+        detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence
+          ? {
+              mode: parsedPreferences.discoveryMode,
+              confidence: parsedPreferences.intentConfidence
+            }
+          : undefined,
+        turnOperation: parsedPreferences.turnOperation
+      })
+    }
 
     // Check if clarification is needed (only on first round, confidence-gated)
     const clarificationRound = clarificationContext?.clarificationRound ?? 0
@@ -569,17 +605,11 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
           console.log(
             `[${new Date().toISOString()}] Weak recommendation set detected; returning best available results with refinement suggestions`
           )
-          const appliedConstraints = [
-            ...(clarificationContext?.cumulativeConstraints || []),
-            ...(clarificationContext?.userClarification ? [clarificationContext.userClarification] : [])
-          ]
-
           return res.json({
             success: true,
             recommendations,
-            refinementSuggestions: clarification.questions[0]?.options?.slice(0, 3) ||
-              buildWeakResultRefinementSuggestions(parsedPreferences.discoveryMode),
             appliedConstraints,
+            interpretationNote,
             detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence !== undefined
               ? {
                   mode: parsedPreferences.discoveryMode,
@@ -598,6 +628,8 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
     res.json({
       success: true,
       recommendations,
+      appliedConstraints,
+      interpretationNote,
       detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence !== undefined
         ? {
             mode: parsedPreferences.discoveryMode,

@@ -63,6 +63,22 @@ interface TMDBPersonCredit {
   original_language?: string
 }
 
+interface TMDBCastMember {
+  name?: string
+  order?: number
+}
+
+interface TMDBCrewMember {
+  name?: string
+  job?: string
+  department?: string
+}
+
+interface TMDBCreditsResponse {
+  cast?: TMDBCastMember[]
+  crew?: TMDBCrewMember[]
+}
+
 export interface SearchQuery {
   query?: string
   includeMovies: boolean
@@ -218,6 +234,41 @@ export class TMDBClient {
     }
   }
 
+  async discoverPopularByYear(
+    year: number,
+    options: Partial<SearchQuery> = {},
+    page: number = 1
+  ): Promise<TMDBTitle[]> {
+    if (!this.isEnabled()) {
+      return []
+    }
+
+    const includeMovies = options.includeMovies ?? true
+    const includeTV = options.includeTV ?? true
+    const includeAdult = String(!options.excludeAdult)
+
+    try {
+      const [movieResults, tvResults] = await Promise.all([
+        includeMovies
+          ? this.fetchDiscoverByYear('movie', year, includeAdult, page)
+          : Promise.resolve([]),
+        includeTV
+          ? this.fetchDiscoverByYear('tv', year, includeAdult, page)
+          : Promise.resolve([])
+      ])
+
+      const combined = [...movieResults, ...tvResults]
+      return this.filterTitles(combined, {
+        includeMovies,
+        includeTV,
+        excludeAdult: options.excludeAdult ?? true
+      })
+    } catch (error) {
+      console.error('[TMDB] Discover by year error:', error)
+      return []
+    }
+  }
+
   /**
    * Gets detailed info about a specific title
    */
@@ -320,6 +371,120 @@ export class TMDBClient {
     } catch (error) {
       console.error('[TMDB] External IDs error:', error)
       return {}
+    }
+  }
+
+  async getTitleCredits(
+    titleId: number,
+    mediaType: 'movie' | 'tv'
+  ): Promise<{ mainCast: string[]; directors: string[] }> {
+    if (!this.isEnabled()) {
+      return { mainCast: [], directors: [] }
+    }
+
+    try {
+      const params = this.applyAuth(new URLSearchParams())
+      const response = await fetch(
+        `${this.baseUrl}/${mediaType}/${titleId}/credits?${params}`,
+        {
+          signal: AbortSignal.timeout(5000),
+          headers: this.buildAuthHeaders()
+        }
+      )
+
+      if (!response.ok) {
+        return { mainCast: [], directors: [] }
+      }
+
+      const data = await response.json() as TMDBCreditsResponse
+      const cast = (data.cast || [])
+        .filter(member => !!member.name)
+        .sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
+        .map(member => member.name!.trim())
+        .filter(name => name.length > 0)
+
+      const directors = (data.crew || [])
+        .filter(member => {
+          if (!member.name) {
+            return false
+          }
+
+          const job = (member.job || '').toLowerCase()
+          const department = (member.department || '').toLowerCase()
+
+          return (
+            job === 'director' ||
+            job === 'series director' ||
+            job === 'creator' ||
+            department === 'directing'
+          )
+        })
+        .map(member => member.name!.trim())
+        .filter(name => name.length > 0)
+
+      return {
+        mainCast: Array.from(new Set(cast)).slice(0, 5),
+        directors: Array.from(new Set(directors)).slice(0, 2)
+      }
+    } catch (error) {
+      console.error('[TMDB] Credits error:', error)
+      return { mainCast: [], directors: [] }
+    }
+  }
+
+  async findTitleByImdbId(
+    imdbId: string,
+    typeHint?: 'movie' | 'tv'
+  ): Promise<{ tmdbId: number; mediaType: 'movie' | 'tv' } | null> {
+    if (!this.isEnabled()) {
+      return null
+    }
+
+    try {
+      const params = this.applyAuth(new URLSearchParams({
+        external_source: 'imdb_id'
+      }))
+
+      const response = await fetch(
+        `${this.baseUrl}/find/${imdbId}?${params}`,
+        {
+          signal: AbortSignal.timeout(8000),
+          headers: this.buildAuthHeaders()
+        }
+      )
+
+      if (!response.ok) {
+        return null
+      }
+
+      const data = await response.json() as {
+        movie_results?: Array<{ id: number }>
+        tv_results?: Array<{ id: number }>
+      }
+
+      const movieResult = data.movie_results?.[0]
+      const tvResult = data.tv_results?.[0]
+
+      if (typeHint === 'movie' && movieResult) {
+        return { tmdbId: movieResult.id, mediaType: 'movie' }
+      }
+
+      if (typeHint === 'tv' && tvResult) {
+        return { tmdbId: tvResult.id, mediaType: 'tv' }
+      }
+
+      if (movieResult) {
+        return { tmdbId: movieResult.id, mediaType: 'movie' }
+      }
+
+      if (tvResult) {
+        return { tmdbId: tvResult.id, mediaType: 'tv' }
+      }
+
+      return null
+    } catch (error) {
+      console.error('[TMDB] Find by IMDb error:', error)
+      return null
     }
   }
 
@@ -433,36 +598,17 @@ export class TMDBClient {
     try {
       console.log(`[TMDB] Fetching trailer for ${imdbId} (${type})`)
 
-      // TMDB supports querying by IMDb ID using find endpoint
-      const params = this.applyAuth(new URLSearchParams({
-        external_source: 'imdb_id'
-      }))
-
-      const findResponse = await fetch(
-        `${this.baseUrl}/find/${imdbId}?${params}`,
-        {
-          signal: AbortSignal.timeout(8000),
-          headers: this.buildAuthHeaders()
-        }
-      )
-
-      if (!findResponse.ok) {
-        console.warn(`[TMDB] Find request failed: ${findResponse.status}`)
-        return undefined
-      }
-
-      const findData = await findResponse.json() as any
-      const results = type === 'movie' ? findData.movie_results : findData.tv_results
-
-      if (!results || results.length === 0) {
+      const match = await this.findTitleByImdbId(imdbId, type)
+      if (!match) {
         console.log(`[TMDB] No ${type} found for ${imdbId}`)
         return undefined
       }
 
-      const tmdbId = results[0].id
+      const tmdbId = match.tmdbId
+      const mediaType = match.mediaType
 
       // Get videos for this title
-      const videos = await this.getVideos(tmdbId, type)
+      const videos = await this.getVideos(tmdbId, mediaType)
 
       if (videos.length > 0) {
         const url = `https://www.youtube.com/watch?v=${videos[0].key}`
@@ -589,6 +735,41 @@ export class TMDBClient {
 
     const data = await response.json() as { results: TMDBTitle[] }
     return this.filterTitles(data.results, options)
+  }
+
+  private async fetchDiscoverByYear(
+    mediaType: 'movie' | 'tv',
+    year: number,
+    includeAdult: string,
+    page: number
+  ): Promise<TMDBTitle[]> {
+    const params = this.applyAuth(new URLSearchParams({
+      include_adult: includeAdult,
+      sort_by: 'popularity.desc',
+      page: String(Math.max(1, page)),
+      ...(mediaType === 'movie'
+        ? { primary_release_year: String(year) }
+        : { first_air_date_year: String(year) })
+    }))
+
+    const response = await fetch(
+      `${this.baseUrl}/discover/${mediaType}?${params}`,
+      {
+        signal: AbortSignal.timeout(5000),
+        headers: this.buildAuthHeaders()
+      }
+    )
+
+    if (!response.ok) {
+      return []
+    }
+
+    const data = await response.json() as { results: TMDBTitle[] }
+    const normalizedMediaType = mediaType === 'tv' ? 'tv' : 'movie'
+    return (data.results || []).map(item => ({
+      ...item,
+      media_type: item.media_type || normalizedMediaType
+    }))
   }
 
   private filterTitles(

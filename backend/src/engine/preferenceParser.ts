@@ -65,7 +65,10 @@ export interface ParsedPreferences {
   rankingStrategyPreference?: 'mood_first' | 'reference_first' | 'talent_first'
   resultLimit?: number
   preferTopRated?: boolean
+  criticsIntent?: boolean
   turnOperation?: TurnOperation
+  wantsMoreResults?: boolean
+  blockbusterPage?: number
 }
 
 export interface RecommendationRequest {
@@ -149,12 +152,12 @@ export class PreferenceParser {
   ]
 
   private static readonly TV_HINT_KEYWORDS = [
-    'tv', 'series', 'show', 'shows', 'season', 'seasons', 'episode', 'episodes'
+    'tv', 'series', 'season', 'seasons', 'episode', 'episodes'
   ]
 
   private static readonly GENRE_KEYWORDS: Record<string, string[]> = {
     'Action': ['action', 'fight', 'explosion', 'adventure', 'heroic', 'thrilling', 'combat'],
-    'Comedy': ['funny', 'laugh', 'comedy', 'humorous', 'hilarious', 'comic'],
+    'Comedy': ['funny', 'laugh', 'comedy', 'comedies', 'comedic', 'humorous', 'hilarious', 'comic'],
     'Drama': ['emotional', 'serious', 'dramatic', 'deep', 'character', 'intense'],
     'Horror': ['scary', 'horror', 'spooky', 'creepy', 'terrifying', 'frightening'],
     'Romance': ['romance', 'romantic', 'love', 'couple', 'relationship'],
@@ -165,6 +168,20 @@ export class PreferenceParser {
     'Documentary': ['documentary', 'real', 'true', 'educational'],
     'Indie': ['indie', 'independent', 'arthouse', 'art house', 'festival', 'hidden gem', 'cult']
   }
+
+  private static readonly GENRE_ALIAS_PATTERNS: Array<{ genre: string; pattern: RegExp }> = [
+    { genre: 'Action', pattern: /\b(action|actions|action-packed|adventure|adventures|combat|heroic)\b/i },
+    { genre: 'Comedy', pattern: /\b(comedy|comedies|comedic|funny|hilarious|humorous|laugh|laughing|comic|romcom|romcoms|rom-com|rom-coms)\b/i },
+    { genre: 'Drama', pattern: /\b(drama|dramas|dramatic|character-driven|emotional)\b/i },
+    { genre: 'Horror', pattern: /\b(horror|horrors|scary|spooky|creepy|terrifying|frightening)\b/i },
+    { genre: 'Romance', pattern: /\b(romance|romances|romantic|love\s+story|love\s+stories|relationship|relationships|romcom|romcoms|rom-com|rom-coms)\b/i },
+    { genre: 'Sci-Fi', pattern: /\b(sci-fi|sci fi|scifi|scifis|science\s+fiction|science-fiction|cyberpunk|dystopian)\b/i },
+    { genre: 'Thriller', pattern: /\b(thriller|thrillers|suspense|suspenseful|mystery|mysteries|detective|crime)\b/i },
+    { genre: 'Animation', pattern: /\b(animation|animated|anime|cartoon|cartoons)\b/i },
+    { genre: 'Fantasy', pattern: /\b(fantasy|fantasies|magic|magical|mythic|legend)\b/i },
+    { genre: 'Documentary', pattern: /\b(documentary|documentaries|docuseries|non-fiction|nonfiction|true\s+story|true\s+stories)\b/i },
+    { genre: 'Indie', pattern: /\b(indie|indies|independent|arthouse|art\s+house|festival|hidden\s+gem|hidden\s+gems|cult)\b/i }
+  ]
 
   private static readonly MOOD_KEYWORDS: Record<string, string[]> = {
     'Happy': ['happy', 'uplifting', 'feel-good', 'cheerful', 'light', 'fun'],
@@ -190,12 +207,12 @@ export class PreferenceParser {
 
   // Patterns for extracting exclusions
   private static readonly EXCLUSION_PATTERNS = [
-    /no\s+(\w+)/gi,
-    /avoid\s+(\w+)/gi,
-    /not\s+(\w+)/gi,
-    /without\s+(\w+)/gi,
-    /hate\s+(\w+)/gi,
-    /(?:^|[\s,])(?:don't|do\s+not)\s+want\s+(\w+)/gi
+    /no\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
+    /avoid\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
+    /not\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
+    /without\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
+    /hate\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
+    /(?:^|[\s,])(?:don't|do\s+not)\s+want\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi
   ]
 
   // Strength modifiers for moods
@@ -264,6 +281,33 @@ export class PreferenceParser {
     'crowd pleaser'
   ]
 
+  private static readonly CRITICS_KEYWORDS = [
+    'critic',
+    'critics',
+    'critically acclaimed',
+    'acclaimed',
+    'award-winning',
+    'award winning',
+    'festival favourite',
+    'festival favorite',
+    'best reviewed',
+    'best-reviewed',
+    'highest rated',
+    'top rated',
+    'favourite',
+    'favorite'
+  ]
+
+  private static readonly MORE_RESULTS_PATTERNS = [
+    /^show\s+me\s+more\b/i,
+    /^more\b/i,
+    /^more\s+please\b/i,
+    /^another\b/i,
+    /^next(?:\s+page)?\b/i,
+    /^keep\s+going\b/i,
+    /^give\s+me\s+more\b/i
+  ]
+
   private static readonly CONTRASTIVE_CONNECTORS = [
     ' but ',
     ' instead ',
@@ -307,8 +351,6 @@ export class PreferenceParser {
   } {
     const excludedGenres: string[] = []
     const constraints: string[] = []
-    const lowerDesc = description.toLowerCase()
-
     // Look for genre exclusions
     for (const pattern of this.EXCLUSION_PATTERNS) {
       let match
@@ -316,13 +358,10 @@ export class PreferenceParser {
         const term = match[1]?.toLowerCase() || ''
         if (!term) continue
 
-        // Check if it's a genre
-        const matchedGenre = Object.keys(this.GENRE_KEYWORDS).find(g =>
-          g.toLowerCase().includes(term) || term.includes(g.toLowerCase())
-        )
+        const matchedGenres = this.detectGenres(term)
 
-        if (matchedGenre) {
-          excludedGenres.push(matchedGenre)
+        if (matchedGenres.length > 0) {
+          excludedGenres.push(...matchedGenres)
         } else if (term.length > 2) {
           // Store as constraint for secondary filtering
           constraints.push(term)
@@ -334,6 +373,31 @@ export class PreferenceParser {
       excludedGenres: Array.from(new Set(excludedGenres)),
       constraints: Array.from(new Set(constraints))
     }
+  }
+
+  private static detectGenres(text: string): string[] {
+    const lower = text.toLowerCase()
+    const normalized = lower
+      .replace(/[_/]/g, ' ')
+      .replace(/[^a-z0-9\s-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    const detected = new Set<string>()
+
+    for (const [genre, keywords] of Object.entries(this.GENRE_KEYWORDS)) {
+      if (keywords.some(keyword => normalized.includes(keyword))) {
+        detected.add(genre)
+      }
+    }
+
+    for (const alias of this.GENRE_ALIAS_PATTERNS) {
+      if (alias.pattern.test(normalized)) {
+        detected.add(alias.genre)
+      }
+    }
+
+    return Array.from(detected)
   }
 
   /**
@@ -420,11 +484,7 @@ export class PreferenceParser {
     preferences.mood = Array.from(preferences.moodStrength.keys())
 
     // === PHASE 1 STEP 1.1: Extract genres (existing logic) ===
-    for (const [genre, keywords] of Object.entries(this.GENRE_KEYWORDS)) {
-      if (keywords.some(keyword => description.includes(keyword))) {
-        preferences.genres.push(genre)
-      }
-    }
+    preferences.genres = this.detectGenres(description)
 
     // Remove excluded genres from detected genres
     if (preferences.excludedGenres.length > 0) {
@@ -484,10 +544,49 @@ export class PreferenceParser {
     if (refinementSignals.preferTopRated) {
       preferences.preferTopRated = refinementSignals.preferTopRated
     }
+    if (refinementSignals.criticsIntent) {
+      preferences.criticsIntent = true
+    }
     if (refinementSignals.constraints.length > 0) {
       preferences.constraints = Array.from(
         new Set([...(preferences.constraints || []), ...refinementSignals.constraints])
       )
+    }
+
+    const latestClarification = request.clarificationContext?.userClarification?.trim() || ''
+    preferences.wantsMoreResults = this.isMoreResultsRequest(latestClarification)
+
+    const currentBlockbusterPage = this.extractBlockbusterPageFromConstraints(
+      request.clarificationContext?.cumulativeConstraints || []
+    )
+
+    if (
+      preferences.popularityPreference === 'mainstream' &&
+      preferences.yearRange?.min !== undefined &&
+      preferences.yearRange?.max !== undefined &&
+      preferences.yearRange.min === preferences.yearRange.max
+    ) {
+      preferences.blockbusterPage = preferences.wantsMoreResults
+        ? currentBlockbusterPage + 1
+        : Math.max(1, currentBlockbusterPage)
+    }
+
+    // Blockbuster-style requests should default to movies unless user explicitly asked for TV.
+    if (
+      preferences.popularityPreference === 'mainstream' &&
+      preferences.contentType === 'both' &&
+      !this.TV_HINT_KEYWORDS.some(keyword => description.includes(keyword))
+    ) {
+      preferences.contentType = 'movie'
+    }
+
+    // Critics-oriented requests should default to movies unless TV is explicit.
+    if (
+      preferences.criticsIntent &&
+      preferences.contentType === 'both' &&
+      !this.TV_HINT_KEYWORDS.some(keyword => description.includes(keyword))
+    ) {
+      preferences.contentType = 'movie'
     }
 
     // If novelty intent is explicit, enrich retrieval hints without hardcoding a single prompt.
@@ -522,7 +621,8 @@ export class PreferenceParser {
     if (
       preferences.genres.length === 0 &&
       !request.preferences?.genres &&
-      (preferences.referenceTitle?.length || 0) === 0
+      (preferences.referenceTitle?.length || 0) === 0 &&
+      !this.isClearRefinementRequest(preferences)
     ) {
       preferences.genres = this.inferFallbackGenresFromMood(preferences)
     }
@@ -590,6 +690,26 @@ export class PreferenceParser {
       confidence += 0.05
     }
 
+    // Explicit structured constraints usually indicate an intentional refinement,
+    // so avoid over-triggering extra "quick check" prompts.
+    if ((preferences.genres?.length || 0) > 0) {
+      confidence += 0.12
+      rationaleTags.push('explicit_genre_constraint')
+    }
+
+    if (preferences.contentType !== 'both') {
+      confidence += 0.06
+      rationaleTags.push('explicit_content_type')
+    }
+
+    if (
+      preferences.yearRange?.min !== undefined &&
+      preferences.yearRange?.max !== undefined
+    ) {
+      confidence += 0.06
+      rationaleTags.push('explicit_year_constraint')
+    }
+
     return {
       continuity,
       operation,
@@ -625,6 +745,7 @@ export class PreferenceParser {
     rankingStrategyPreference?: 'mood_first' | 'reference_first' | 'talent_first'
     resultLimit?: number
     preferTopRated?: boolean
+    criticsIntent?: boolean
     constraints: string[]
   } {
     const constraints: string[] = []
@@ -632,6 +753,7 @@ export class PreferenceParser {
     let rankingStrategyPreference: 'mood_first' | 'reference_first' | 'talent_first' | undefined
     let resultLimit: number | undefined
     let preferTopRated = false
+    let criticsIntent = false
 
     const hasMainstream = this.MAINSTREAM_KEYWORDS.some(keyword => description.includes(keyword))
     const hasNiche = this.NOVELTY_KEYWORDS.some(keyword => description.includes(keyword))
@@ -661,15 +783,30 @@ export class PreferenceParser {
     const decades = Array.from(new Set([...explicitDecades, ...shorthandDecades]))
       .filter(year => Number.isFinite(year) && year >= 1960 && year <= 2030)
 
-    const yearRange = decades.length > 0
+    const explicitYears = Array.from(description.matchAll(/\b(19\d{2}|20\d{2})\b/g))
+      .map(match => parseInt(match[1], 10))
+      .filter(year => Number.isFinite(year) && year >= 1960 && year <= 2035)
+
+    const uniqueExplicitYears = Array.from(new Set(explicitYears))
+
+    const yearRange = uniqueExplicitYears.length > 0
       ? {
-          min: Math.min(...decades),
-          max: Math.max(...decades) + 9
+          min: Math.min(...uniqueExplicitYears),
+          max: Math.max(...uniqueExplicitYears)
         }
-      : undefined
+      : decades.length > 0
+        ? {
+            min: Math.min(...decades),
+            max: Math.max(...decades) + 9
+          }
+        : undefined
 
     if (yearRange?.min !== undefined) {
-      constraints.push(`decade:${yearRange.min}s`)
+      if (yearRange.max !== undefined && yearRange.min === yearRange.max) {
+        constraints.push(`year:${yearRange.min}`)
+      } else {
+        constraints.push(`decade:${yearRange.min}s`)
+      }
     }
 
     if (
@@ -709,6 +846,14 @@ export class PreferenceParser {
       /\b(top|best|highest)\s+(rated|rating|reviewed)\b/.test(description) ||
       /\b(rated|rating)\s+(highest|best)\b/.test(description)
 
+    const hasCriticsCue = this.CRITICS_KEYWORDS.some(keyword => description.includes(keyword))
+
+    if (hasCriticsCue) {
+      criticsIntent = true
+      preferTopRated = true
+      constraints.push('ranking:critic_proxy')
+    }
+
     if (hasRatingOrderCue) {
       preferTopRated = true
       constraints.push('sort:rating_desc')
@@ -720,6 +865,7 @@ export class PreferenceParser {
       rankingStrategyPreference,
       resultLimit,
       preferTopRated,
+      criticsIntent,
       constraints
     }
   }
@@ -782,6 +928,35 @@ export class PreferenceParser {
   private static hasNoveltyIntent(description: string): boolean {
     const lower = description.toLowerCase()
     return this.NOVELTY_KEYWORDS.some(keyword => lower.includes(keyword))
+  }
+
+  private static isMoreResultsRequest(latestClarification: string): boolean {
+    if (!latestClarification) {
+      return false
+    }
+
+    return this.MORE_RESULTS_PATTERNS.some(pattern => pattern.test(latestClarification))
+  }
+
+  private static extractBlockbusterPageFromConstraints(constraints: string[]): number {
+    if (!constraints || constraints.length === 0) {
+      return 1
+    }
+
+    const pageEntry = [...constraints]
+      .reverse()
+      .find(constraint => /^blockbuster_page:\d+$/i.test(constraint.trim()))
+
+    if (!pageEntry) {
+      return 1
+    }
+
+    const parsed = Number(pageEntry.split(':')[1])
+    if (!Number.isFinite(parsed) || parsed < 1) {
+      return 1
+    }
+
+    return parsed
   }
 
   private static isClearRefinementRequest(preferences: ParsedPreferences): boolean {

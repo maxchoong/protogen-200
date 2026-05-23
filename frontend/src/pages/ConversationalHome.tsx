@@ -27,8 +27,8 @@ interface ConversationalHomeProps {
       confidence: number
       rationaleTags: string[]
     }
-    refinementSuggestions?: string[]
     appliedConstraints?: string[]
+    interpretationNote?: string
     retrievalDiagnostics?: {
       tmdbEnabled: boolean
       usedTmdb: boolean
@@ -48,9 +48,8 @@ interface ConversationalHomeProps {
         confidence: number
         rationaleTags: string[]
       }
-      requiresDirectionConfirmation?: boolean
-      refinementSuggestions?: string[]
       appliedConstraints?: string[]
+      interpretationNote?: string
       retrievalDiagnostics?: {
         tmdbEnabled: boolean
         usedTmdb: boolean
@@ -169,27 +168,15 @@ export default function ConversationalHome({
         })
         conversation.updateClarificationRound(state.clarificationRound + 1)
       } else if (response.recommendations && response.recommendations.length > 0) {
-        const lowConfidenceTurn = (response.turnOperation?.confidence || 1) < 0.62
-        const shouldAskDirectionConfirmation =
-          lowConfidenceTurn && response.recommendations.length > 3
-
         conversation.addMessage({
           role: 'assistant',
-          text: `Found ${response.recommendations.length} recommendations for you.`,
+          text: response.interpretationNote
+            ? `Here are ${response.recommendations.length} recommendations you might like. ${response.interpretationNote}`
+            : `Here are ${response.recommendations.length} recommendations you might like.`,
           timestamp: Date.now(),
           recommendations: response.recommendations,
           detectedIntent: response.detectedIntent,
-          turnOperation: response.turnOperation,
-          clarificationQuestions: shouldAskDirectionConfirmation
-            ? [
-                {
-                  id: 'turn_direction_confirm',
-                  question: 'Quick check: should I stay close to this direction, or broaden things on the next round?',
-                  type: 'select',
-                  options: ['Stay close to this direction', 'Broaden the search']
-                }
-              ]
-            : undefined
+          turnOperation: response.turnOperation
         })
 
         conversation.updateClarificationRound(0)
@@ -199,9 +186,8 @@ export default function ConversationalHome({
             triggerText: trimmed,
             detectedIntent: response.detectedIntent,
             turnOperation: response.turnOperation,
-            requiresDirectionConfirmation: shouldAskDirectionConfirmation,
-            refinementSuggestions: response.refinementSuggestions,
             appliedConstraints: response.appliedConstraints,
+            interpretationNote: response.interpretationNote,
             retrievalDiagnostics: response.retrievalDiagnostics
           })
         }
@@ -243,14 +229,6 @@ export default function ConversationalHome({
   const handleClarificationSelect = async (optionText: string) => {
     if (state.isLoading) {
       return
-    }
-
-    if (optionText === 'Stay close to this direction') {
-      conversation.resolveLatestDirectionConfirmation('keep_direction')
-    }
-
-    if (optionText === 'Broaden the search') {
-      conversation.resolveLatestDirectionConfirmation('pivot_direction')
     }
 
     await submitMessage(optionText, { forceFollowUp: true })

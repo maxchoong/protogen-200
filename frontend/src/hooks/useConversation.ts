@@ -30,20 +30,12 @@ export interface RecommendationPass {
   detectedIntent?: DetectedIntent
   turnOperation?: TurnOperation
   appliedConstraints?: string[]
-  refinementSuggestions?: string[]
+  interpretationNote?: string
   retrievalDiagnostics?: {
     tmdbEnabled: boolean
     usedTmdb: boolean
     usedOmdb: boolean
     omdbFallbackUsed: boolean
-  }
-  requiresDirectionConfirmation?: boolean
-  directionConfirmationChoice?: 'keep_direction' | 'pivot_direction'
-  directionConfirmationResolvedAt?: number
-  confirmationTrace?: {
-    fromChoice: 'keep_direction' | 'pivot_direction'
-    outcomeContinuity?: TurnOperation['continuity']
-    aligned: boolean
   }
 }
 
@@ -123,29 +115,10 @@ export function useConversation() {
 
   const addRecommendationPass = useCallback((pass: Omit<RecommendationPass, 'id' | 'timestamp'>) => {
     setState(prev => {
-      const previousPass =
-        prev.recommendationPasses.length > 0
-          ? prev.recommendationPasses[prev.recommendationPasses.length - 1]
-          : undefined
-
-      const previousChoice = previousPass?.directionConfirmationChoice
-      const outcomeContinuity = pass.turnOperation?.continuity
-
-      const confirmationTrace = previousChoice && outcomeContinuity
-        ? {
-            fromChoice: previousChoice,
-            outcomeContinuity,
-            aligned:
-              (previousChoice === 'keep_direction' && outcomeContinuity === 'continue') ||
-              (previousChoice === 'pivot_direction' && outcomeContinuity !== 'continue')
-          }
-        : undefined
-
       const nextPass: RecommendationPass = {
         ...pass,
         id: generateMessageId(),
-        timestamp: Date.now(),
-        confirmationTrace
+        timestamp: Date.now()
       }
 
       const recommendationPasses = [...prev.recommendationPasses, nextPass]
@@ -169,32 +142,6 @@ export function useConversation() {
       }
     })
   }, [])
-
-  const resolveLatestDirectionConfirmation = useCallback(
-    (choice: 'keep_direction' | 'pivot_direction') => {
-      setState(prev => {
-        const recommendationPasses = [...prev.recommendationPasses]
-
-        for (let idx = recommendationPasses.length - 1; idx >= 0; idx -= 1) {
-          const pass = recommendationPasses[idx]
-          if (pass.requiresDirectionConfirmation && !pass.directionConfirmationChoice) {
-            recommendationPasses[idx] = {
-              ...pass,
-              directionConfirmationChoice: choice,
-              directionConfirmationResolvedAt: Date.now()
-            }
-            break
-          }
-        }
-
-        return {
-          ...prev,
-          recommendationPasses
-        }
-      })
-    },
-    []
-  )
 
   const reset = useCallback(() => {
     setState({
@@ -221,7 +168,6 @@ export function useConversation() {
     markInitialRequestComplete,
     addRecommendationPass,
     setActivePassIndex,
-    resolveLatestDirectionConfirmation,
     reset
   }
 }

@@ -35,6 +35,19 @@ This file includes:
 - Consolidated docs in older files may still contain legacy terms and should be refreshed over time.
 - Development secrets referenced in local history should be rotated.
 
+### Update – May 23, 2026
+
+Recent as-built changes since the March baseline:
+
+- Removed meta-steering prompt and suggestion chips from the conversational UX.
+- Follow-up refinement is now fully freeform (type what you want next).
+- Added generalized genre alias parsing (e.g., `scifi`, `romcom`, plurals/hyphenated forms).
+- Added deterministic blockbuster paging with persisted `blockbuster_page` constraints.
+- Added critics-intent proxy mode with explicit `interpretationNote` in responses.
+- Added unsupported-source guardrail for explicit Rotten Tomatoes / Metacritic / Letterboxd requests.
+- Added richer TMDB metadata enrichment for cast/director/language/runtime.
+- Fixed explanation fallback to avoid literal `"null"` in `whyThis`.
+
 ---
 
 ## 1. Product Requirements Document (PRD)
