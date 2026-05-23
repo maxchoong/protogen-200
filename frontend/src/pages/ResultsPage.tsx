@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react'
-import { ConversationMessage } from '../hooks/useConversation'
 
 interface Recommendation {
   id: string
@@ -17,42 +16,70 @@ interface Recommendation {
   trailerUrl?: string
 }
 
+interface TurnOperation {
+  continuity: 'continue' | 'soft_pivot' | 'hard_pivot'
+  operation: 'narrow' | 'widen' | 'replace'
+  confidence: number
+  rationaleTags: string[]
+}
+
 interface ResultsPageProps {
   results: Recommendation[]
   query: string
-  onBackHome: () => void
-  conversationMessages?: ConversationMessage[]
+  passIndex: number
+  passCount: number
+  triggerText?: string
+  turnOperation?: TurnOperation
+  requiresDirectionConfirmation?: boolean
+  directionConfirmationChoice?: 'keep_direction' | 'pivot_direction'
+  confirmationTrace?: {
+    fromChoice: 'keep_direction' | 'pivot_direction'
+    outcomeContinuity?: TurnOperation['continuity']
+    aligned: boolean
+  }
   activeConstraints?: string[]
   refinementSuggestions?: string[]
-  onRefine?: (refinementText: string) => Promise<void>
   retrievalDiagnostics?: {
     tmdbEnabled: boolean
     usedTmdb: boolean
     usedOmdb: boolean
     omdbFallbackUsed: boolean
   }
+  onPreviousPass: () => void
+  onNextPass: () => void
+}
+
+const formatTurnOperation = (turnOperation?: TurnOperation): string => {
+  if (!turnOperation) {
+    return 'Initial pass'
+  }
+
+  const continuity = turnOperation.continuity.replace('_', ' ')
+  return `${continuity} + ${turnOperation.operation}`
 }
 
 export default function ResultsPage({
   results,
   query,
-  onBackHome,
-  conversationMessages = [],
+  passIndex,
+  passCount,
+  triggerText,
+  turnOperation,
+  requiresDirectionConfirmation,
+  directionConfirmationChoice,
+  confirmationTrace,
   activeConstraints = [],
   refinementSuggestions = [],
-  onRefine,
-  retrievalDiagnostics
+  retrievalDiagnostics,
+  onPreviousPass,
+  onNextPass
 }: ResultsPageProps) {
   const [trailerModal, setTrailerModal] = useState<{ isOpen: boolean; url: string; title: string }>({
     isOpen: false,
     url: '',
     title: ''
   })
-  const [refinementInput, setRefinementInput] = useState('')
-  const [isRefining, setIsRefining] = useState(false)
-  const [refineError, setRefineError] = useState<string | null>(null)
 
-  // Handle Escape key to close modal
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && trailerModal.isOpen) {
@@ -65,7 +92,6 @@ export default function ResultsPage({
   }, [trailerModal.isOpen])
 
   const openTrailer = (url: string, title: string) => {
-    // Convert watch URL to embed URL
     const videoId = url.split('v=')[1]?.split('&')[0]
     if (videoId) {
       setTrailerModal({
@@ -80,192 +106,140 @@ export default function ResultsPage({
     setTrailerModal({ isOpen: false, url: '', title: '' })
   }
 
-  const submitRefinement = async (value: string) => {
-    if (!onRefine) {
-      return
-    }
-
-    const trimmed = value.trim()
-    if (!trimmed) {
-      return
-    }
-
-    try {
-      setIsRefining(true)
-      setRefineError(null)
-      await onRefine(trimmed)
-      setRefinementInput('')
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to refine results right now.'
-      setRefineError(message)
-    } finally {
-      setIsRefining(false)
-    }
-  }
-
   return (
-    <div className="min-h-screen px-4 py-8">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <button
-          onClick={onBackHome}
-          className="mb-8 rounded-pill border border-border bg-surface px-4 py-2 text-sm text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus"
-          aria-label="Back to conversation"
-        >
-          ← Back to conversation
-        </button>
+    <div className="h-full overflow-y-auto px-4 py-6">
+      <div className="mx-auto max-w-3xl">
+        <div className="mb-6">
+          <p className="mb-2 text-xs uppercase tracking-[0.16em] text-text-muted">Current curated pass</p>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-surface-2 px-4 py-3">
+            <div>
+              <h2 className="font-serif text-2xl font-medium tracking-[-0.02em] text-text">Recommendations</h2>
+              <p className="mt-1 text-sm text-text-muted">
+                {passCount > 0 ? `Pass ${passIndex + 1} of ${passCount}` : 'No passes yet'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onPreviousPass}
+                disabled={passCount === 0 || passIndex <= 0}
+                className="rounded-pill border border-border bg-surface px-3 py-1.5 text-xs text-text transition-colors hover:border-accent disabled:opacity-50"
+                aria-label="Previous recommendation pass"
+              >
+                Previous pass
+              </button>
+              <button
+                onClick={onNextPass}
+                disabled={passCount === 0 || passIndex >= passCount - 1}
+                className="rounded-pill border border-border bg-surface px-3 py-1.5 text-xs text-text transition-colors hover:border-accent disabled:opacity-50"
+                aria-label="Next recommendation pass"
+              >
+                Next pass
+              </button>
+            </div>
+          </div>
+        </div>
 
-        <p className="mb-2 text-xs uppercase tracking-[0.18em] text-text-muted">Curated selections</p>
-        <h1 className="mb-3 font-serif text-4xl font-medium tracking-[-0.03em] text-text md:text-[2.8rem]">
-          Recommendations
-        </h1>
-        <p className="mb-8 max-w-2xl text-[15px] leading-relaxed text-text-muted">
-          Based on: <span className="italic">"{query}"</span>
-        </p>
+        {query && (
+          <div className="mb-5 rounded-lg border border-border bg-surface p-4 shadow-card">
+            <p className="text-xs uppercase tracking-[0.14em] text-text-muted">Based on</p>
+            <p className="mt-1 text-sm text-text">{query}</p>
+            {triggerText && triggerText !== query && (
+              <p className="mt-2 text-xs text-text-muted">Latest note: {triggerText}</p>
+            )}
+            <p className="mt-2 text-xs text-text-muted">Turn type: {formatTurnOperation(turnOperation)}</p>
+            {requiresDirectionConfirmation && !directionConfirmationChoice && (
+              <p className="mt-2 rounded-sm border border-amber-300/40 bg-amber-100/10 px-2 py-1 text-xs text-amber-100">
+                Quick check pending in the conversation: stay close to this lane, or take a bigger swing.
+              </p>
+            )}
+            {directionConfirmationChoice && (
+              <p className="mt-2 text-xs text-text-muted">
+                Direction set: {directionConfirmationChoice === 'keep_direction' ? 'Stay close to this lane' : 'Take a bigger swing'}
+              </p>
+            )}
+            {confirmationTrace && (
+              <p
+                className={`mt-2 text-xs ${confirmationTrace.aligned ? 'text-emerald-300' : 'text-amber-200'}`}
+              >
+                Check-in: you picked {confirmationTrace.fromChoice === 'keep_direction' ? 'stay close to this lane' : 'take a bigger swing'}, and the next pass came back as {confirmationTrace.outcomeContinuity?.replace('_', ' ') || 'unknown'} {confirmationTrace.aligned ? '(aligned)' : '(diverged)'}. 
+              </p>
+            )}
+          </div>
+        )}
+
+        {activeConstraints.length > 0 && (
+          <div className="mb-5 rounded-lg border border-border bg-surface p-4 shadow-card">
+            <p className="mb-2 text-xs uppercase tracking-[0.14em] text-text-muted">Active direction</p>
+            <div className="flex flex-wrap gap-2">
+              {activeConstraints.map((constraint, idx) => (
+                <span
+                  key={`${constraint}-${idx}`}
+                  className="rounded-pill border border-border bg-surface-2 px-3 py-1 text-xs text-text"
+                >
+                  {constraint}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {refinementSuggestions.length > 0 && (
+          <div className="mb-5 rounded-lg border border-border bg-surface p-4 shadow-card">
+            <p className="mb-2 text-xs uppercase tracking-[0.14em] text-text-muted">Suggested follow-ups</p>
+            <div className="flex flex-wrap gap-2">
+              {refinementSuggestions.map((suggestion, idx) => (
+                <span
+                  key={`${suggestion}-${idx}`}
+                  className="rounded-pill border border-border bg-surface-2 px-3 py-1 text-xs text-text-muted"
+                >
+                  {suggestion}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
         {retrievalDiagnostics && (
-          <section
-            className={`mb-6 rounded-lg border px-4 py-3 text-sm ${
-              retrievalDiagnostics.omdbFallbackUsed || (!retrievalDiagnostics.tmdbEnabled && retrievalDiagnostics.usedOmdb)
-                ? 'border-amber-300/40 bg-amber-100/10 text-amber-100'
-                : 'border-border bg-surface-2 text-text'
-            }`}
-            aria-label="Catalog source diagnostics"
-          >
-            <p className="font-semibold">Catalog source diagnostics</p>
-            <p className="mt-1">
+          <details className="mb-5 rounded-lg border border-border bg-surface p-4 shadow-card">
+            <summary className="cursor-pointer text-xs uppercase tracking-[0.14em] text-text-muted">Diagnostics</summary>
+            <p className="mt-3 text-sm text-text-muted">
               {retrievalDiagnostics.omdbFallbackUsed
-                ? 'OMDB fallback engaged (TMDB available but no usable TMDB candidates for this request).'
+                ? 'OMDB fallback engaged (TMDB was available but returned no usable candidates).'
                 : !retrievalDiagnostics.tmdbEnabled && retrievalDiagnostics.usedOmdb
                   ? 'Using OMDB because TMDB is not configured in this environment.'
                   : retrievalDiagnostics.usedTmdb && !retrievalDiagnostics.usedOmdb
-                    ? 'Using TMDB results.'
+                    ? 'Using TMDB retrieval.'
                     : retrievalDiagnostics.usedTmdb && retrievalDiagnostics.usedOmdb
                       ? 'Using mixed TMDB + OMDB retrieval.'
                       : 'Catalog source unavailable for this response.'}
             </p>
-          </section>
+          </details>
         )}
 
-        {conversationMessages.length > 0 && (
-          <section className="mb-8 rounded-lg border border-border bg-surface p-6 shadow-card" aria-label="Conversation thread">
-            <p className="mb-2 text-xs uppercase tracking-[0.16em] text-text-muted">Conversation thread</p>
-            <h2 className="mb-4 font-serif text-2xl font-medium tracking-[-0.02em] text-text">Editorial Notes</h2>
-            <div className="space-y-4" role="log" aria-live="polite">
-              {conversationMessages.map(message => (
-                <div
-                  key={message.id}
-                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <article
-                    className={`max-w-[85%] rounded-lg border px-4 py-3 shadow-card ${
-                    message.role === 'user'
-                      ? 'rounded-br-none border-accent/50 bg-accent/12 text-text'
-                      : 'rounded-bl-none border-border bg-bg text-text'
-                  }`}
-                  >
-                    <p className="mb-1 text-[11px] tracking-[0.08em] text-text-muted">
-                      {message.role === 'user' ? 'You' : 'Advisor'}
-                    </p>
-                    <p className="text-sm leading-relaxed">{message.text}</p>
-                  </article>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
-        <section className="mb-8 rounded-lg border border-border bg-surface p-6 shadow-card" aria-label="Refine recommendations">
-          <p className="mb-2 text-xs uppercase tracking-[0.16em] text-text-muted">Refinement desk</p>
-          <h2 className="mb-2 font-serif text-2xl font-medium tracking-[-0.02em] text-text">Shape the next pass</h2>
-          <p className="mb-5 max-w-2xl text-sm leading-relaxed text-text-muted">
-            Add a note in plain language and I will re-curate the list. Try: prioritize blockbusters, focus on 80s titles, or make the tone less dark.
-          </p>
-
-          {activeConstraints.length > 0 && (
-            <div className="mb-5" aria-label="Active refinement constraints">
-              <p className="mb-2 text-xs uppercase tracking-[0.14em] text-text-muted">Current direction</p>
-              <div className="flex flex-wrap gap-2.5">
-                {activeConstraints.map((constraint, idx) => (
-                  <span
-                    key={`${constraint}-${idx}`}
-                    className="rounded-pill border border-border bg-surface-2 px-3 py-1 text-xs text-text"
-                  >
-                    {constraint}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {refinementSuggestions.length > 0 && (
-            <div className="mb-5" aria-label="Suggested refinements">
-              <p className="mb-2 text-xs uppercase tracking-[0.14em] text-text-muted">Suggested edits</p>
-              <div className="flex flex-wrap gap-2.5">
-                {refinementSuggestions.map((suggestion, idx) => (
-                  <button
-                    key={`${suggestion}-${idx}`}
-                    onClick={() => void submitRefinement(suggestion)}
-                    disabled={isRefining}
-                    className="rounded-pill border border-border bg-surface-2 px-3 py-1.5 text-xs text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus disabled:opacity-50"
-                  >
-                    {suggestion}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="flex flex-col gap-3 md:flex-row md:items-center">
-            <input
-              value={refinementInput}
-              onChange={(e) => setRefinementInput(e.target.value)}
-              placeholder="Write your editorial note..."
-              disabled={isRefining}
-              className="flex-1 rounded-pill border border-border bg-surface-2 px-4 py-2.5 text-sm text-text placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-focus disabled:opacity-50"
-            />
-            <button
-              onClick={() => void submitRefinement(refinementInput)}
-              disabled={!refinementInput.trim() || isRefining}
-              className="rounded-pill border border-border bg-surface-2 px-5 py-2.5 text-sm font-medium text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isRefining ? 'Curating...' : 'Apply note'}
-            </button>
-          </div>
-
-          {refineError && (
-            <p className="mt-3 text-sm text-red-300" role="alert">{refineError}</p>
-          )}
-        </section>
-
-        {/* Results Grid */}
         {results.length === 0 ? (
           <div className="rounded-lg border border-border bg-surface px-6 py-12 text-center shadow-card" role="status" aria-live="polite">
-            <p className="text-lg text-text-muted">
-              Nothing landed on this pass. Add a new note and I will curate another set.
-            </p>
+            <p className="text-sm text-text-muted">No recommendations yet. Continue the conversation to generate your first curated pass.</p>
           </div>
         ) : (
-          <div className="grid gap-8" role="list" aria-label="Movie and TV show recommendations">
+          <div className="grid gap-5" role="list" aria-label="Movie and TV show recommendations">
             {results.map((rec) => (
               <article
                 key={rec.id}
                 className="overflow-hidden rounded-lg border border-border bg-surface shadow-card transition-shadow hover:shadow-card-hover"
                 role="listitem"
               >
-                <div className="p-6">
-                  <div className="flex gap-6">
-                    {/* Poster Placeholder */}
+                <div className="p-5">
+                  <div className="flex gap-4">
                     {rec.posterUrl ? (
                       <img
                         src={rec.posterUrl}
                         alt={`${rec.title} poster`}
-                        className="h-48 w-32 flex-shrink-0 rounded-lg object-cover"
+                        className="h-44 w-28 flex-shrink-0 rounded-lg object-cover"
                         loading="lazy"
                       />
                     ) : (
-                      <div 
-                        className="flex h-48 w-32 flex-shrink-0 items-center justify-center rounded-lg border border-border bg-surface-2 text-text-muted"
+                      <div
+                        className="flex h-44 w-28 flex-shrink-0 items-center justify-center rounded-lg border border-border bg-surface-2 text-text-muted"
                         role="img"
                         aria-label="No poster available"
                       >
@@ -273,41 +247,23 @@ export default function ResultsPage({
                       </div>
                     )}
 
-                    {/* Content */}
                     <div className="flex-1">
-                      <h2 className="mb-2 font-serif text-2xl font-medium leading-tight tracking-[-0.02em] text-text md:text-[1.7rem]">
-                        {rec.title}
-                      </h2>
-                      <p className="mb-4 text-sm text-text-muted">
-                        {rec.year} • {rec.type}
-                      </p>
+                      <h3 className="mb-1 font-serif text-xl font-medium tracking-[-0.02em] text-text">{rec.title}</h3>
+                      <p className="mb-3 text-xs text-text-muted">{rec.year} • {rec.type}</p>
 
-                      {/* Synopsis */}
                       {rec.synopsis && (
-                        <div className="mb-4">
-                          <p className="text-sm text-text-muted">
-                            {rec.synopsis}
-                          </p>
-                        </div>
+                        <p className="mb-3 text-sm text-text-muted">{rec.synopsis}</p>
                       )}
 
-                      {/* Why This */}
                       {rec.whyThis && (
-                        <div className="mb-4 rounded-lg border border-border bg-surface-2 p-4" role="complementary" aria-label="Recommendation explanation">
-                          <p className="mb-1 text-sm font-semibold text-text">
-                            Why this made the list
-                          </p>
-                          <p className="text-sm text-text-muted">
-                            {rec.whyThis}
-                          </p>
+                        <div className="mb-3 rounded-lg border border-border bg-surface-2 p-3" role="complementary" aria-label="Recommendation explanation">
+                          <p className="mb-1 text-xs uppercase tracking-[0.12em] text-text-muted">Why this</p>
+                          <p className="text-sm text-text-muted">{rec.whyThis}</p>
                         </div>
                       )}
 
-                      {/* Availability */}
-                      <div className="mb-4">
-                        <p className="mb-2 text-sm font-semibold text-text">
-                          Where to stream
-                        </p>
+                      <div className="mb-3">
+                        <p className="mb-2 text-xs uppercase tracking-[0.12em] text-text-muted">Where to stream</p>
                         {rec.availability && rec.availability.length > 0 ? (
                           <div className="flex flex-wrap gap-2" role="list" aria-label="Streaming platforms">
                             {rec.availability.map((avail, idx) => (
@@ -317,9 +273,8 @@ export default function ResultsPage({
                                   href={avail.link}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="rounded-pill border border-border bg-surface-2 px-3 py-1 text-xs text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus"
+                                  className="rounded-pill border border-border bg-surface-2 px-3 py-1 text-xs text-text transition-colors hover:border-accent"
                                   role="listitem"
-                                  aria-label={`Open ${avail.platform} in a new tab`}
                                 >
                                   {avail.platform} ({avail.type})
                                 </a>
@@ -339,17 +294,14 @@ export default function ResultsPage({
                         )}
                       </div>
 
-                      {/* Trailer Button */}
                       {rec.trailerUrl && (
-                        <div>
-                          <button
-                            onClick={() => openTrailer(rec.trailerUrl!, rec.title)}
-                            className="inline-block rounded-pill border border-border bg-surface-2 px-4 py-2 text-sm text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus"
-                            aria-label={`Watch trailer for ${rec.title}`}
-                          >
-                            View trailer
-                          </button>
-                        </div>
+                        <button
+                          onClick={() => openTrailer(rec.trailerUrl!, rec.title)}
+                          className="rounded-pill border border-border bg-surface-2 px-4 py-1.5 text-xs text-text transition-colors hover:border-accent"
+                          aria-label={`Watch trailer for ${rec.title}`}
+                        >
+                          View trailer
+                        </button>
                       )}
                     </div>
                   </div>
@@ -360,7 +312,6 @@ export default function ResultsPage({
         )}
       </div>
 
-      {/* Trailer Modal */}
       {trailerModal.isOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
@@ -373,24 +324,22 @@ export default function ResultsPage({
             className="w-full max-w-4xl overflow-hidden rounded-lg border border-border bg-surface shadow-card-hover"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-border p-4">
               <h2 id="trailer-title" className="text-xl font-semibold tracking-[-0.03em] text-text">
                 {trailerModal.title} - Trailer
               </h2>
               <button
                 onClick={closeTrailer}
-                className="rounded text-2xl leading-none text-text-muted transition-colors hover:text-text focus:outline-none focus:ring-2 focus:ring-focus"
+                className="rounded text-2xl leading-none text-text-muted transition-colors hover:text-text"
                 aria-label="Close trailer"
               >
                 ×
               </button>
             </div>
 
-            {/* Video Player */}
             <div className="relative" style={{ paddingBottom: '56.25%' }}>
               <iframe
-                className="absolute inset-0 w-full h-full"
+                className="absolute inset-0 h-full w-full"
                 src={trailerModal.url}
                 title={`${trailerModal.title} Trailer`}
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -398,11 +347,10 @@ export default function ResultsPage({
               />
             </div>
 
-            {/* Modal Footer */}
             <div className="border-t border-border p-4 text-center">
               <button
                 onClick={closeTrailer}
-                className="rounded-pill border border-border bg-surface-2 px-6 py-2 text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus"
+                className="rounded-pill border border-border bg-surface-2 px-6 py-2 text-text transition-colors hover:border-accent"
                 aria-label="Close trailer modal"
               >
                 Close

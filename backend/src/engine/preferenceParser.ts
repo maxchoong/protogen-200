@@ -5,6 +5,15 @@
  */
 
 export type DiscoveryMode = 'mood' | 'reference' | 'talent' | 'mixed'
+export type TurnContinuity = 'continue' | 'soft_pivot' | 'hard_pivot'
+export type TurnOperationType = 'narrow' | 'widen' | 'replace'
+
+export interface TurnOperation {
+  continuity: TurnContinuity
+  operation: TurnOperationType
+  confidence: number
+  rationaleTags: string[]
+}
 
 export interface IntentSignals {
   foundReferenceTitle: boolean
@@ -53,6 +62,7 @@ export interface ParsedPreferences {
   reducedMoods?: string[]         // Moods to explicitly de-emphasize
   noveltyIntent?: boolean         // true for discovery language like "indie gems"
   popularityPreference?: 'mainstream' | 'niche'
+  turnOperation?: TurnOperation
 }
 
 export interface RecommendationRequest {
@@ -75,6 +85,62 @@ export interface RecommendationRequest {
  * Extracts: genres, moods, reference titles, excluded preferences, constraints
  */
 export class PreferenceParser {
+  private static readonly HARD_PIVOT_CUES = [
+    'instead',
+    'actually',
+    'forget that',
+    'forget this',
+    'different direction',
+    'switch gears',
+    'new direction',
+    'not that',
+    'start over'
+  ]
+
+  private static readonly SOFT_PIVOT_CUES = [
+    'same vibe but',
+    'but with',
+    'shift toward',
+    'lean toward',
+    'more like',
+    'less like'
+  ]
+
+  private static readonly NARROW_CUES = [
+    'only',
+    'just',
+    'specifically',
+    'strictly',
+    'prioritize',
+    'focus on',
+    'more',
+    'less',
+    'without',
+    'exclude'
+  ]
+
+  private static readonly WIDEN_CUES = [
+    'broader',
+    'broaden',
+    'wider',
+    'more options',
+    'open to',
+    'either',
+    'any',
+    'no preference',
+    'anything'
+  ]
+
+  private static readonly REPLACE_CUES = [
+    'replace',
+    'swap',
+    'switch to',
+    'instead',
+    'rather than',
+    'instead of',
+    'not x',
+    'not this'
+  ]
   private static readonly MOVIE_HINT_KEYWORDS = [
     'movie', 'movies', 'film', 'films', 'cinema', 'feature'
   ]
@@ -435,6 +501,7 @@ export class PreferenceParser {
     preferences.discoveryMode = intentClassification.mode
     preferences.intentConfidence = intentClassification.confidence
     preferences.intentSignals = intentClassification.signals
+    preferences.turnOperation = this.inferTurnOperation(request, preferences)
 
     // Store original description for later use
     preferences.description = analysisText
@@ -449,6 +516,74 @@ export class PreferenceParser {
     }
 
     return preferences
+  }
+
+  private static inferTurnOperation(
+    request: RecommendationRequest,
+    preferences: ParsedPreferences
+  ): TurnOperation | undefined {
+    const clarificationRound = request.clarificationContext?.clarificationRound ?? 0
+    const latestTurn = request.clarificationContext?.userClarification?.trim().toLowerCase()
+
+    if (clarificationRound === 0 || !latestTurn) {
+      return undefined
+    }
+
+    const rationaleTags: string[] = []
+    let continuity: TurnContinuity = 'continue'
+    let operation: TurnOperationType = 'narrow'
+    let confidence = 0.55
+
+    const hasHardPivotCue = this.HARD_PIVOT_CUES.some(cue => latestTurn.includes(cue))
+    const hasSoftPivotCue = this.SOFT_PIVOT_CUES.some(cue => latestTurn.includes(cue))
+    const hasReplaceCue = this.REPLACE_CUES.some(cue => latestTurn.includes(cue))
+    const hasWidenCue = this.WIDEN_CUES.some(cue => latestTurn.includes(cue))
+    const hasNarrowCue = this.NARROW_CUES.some(cue => latestTurn.includes(cue))
+    const hasNewAnchorSignals =
+      /(like|similar to|in the style of|vibes of)\s+/.test(latestTurn) ||
+      /(?:with|starring|featuring|cast:)\s+[a-z]/.test(latestTurn)
+
+    if (hasHardPivotCue) {
+      continuity = 'hard_pivot'
+      confidence += 0.3
+      rationaleTags.push('hard_pivot_cue')
+    } else if (hasSoftPivotCue || hasNewAnchorSignals) {
+      continuity = 'soft_pivot'
+      confidence += hasNewAnchorSignals ? 0.2 : 0.15
+      if (hasSoftPivotCue) {
+        rationaleTags.push('soft_pivot_cue')
+      }
+      if (hasNewAnchorSignals) {
+        rationaleTags.push('anchor_shift')
+      }
+    }
+
+    if (hasReplaceCue) {
+      operation = 'replace'
+      confidence += 0.2
+      rationaleTags.push('replace_cue')
+    } else if (hasWidenCue && !hasNarrowCue) {
+      operation = 'widen'
+      confidence += 0.15
+      rationaleTags.push('widen_cue')
+    } else if (hasNarrowCue) {
+      operation = 'narrow'
+      confidence += 0.1
+      rationaleTags.push('narrow_cue')
+    }
+
+    if (continuity === 'soft_pivot' && operation === 'replace') {
+      continuity = 'hard_pivot'
+      rationaleTags.push('pivot_promoted_by_replace')
+      confidence += 0.05
+    }
+
+    return {
+      continuity,
+      operation,
+      confidence: Math.max(0.4, Math.min(0.95, confidence)),
+      rationaleTags: Array.from(new Set(rationaleTags))
+    }
   }
 
   private static buildAnalysisText(request: RecommendationRequest): string {
@@ -833,9 +968,9 @@ export class PreferenceParser {
       return [
         {
           id: 'mixed_disambiguation',
-          question: 'To improve the recommendations, what should I prioritize first?',
+          question: 'What do you mean by "surprise me"?',
           type: 'select',
-          options: ['Specific actor or cast', 'Similar to a reference title', 'Mood or vibe']
+          options: ['Go mood-first', 'Go title-similarity first', 'Go cast/director first']
         }
       ]
     }

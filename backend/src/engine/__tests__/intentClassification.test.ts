@@ -254,4 +254,58 @@ describe('Phase 5: Intent Classification & Clarification', () => {
       expect(preferences.constraints).toContain('popularity:mainstream')
     })
   })
+
+  describe('Turn Operation Classification', () => {
+    it('should classify tightening follow-ups as continue + narrow', () => {
+      const request: RecommendationRequest = {
+        description: 'Like Inception but more relaxing',
+        clarificationContext: {
+          clarificationRound: 1,
+          userClarification: 'only movies from the 80s'
+        }
+      }
+
+      const preferences = PreferenceParser.parse(request)
+
+      expect(preferences.turnOperation).toBeDefined()
+      expect(preferences.turnOperation?.continuity).toBe('continue')
+      expect(preferences.turnOperation?.operation).toBe('narrow')
+      expect((preferences.turnOperation?.confidence || 0)).toBeGreaterThan(0.5)
+    })
+
+    it('should classify broadening follow-ups as continue + widen', () => {
+      const request: RecommendationRequest = {
+        description: 'Like Inception but more relaxing',
+        clarificationContext: {
+          clarificationRound: 1,
+          userClarification: 'I am open to either movies or series and no preference on era'
+        }
+      }
+
+      const preferences = PreferenceParser.parse(request)
+
+      expect(preferences.turnOperation).toBeDefined()
+      expect(preferences.turnOperation?.continuity).toBe('continue')
+      expect(preferences.turnOperation?.operation).toBe('widen')
+    })
+
+    it('should classify explicit replacement follow-ups as hard pivot + replace', () => {
+      const request: RecommendationRequest = {
+        description: 'Like Inception but more relaxing',
+        clarificationContext: {
+          clarificationRound: 1,
+          userClarification: 'actually forget that, switch to horror instead'
+        }
+      }
+
+      const preferences = PreferenceParser.parse(request)
+
+      expect(preferences.turnOperation).toBeDefined()
+      expect(preferences.turnOperation?.continuity).toBe('hard_pivot')
+      expect(preferences.turnOperation?.operation).toBe('replace')
+      expect(preferences.turnOperation?.rationaleTags).toEqual(
+        expect.arrayContaining(['hard_pivot_cue', 'replace_cue'])
+      )
+    })
+  })
 })

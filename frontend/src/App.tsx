@@ -3,6 +3,7 @@ import ConversationalHome from './pages/ConversationalHome'
 import ResultsPage from './pages/ResultsPage'
 import { useTheme } from './hooks/useTheme'
 import { useConversation } from './hooks/useConversation'
+import './App.css'
 
 interface RecommendationRequest {
   description: string
@@ -46,17 +47,18 @@ interface RecommendationResponse {
     mode: 'mood' | 'reference' | 'talent' | 'mixed'
     confidence: number
   }
+  turnOperation?: {
+    continuity: 'continue' | 'soft_pivot' | 'hard_pivot'
+    operation: 'narrow' | 'widen' | 'replace'
+    confidence: number
+    rationaleTags: string[]
+  }
 }
 
 function App() {
   const { theme, toggleTheme } = useTheme()
   const conversation = useConversation()
-  const [currentPage, setCurrentPage] = useState<'home' | 'results'>('home')
-  const [results, setResults] = useState<any[]>([])
-  const [query, setQuery] = useState<string>('')
-  const [activeConstraints, setActiveConstraints] = useState<string[]>([])
-  const [refinementSuggestions, setRefinementSuggestions] = useState<string[]>([])
-  const [retrievalDiagnostics, setRetrievalDiagnostics] = useState<RecommendationResponse['retrievalDiagnostics']>()
+  const [showResetConfirm, setShowResetConfirm] = useState(false)
 
   const inferRegionFromLocale = (): string => {
     const locale = navigator.language || 'en-US'
@@ -110,120 +112,108 @@ function App() {
     recommendations: any[],
     queryText: string,
     options?: {
+      triggerText?: string
+      detectedIntent?: RecommendationResponse['detectedIntent']
+      turnOperation?: RecommendationResponse['turnOperation']
+      requiresDirectionConfirmation?: boolean
       refinementSuggestions?: string[]
       appliedConstraints?: string[]
       retrievalDiagnostics?: RecommendationResponse['retrievalDiagnostics']
     }
   ) => {
-    setResults(recommendations)
-    setQuery(queryText)
-    setRefinementSuggestions(options?.refinementSuggestions || [])
-    setActiveConstraints(options?.appliedConstraints || [])
-    setRetrievalDiagnostics(options?.retrievalDiagnostics)
-    setCurrentPage('results')
+    conversation.addRecommendationPass({
+      query: queryText,
+      triggerText: options?.triggerText || queryText,
+      recommendations,
+      detectedIntent: options?.detectedIntent,
+      turnOperation: options?.turnOperation,
+      requiresDirectionConfirmation: options?.requiresDirectionConfirmation,
+      appliedConstraints: options?.appliedConstraints || [],
+      refinementSuggestions: options?.refinementSuggestions || [],
+      retrievalDiagnostics: options?.retrievalDiagnostics
+    })
   }
 
-  const handleRefineResults = async (refinementText: string): Promise<void> => {
-    const trimmed = refinementText.trim()
-    if (!trimmed || !query) {
+  const handleStartNewConversation = () => {
+    const hasSessionContent =
+      conversation.state.messages.length > 0 || conversation.state.recommendationPasses.length > 0
+
+    if (!hasSessionContent) {
+      conversation.reset()
       return
     }
 
-    conversation.addMessage({
-      role: 'user',
-      text: trimmed,
-      timestamp: Date.now()
-    })
-    conversation.setLoading(true)
-    conversation.setError(null)
-
-    const nextConstraints = [...activeConstraints, trimmed]
-
-    const askedQuestionIds = conversation.state.messages.flatMap(message =>
-      (message.clarificationQuestions || []).map(question => question.id)
-    )
-
-    try {
-      const response = await handleConversationSubmit(query, {
-        clarificationRound: 1,
-        userClarification: trimmed,
-        askedQuestionIds,
-        previousRecommendationIds: results.map(item => item.id).filter(Boolean),
-        cumulativeConstraints: nextConstraints
-      })
-
-      if (response.recommendations && response.recommendations.length > 0) {
-        setResults(response.recommendations)
-        setActiveConstraints(response.appliedConstraints || nextConstraints)
-        setRefinementSuggestions(response.refinementSuggestions || [])
-        setRetrievalDiagnostics(response.retrievalDiagnostics)
-
-        conversation.addMessage({
-          role: 'assistant',
-          text: `Updated results using your refinement: "${trimmed}".`,
-          timestamp: Date.now(),
-          recommendations: response.recommendations,
-          detectedIntent: response.detectedIntent
-        })
-
-        if (response.detectedIntent) {
-          conversation.updateLastIntent(response.detectedIntent)
-        }
-
-        return
-      }
-
-      conversation.addMessage({
-        role: 'assistant',
-        text: 'I could not improve the results from that refinement. Try being more specific about mood, era, or popularity.',
-        timestamp: Date.now(),
-        detectedIntent: response.detectedIntent
-      })
-
-      throw new Error('No refined recommendations returned. Try a different refinement.')
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to refine results right now.'
-      conversation.setError(message)
-      throw error
-    } finally {
-      conversation.setLoading(false)
+    if (showResetConfirm) {
+      conversation.reset()
+      setShowResetConfirm(false)
+      return
     }
+
+    setShowResetConfirm(true)
+    window.setTimeout(() => setShowResetConfirm(false), 4000)
   }
 
-  const handleBackHome = () => {
-    setCurrentPage('home')
-  }
+  const { recommendationPasses, activePassIndex } = conversation.state
+  const activePass =
+    activePassIndex >= 0 && activePassIndex < recommendationPasses.length
+      ? recommendationPasses[activePassIndex]
+      : null
 
   return (
-    <div className="min-h-screen bg-bg text-text">
-      <div className="fixed right-4 top-4 z-40">
-        <button
-          onClick={toggleTheme}
-          className="rounded-pill border border-border bg-surface px-4 py-2 text-sm font-medium text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus"
-          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-        >
-          {theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-        </button>
-      </div>
+    <div className="app-shell min-h-screen bg-bg text-text">
+      <header className="app-topbar border-b border-border/80 bg-surface/90 px-4 py-4 backdrop-blur-sm">
+        <div className="mx-auto flex w-full max-w-[1400px] items-center justify-between gap-3">
+          <div>
+            <h1 className="font-serif text-2xl font-medium tracking-[-0.03em] text-text">Lumera</h1>
+            <p className="text-xs uppercase tracking-[0.14em] text-text-muted">One conversation, evolving curation</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleStartNewConversation}
+              className="rounded-pill border border-border bg-surface-2 px-4 py-2 text-sm font-medium text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus"
+              aria-label="Start a new conversation"
+            >
+              {showResetConfirm ? 'Confirm reset' : 'Start new conversation'}
+            </button>
+            <button
+              onClick={toggleTheme}
+              className="rounded-pill border border-border bg-surface-2 px-4 py-2 text-sm font-medium text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus"
+              aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            >
+              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            </button>
+          </div>
+        </div>
+      </header>
 
-      {currentPage === 'home' ? (
-        <ConversationalHome 
-          conversation={conversation}
-          onSubmit={handleConversationSubmit}
-          onNavigateToResults={handleNavigateToResults}
-        />
-      ) : (
-        <ResultsPage
-          results={results}
-          query={query}
-          onBackHome={handleBackHome}
-          conversationMessages={conversation.state.messages}
-          activeConstraints={activeConstraints}
-          refinementSuggestions={refinementSuggestions}
-          onRefine={handleRefineResults}
-          retrievalDiagnostics={retrievalDiagnostics}
-        />
-      )}
+      <main className="app-main mx-auto grid h-[calc(100vh-83px)] w-full max-w-[1400px] gap-4 px-4 py-4 lg:grid-cols-[1.45fr_1fr]">
+        <section className="min-h-0 overflow-hidden rounded-lg border border-border bg-surface">
+          <ConversationalHome
+            conversation={conversation}
+            onSubmit={handleConversationSubmit}
+            onNavigateToResults={handleNavigateToResults}
+          />
+        </section>
+
+        <section className="min-h-0 overflow-hidden rounded-lg border border-border bg-surface">
+          <ResultsPage
+            results={activePass?.recommendations || []}
+            query={activePass?.query || ''}
+            passIndex={activePassIndex}
+            passCount={recommendationPasses.length}
+            triggerText={activePass?.triggerText}
+            turnOperation={activePass?.turnOperation}
+            requiresDirectionConfirmation={activePass?.requiresDirectionConfirmation}
+            directionConfirmationChoice={activePass?.directionConfirmationChoice}
+            confirmationTrace={activePass?.confirmationTrace}
+            activeConstraints={activePass?.appliedConstraints || []}
+            refinementSuggestions={activePass?.refinementSuggestions || []}
+            retrievalDiagnostics={activePass?.retrievalDiagnostics}
+            onPreviousPass={() => conversation.setActivePassIndex(activePassIndex - 1)}
+            onNextPass={() => conversation.setActivePassIndex(activePassIndex + 1)}
+          />
+        </section>
+      </main>
     </div>
   )
 }

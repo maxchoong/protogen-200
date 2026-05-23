@@ -88,6 +88,12 @@ interface ApiResponse {
     usedOmdb: boolean
     omdbFallbackUsed: boolean
   }
+  turnOperation?: {
+    continuity: 'continue' | 'soft_pivot' | 'hard_pivot'
+    operation: 'narrow' | 'widen' | 'replace'
+    confidence: number
+    rationaleTags: string[]
+  }
 }
 
 type ParsedPreferencesSnapshot = ReturnType<typeof PreferenceParser.parse>
@@ -96,6 +102,7 @@ const MIN_TOP_COMPOSITE = 0.45
 const MIN_STRONG_MATCH_COUNT = 2
 const MAX_CLARIFICATION_TURNS = 3
 const RESULTS_FIRST_CONFIDENCE_THRESHOLD = 0.8
+const MIXED_RESULTS_FIRST_CONFIDENCE_THRESHOLD = 0.55
 const REFERENCE_NEAR_THRESHOLD_TOP_COMPOSITE = 0.43
 const REFERENCE_NEAR_THRESHOLD_FLOOR_COMPOSITE = 0.4
 const REFERENCE_NEAR_THRESHOLD_MIN_COUNT = 5
@@ -145,8 +152,12 @@ const shouldPreferResultsFirst = (
     return false
   }
 
-  if (!mode || mode === 'mixed') {
+  if (!mode) {
     return false
+  }
+
+  if (mode === 'mixed') {
+    return (confidence ?? 0) >= MIXED_RESULTS_FIRST_CONFIDENCE_THRESHOLD
   }
 
   return (confidence ?? 0) >= RESULTS_FIRST_CONFIDENCE_THRESHOLD
@@ -483,7 +494,7 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
         success: true,
         requiresClarification: {
           questions: clarificationQuestions,
-          context: 'Your request has multiple possible interpretations. Help us narrow it down:',
+          context: 'I can take this a few ways. Pick one, or type your own direction.',
           confidenceScore: parsedPreferences.intentConfidence
         },
         detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence
@@ -491,7 +502,8 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
               mode: parsedPreferences.discoveryMode,
               confidence: parsedPreferences.intentConfidence
             }
-          : undefined
+          : undefined,
+        turnOperation: parsedPreferences.turnOperation
       })
     }
 
@@ -561,7 +573,8 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
                   confidence: parsedPreferences.intentConfidence
                 }
               : undefined,
-            retrievalDiagnostics
+            retrievalDiagnostics,
+            turnOperation: parsedPreferences.turnOperation
           })
         }
       }
@@ -578,7 +591,8 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
             confidence: parsedPreferences.intentConfidence
           }
         : undefined,
-      retrievalDiagnostics
+      retrievalDiagnostics,
+      turnOperation: parsedPreferences.turnOperation
     })
   } catch (error) {
     console.error('Error in /recommendations:', error)

@@ -170,6 +170,14 @@ describe('POST /recommendations route guardrails', () => {
     expect(response.body.success).toBe(true)
     expect(response.body.requiresClarification).toBeUndefined()
     expect(response.body.recommendations).toHaveLength(2)
+    expect(response.body.turnOperation).toBeDefined()
+    expect(response.body.turnOperation).toEqual(
+      expect.objectContaining({
+        continuity: expect.any(String),
+        operation: expect.any(String),
+        confidence: expect.any(Number)
+      })
+    )
     expect(getRecommendationsSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         description: 'Like Inception but more relaxing',

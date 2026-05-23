@@ -21,6 +21,12 @@ interface ConversationalHomeProps {
       confidenceScore?: number
     }
     detectedIntent?: DetectedIntent
+    turnOperation?: {
+      continuity: 'continue' | 'soft_pivot' | 'hard_pivot'
+      operation: 'narrow' | 'widen' | 'replace'
+      confidence: number
+      rationaleTags: string[]
+    }
     refinementSuggestions?: string[]
     appliedConstraints?: string[]
     retrievalDiagnostics?: {
@@ -34,6 +40,15 @@ interface ConversationalHomeProps {
     recommendations: any[],
     query: string,
     options?: {
+      triggerText?: string
+      detectedIntent?: DetectedIntent
+      turnOperation?: {
+        continuity: 'continue' | 'soft_pivot' | 'hard_pivot'
+        operation: 'narrow' | 'widen' | 'replace'
+        confidence: number
+        rationaleTags: string[]
+      }
+      requiresDirectionConfirmation?: boolean
       refinementSuggestions?: string[]
       appliedConstraints?: string[]
       retrievalDiagnostics?: {
@@ -86,12 +101,13 @@ export default function ConversationalHome({
 
   const submitMessage = async (
     rawText: string,
-    options: { appendUserMessage?: boolean } = {}
+    options: { appendUserMessage?: boolean; forceFollowUp?: boolean } = {}
   ) => {
     const trimmed = rawText.trim()
     if (!trimmed) return
 
     const shouldAppendUserMessage = options.appendUserMessage ?? true
+    const shouldTreatAsFollowUp = options.forceFollowUp ?? false
 
     if (shouldAppendUserMessage) {
       conversation.addMessage({
@@ -115,10 +131,10 @@ export default function ConversationalHome({
 
     try {
       const response = await onSubmit(
-        state.clarificationRound === 0 ? trimmed : state.lastQuery,
-        state.clarificationRound > 0
+        state.clarificationRound === 0 && !shouldTreatAsFollowUp ? trimmed : state.lastQuery,
+        state.clarificationRound > 0 || shouldTreatAsFollowUp
           ? {
-              clarificationRound: state.clarificationRound,
+              clarificationRound: Math.max(1, state.clarificationRound),
               userClarification: trimmed,
               askedQuestionIds
             }
@@ -140,18 +156,35 @@ export default function ConversationalHome({
         })
         conversation.updateClarificationRound(state.clarificationRound + 1)
       } else if (response.recommendations && response.recommendations.length > 0) {
+        const lowConfidenceTurn = (response.turnOperation?.confidence || 1) < 0.62
+
         conversation.addMessage({
           role: 'assistant',
           text: `Found ${response.recommendations.length} recommendations for you.`,
           timestamp: Date.now(),
           recommendations: response.recommendations,
-          detectedIntent: response.detectedIntent
+          detectedIntent: response.detectedIntent,
+          turnOperation: response.turnOperation,
+          clarificationQuestions: lowConfidenceTurn
+            ? [
+                {
+                  id: 'turn_direction_confirm',
+                  question: 'Quick check: want me to stay close to this lane, or take a bigger swing next pass?',
+                  type: 'select',
+                  options: ['Stay close to this lane', 'Take a bigger swing']
+                }
+              ]
+            : undefined
         })
 
         conversation.updateClarificationRound(0)
 
         if (onNavigateToResults) {
           onNavigateToResults(response.recommendations, state.lastQuery || trimmed, {
+            triggerText: trimmed,
+            detectedIntent: response.detectedIntent,
+            turnOperation: response.turnOperation,
+            requiresDirectionConfirmation: lowConfidenceTurn,
             refinementSuggestions: response.refinementSuggestions,
             appliedConstraints: response.appliedConstraints,
             retrievalDiagnostics: response.retrievalDiagnostics
@@ -168,7 +201,7 @@ export default function ConversationalHome({
         conversation.updateClarificationRound(0)
       }
 
-      if (state.clarificationRound === 0) {
+      if (state.clarificationRound === 0 && !shouldTreatAsFollowUp) {
         conversation.updateLastQuery(trimmed)
       }
 
@@ -195,7 +228,16 @@ export default function ConversationalHome({
     if (state.isLoading) {
       return
     }
-    await submitMessage(optionText)
+
+    if (optionText === 'Stay close to this lane') {
+      conversation.resolveLatestDirectionConfirmation('keep_direction')
+    }
+
+    if (optionText === 'Take a bigger swing') {
+      conversation.resolveLatestDirectionConfirmation('pivot_direction')
+    }
+
+    await submitMessage(optionText, { forceFollowUp: true })
   }
 
   const handleCancelPending = () => {
@@ -228,19 +270,10 @@ export default function ConversationalHome({
         : 'Curating your selections.'
 
   return (
-    <div className="conversational-home min-h-screen flex flex-col bg-bg text-text">
-      {/* Header */}
-      <div className="border-b border-border/80 bg-surface/85 px-4 py-4 backdrop-blur-sm">
-        <div className="max-w-4xl mx-auto">
-          <h1 className="font-serif text-2xl font-medium tracking-[-0.03em] text-text">Lumera</h1>
-          <p className="mt-1 text-sm text-text-muted">
-            Your taste, illuminated.
-          </p>
-        </div>
-      </div>
+    <div className="conversational-home flex h-full flex-col bg-bg text-text">
 
       {/* Messages Container */}
-      <div className="flex-1 overflow-y-auto px-4 py-8">
+      <div className="flex-1 overflow-y-auto px-4 py-6">
         <div className="mx-auto max-w-4xl space-y-5">
           {state.messages.length === 0 && (
             <div className="mt-10 rounded-lg border border-border bg-surface px-6 py-8 text-center shadow-card">
@@ -289,6 +322,13 @@ export default function ConversationalHome({
                     <span className="rounded-pill border border-border bg-surface-2 px-2.5 py-1">
                       Confidence {(msg.detectedIntent.confidence * 100).toFixed(0)}%
                     </span>
+                  </div>
+                )}
+
+                {msg.turnOperation && (
+                  <div className="mt-2 text-xs text-text-muted">
+                    Turn: {msg.turnOperation.continuity.replace('_', ' ')} + {msg.turnOperation.operation}
+                    {' '}({Math.round(msg.turnOperation.confidence * 100)}%)
                   </div>
                 )}
 
