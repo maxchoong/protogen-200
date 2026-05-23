@@ -166,8 +166,8 @@ function App() {
       <header className="app-topbar border-b border-border/80 bg-surface/90 px-4 py-4 backdrop-blur-sm">
         <div className="mx-auto flex w-full max-w-[1400px] items-center justify-between gap-3">
           <div>
-            <h1 className="font-serif text-2xl font-medium tracking-[-0.03em] text-text">Lumera</h1>
-            <p className="text-xs uppercase tracking-[0.14em] text-text-muted">One conversation, evolving curation</p>
+            <h1 className="font-serif text-2xl font-extrabold leading-none tracking-[-0.028em] text-text">Lumera</h1>
+            <p className="text-[10px] uppercase tracking-[0.2em] text-text-muted/80">One conversation, evolving curation</p>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -188,8 +188,8 @@ function App() {
         </div>
       </header>
 
-      <main className="app-main mx-auto grid h-[calc(100vh-83px)] w-full max-w-[1400px] gap-4 px-4 py-4 lg:grid-cols-[1.45fr_1fr]">
-        <section className="min-h-0 overflow-hidden rounded-lg border border-border bg-surface">
+      <main className="app-main editorial-main mx-auto grid h-[calc(100vh-83px)] w-full max-w-[1400px] px-4 lg:grid-cols-[1fr_1fr]">
+        <section className="editorial-left-column">
           <ConversationalHome
             conversation={conversation}
             onSubmit={handleConversationSubmit}
@@ -197,7 +197,7 @@ function App() {
           />
         </section>
 
-        <section className="min-h-0 overflow-hidden rounded-lg border border-border bg-surface">
+        <section className="editorial-right-divider">
           <ResultsPage
             results={activePass?.recommendations || []}
             query={activePass?.query || ''}

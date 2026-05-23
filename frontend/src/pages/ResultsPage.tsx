@@ -50,6 +50,15 @@ interface ResultsPageProps {
   onNextPass: () => void
 }
 
+const editorialHighlights = [
+  { title: 'Quiet Rebellion', note: 'Character-forward drama', palette: 'from-[#d8d0c4] to-[#bdb0a0]' },
+  { title: 'Afterglow City', note: 'Noir mood, modern pacing', palette: 'from-[#bec8d2] to-[#8fa2b6]' },
+  { title: 'Winter Static', note: 'Minimal thriller tension', palette: 'from-[#ced2d9] to-[#a4adb9]' },
+  { title: 'Neon Orchard', note: 'Playful genre blend', palette: 'from-[#d8c8bc] to-[#b89b87]' },
+  { title: 'The Last Ferry', note: 'Slow-burn mystery', palette: 'from-[#c7d0cc] to-[#95aaa1]' },
+  { title: 'Paper Moons', note: 'Warm, intimate storytelling', palette: 'from-[#d7cdc2] to-[#b4a08f]' }
+]
+
 const formatTurnOperation = (turnOperation?: TurnOperation): string => {
   if (!turnOperation) {
     return 'Initial round'
@@ -123,6 +132,7 @@ export default function ResultsPage({
     url: '',
     title: ''
   })
+  const [roundMenuOpen, setRoundMenuOpen] = useState(false)
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -151,101 +161,152 @@ export default function ResultsPage({
   }
 
   return (
-    <div className="h-full overflow-y-auto px-4 py-6">
+    <div className="editorial-results-scroll h-full overflow-y-auto px-4">
       <div className="mx-auto max-w-3xl">
-        <div className="mb-6">
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-surface-2 px-4 py-3">
-            <div>
+        {passCount > 0 && (
+          <div className="mb-8">
+            <div className="flex items-center justify-between gap-3 pb-4 border-b border-border">
               <h2 className="font-serif text-2xl font-medium tracking-[-0.02em] text-text">Recommendations</h2>
-              <p className="mt-1 text-sm text-text-muted">
-                {passCount > 0 ? `Round ${passIndex + 1} of ${passCount}` : 'No rounds yet'}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={onPreviousPass}
-                disabled={passCount === 0 || passIndex <= 0}
-                className="rounded-pill border border-border bg-surface px-3 py-1.5 text-xs text-text transition-colors hover:border-accent disabled:opacity-50"
-                aria-label="Previous recommendation round"
-              >
-                Previous round
-              </button>
-              <button
-                onClick={onNextPass}
-                disabled={passCount === 0 || passIndex >= passCount - 1}
-                className="rounded-pill border border-border bg-surface px-3 py-1.5 text-xs text-text transition-colors hover:border-accent disabled:opacity-50"
-                aria-label="Next recommendation round"
-              >
-                Next round
-              </button>
+              <div className="relative">
+                <button
+                  onClick={() => setRoundMenuOpen(!roundMenuOpen)}
+                  className="p-1 transition-opacity hover:opacity-70"
+                  aria-label="Round selection menu"
+                  title="Select round"
+                >
+                  <svg
+                    className="h-5 w-5 text-text"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <circle cx="12" cy="5" r="1" />
+                    <circle cx="12" cy="12" r="1" />
+                    <circle cx="12" cy="19" r="1" />
+                  </svg>
+                </button>
+
+                {roundMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-44 rounded-lg border border-border bg-surface shadow-card z-10">
+                    <div className="p-2">
+                      {Array.from({ length: passCount }).map((_, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => {
+                            if (idx < passIndex) {
+                              for (let i = 0; i < passIndex - idx; i++) {
+                                onPreviousPass()
+                              }
+                            } else if (idx > passIndex) {
+                              for (let i = 0; i < idx - passIndex; i++) {
+                                onNextPass()
+                              }
+                            }
+                            setRoundMenuOpen(false)
+                          }}
+                          className={`w-full text-left px-3 py-2 text-sm rounded transition-colors ${
+                            idx === passIndex
+                              ? 'bg-accent text-text font-medium'
+                              : 'text-text hover:bg-surface-2'
+                          }`}
+                        >
+                          Round {idx + 1}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {query && (
-          <div className="mb-5 rounded-lg border border-border bg-surface p-4 shadow-card">
-            <p className="text-xs uppercase tracking-[0.14em] text-text-muted">Based on</p>
-            <p className="mt-1 text-sm text-text">{query}</p>
-            {triggerText && triggerText !== query && (
-              <p className="mt-2 text-xs text-text-muted">Latest note: {triggerText}</p>
-            )}
-            <p className="mt-2 text-xs text-text-muted">Turn type: {formatTurnOperation(turnOperation)}</p>
-          </div>
-        )}
+          <details className="mb-8">
+            <summary className="cursor-pointer flex items-center gap-2 pb-3 border-b border-border mb-4">
+              <span className="text-xs uppercase tracking-[0.14em] text-text-muted font-medium">
+                Why This Recommendation
+              </span>
+            </summary>
+            <div className="space-y-4 pl-0">
+              <div>
+                <p className="text-xs uppercase tracking-[0.14em] text-text-muted mb-2">Based on</p>
+                <p className="text-sm text-text">{query}</p>
+                {triggerText && triggerText !== query && (
+                  <p className="mt-2 text-xs text-text-muted">Latest note: {triggerText}</p>
+                )}
+              </div>
 
-        {activeConstraints.length > 0 && (
-          <div className="mb-5 rounded-lg border border-border bg-surface p-4 shadow-card">
-            <p className="mb-2 text-xs uppercase tracking-[0.14em] text-text-muted">Active direction</p>
-            <div className="flex flex-wrap gap-2">
-              {activeConstraints.map((constraint, idx) => (
-                <span
-                  key={`${constraint}-${idx}`}
-                  className="rounded-pill border border-border bg-surface-2 px-3 py-1 text-xs text-text"
-                >
-                  {constraint}
-                </span>
-              ))}
+              {activeConstraints.length > 0 && (
+                <div>
+                  <p className="text-xs uppercase tracking-[0.14em] text-text-muted mb-2">Active direction</p>
+                  <div className="flex flex-wrap gap-2">
+                    {activeConstraints.map((constraint, idx) => (
+                      <span
+                        key={`${constraint}-${idx}`}
+                        className="bg-surface-2 px-2 py-1 text-xs text-text rounded"
+                      >
+                        {constraint}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {interpretationNote && (
+                <div>
+                  <p className="text-xs uppercase tracking-[0.14em] text-text-muted mb-2">Interpretation</p>
+                  <p className="text-sm text-text-muted">{interpretationNote}</p>
+                </div>
+              )}
+
+              <div>
+                <p className="text-xs uppercase tracking-[0.14em] text-text-muted mb-2">Turn type</p>
+                <p className="text-sm text-text-muted">{formatTurnOperation(turnOperation)}</p>
+              </div>
+
+              {retrievalDiagnostics && (
+                <div>
+                  <p className="text-xs uppercase tracking-[0.14em] text-text-muted mb-2">Data source</p>
+                  <p className="text-sm text-text-muted">
+                    {retrievalDiagnostics.omdbFallbackUsed
+                      ? 'OMDB fallback (TMDB available but no candidates)'
+                      : !retrievalDiagnostics.tmdbEnabled && retrievalDiagnostics.usedOmdb
+                        ? 'OMDB (TMDB not configured)'
+                        : retrievalDiagnostics.usedTmdb && !retrievalDiagnostics.usedOmdb
+                          ? 'TMDB'
+                          : retrievalDiagnostics.usedTmdb && retrievalDiagnostics.usedOmdb
+                            ? 'TMDB + OMDB'
+                            : 'Unavailable'}
+                  </p>
+                </div>
+              )}
             </div>
-          </div>
-        )}
-
-        {interpretationNote && (
-          <div className="mb-5 rounded-lg border border-border bg-surface p-4 shadow-card">
-            <p className="mb-2 text-xs uppercase tracking-[0.14em] text-text-muted">Interpretation note</p>
-            <p className="text-sm text-text-muted">{interpretationNote}</p>
-          </div>
-        )}
-
-        {retrievalDiagnostics && (
-          <details className="mb-5 rounded-lg border border-border bg-surface p-4 shadow-card">
-            <summary className="cursor-pointer text-xs uppercase tracking-[0.14em] text-text-muted">Diagnostics</summary>
-            <p className="mt-3 text-sm text-text-muted">
-              {retrievalDiagnostics.omdbFallbackUsed
-                ? 'OMDB fallback engaged (TMDB was available but returned no usable candidates).'
-                : !retrievalDiagnostics.tmdbEnabled && retrievalDiagnostics.usedOmdb
-                  ? 'Using OMDB because TMDB is not configured in this environment.'
-                  : retrievalDiagnostics.usedTmdb && !retrievalDiagnostics.usedOmdb
-                    ? 'Using TMDB retrieval.'
-                    : retrievalDiagnostics.usedTmdb && retrievalDiagnostics.usedOmdb
-                      ? 'Using mixed TMDB + OMDB retrieval.'
-                      : 'Catalog source unavailable for this response.'}
-            </p>
           </details>
         )}
 
         {results.length === 0 ? (
-          <div className="rounded-lg border border-border bg-surface px-6 py-12 text-center shadow-card" role="status" aria-live="polite">
-            <p className="text-sm text-text-muted">No recommendations yet. Continue the conversation to generate your first result set.</p>
+          <div className="space-y-6" role="status" aria-live="polite">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3" role="list" aria-label="System highlight titles">
+              {editorialHighlights.map((item, idx) => (
+                <article key={`${item.title}-${idx}`} className="space-y-3" role="listitem">
+                  <div className={`aspect-[2/3] rounded-lg bg-gradient-to-b ${item.palette} shadow-card`} aria-hidden="true" />
+                  <p className="text-sm font-medium leading-snug tracking-[-0.01em] text-text">{item.title}</p>
+                  <p className="text-xs leading-relaxed tracking-[-0.004em] text-text-muted">{item.note}</p>
+                </article>
+              ))}
+            </div>
           </div>
         ) : (
-          <div className="grid gap-5" role="list" aria-label="Movie and TV show recommendations">
+          <div className="grid gap-6" role="list" aria-label="Movie and TV show recommendations">
             {results.map((rec, index) => (
               <article
                 key={rec.id}
-                className="overflow-hidden rounded-lg border border-border bg-surface shadow-card transition-shadow hover:shadow-card-hover"
+                className="overflow-hidden rounded-lg bg-surface shadow-card transition-shadow hover:shadow-card-hover"
                 role="listitem"
               >
-                <div className="p-5">
+                <div className="p-6">
                   <div className="flex gap-4">
                     {rec.posterUrl ? (
                       <img
@@ -256,7 +317,7 @@ export default function ResultsPage({
                       />
                     ) : (
                       <div
-                        className="flex h-44 w-28 flex-shrink-0 items-center justify-center rounded-lg border border-border bg-surface-2 text-text-muted"
+                        className="flex h-44 w-28 flex-shrink-0 items-center justify-center rounded-lg bg-surface-2 text-text-muted"
                         role="img"
                         aria-label="No poster available"
                       >
@@ -266,29 +327,29 @@ export default function ResultsPage({
 
                     <div className="flex-1">
                       <h3 className="mb-1 font-serif text-xl font-medium tracking-[-0.02em] text-text">{rec.title}</h3>
-                      <p className="mb-3 text-xs text-text-muted">{rec.year} • {rec.type}</p>
+                      <p className="mb-4 text-xs text-text-muted">{rec.year} • {rec.type}</p>
 
-                      <div className="mb-3 flex flex-wrap gap-2 text-xs text-text-muted">
+                      <div className="mb-4 flex flex-wrap gap-2 text-xs text-text-muted">
                         {typeof rec.rating === 'number' && rec.rating > 0 && (
-                          <span className="rounded-pill border border-border bg-surface-2 px-2 py-1">
-                            Rating {rec.rating.toFixed(1)}/10
+                          <span className="bg-surface-2 px-2 py-1 rounded">
+                            {rec.rating.toFixed(1)}/10
                             {formatVoteCount(rec.voteCount) ? ` • ${formatVoteCount(rec.voteCount)} votes` : ''}
                           </span>
                         )}
                         {formatRuntime(rec.runtimeMinutes) && (
-                          <span className="rounded-pill border border-border bg-surface-2 px-2 py-1">
-                            Runtime {formatRuntime(rec.runtimeMinutes)}
+                          <span className="bg-surface-2 px-2 py-1 rounded">
+                            {formatRuntime(rec.runtimeMinutes)}
                           </span>
                         )}
                         {rec.certification && (
-                          <span className="rounded-pill border border-border bg-surface-2 px-2 py-1">
-                            Rated {rec.certification}
+                          <span className="bg-surface-2 px-2 py-1 rounded">
+                            {rec.certification}
                           </span>
                         )}
                       </div>
 
                       {(rec.mainCast?.length || rec.directors?.length) ? (
-                        <p className="mb-3 text-xs text-text-muted">
+                        <p className="mb-4 text-xs text-text-muted">
                           {rec.mainCast && rec.mainCast.length > 0 ? `Cast: ${rec.mainCast.slice(0, 2).join(', ')}` : ''}
                           {rec.mainCast && rec.mainCast.length > 0 && rec.directors && rec.directors.length > 0 ? ' • ' : ''}
                           {rec.directors && rec.directors.length > 0 ? `Director: ${rec.directors[0]}` : ''}
@@ -296,7 +357,7 @@ export default function ResultsPage({
                       ) : null}
 
                       {(rec.genres?.length || rec.originalLanguage || rec.mainCast?.length || rec.directors?.length) ? (
-                        <details className="mb-3 rounded-lg border border-border bg-surface-2 px-3 py-2" open={index === 0}>
+                        <details className="mb-4 rounded-lg bg-surface-2 px-3 py-2" open={index === 0}>
                           <summary className="cursor-pointer text-xs uppercase tracking-[0.12em] text-text-muted">
                             Details
                           </summary>
@@ -326,17 +387,17 @@ export default function ResultsPage({
                       ) : null}
 
                       {rec.synopsis && (
-                        <p className="mb-3 text-sm text-text-muted">{rec.synopsis}</p>
+                        <p className="mb-4 text-sm text-text-muted">{rec.synopsis}</p>
                       )}
 
                       {rec.whyThis && (
-                        <div className="mb-3 rounded-lg border border-border bg-surface-2 p-3" role="complementary" aria-label="Recommendation explanation">
+                        <div className="mb-4 rounded-lg bg-surface-2 p-3" role="complementary" aria-label="Recommendation explanation">
                           <p className="mb-1 text-xs uppercase tracking-[0.12em] text-text-muted">Why this</p>
                           <p className="text-sm text-text-muted">{rec.whyThis}</p>
                         </div>
                       )}
 
-                      <div className="mb-3">
+                      <div className="mb-4">
                         <p className="mb-2 text-xs uppercase tracking-[0.12em] text-text-muted">Where to stream</p>
                         {rec.availability && rec.availability.length > 0 ? (
                           <div className="flex flex-wrap gap-2" role="list" aria-label="Streaming platforms">
@@ -347,7 +408,7 @@ export default function ResultsPage({
                                   href={avail.link}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="rounded-pill border border-border bg-surface-2 px-3 py-1 text-xs text-text transition-colors hover:border-accent"
+                                  className="rounded-pill bg-surface-2 px-3 py-1 text-xs text-text transition-colors hover:opacity-80"
                                   role="listitem"
                                 >
                                   {avail.platform} ({avail.type})
@@ -355,7 +416,7 @@ export default function ResultsPage({
                               ) : (
                                 <span
                                   key={idx}
-                                  className="rounded-pill border border-border bg-surface-2 px-3 py-1 text-xs text-text"
+                                  className="rounded-pill bg-surface-2 px-3 py-1 text-xs text-text"
                                   role="listitem"
                                 >
                                   {avail.platform} ({avail.type})
@@ -371,7 +432,7 @@ export default function ResultsPage({
                       {rec.trailerUrl && (
                         <button
                           onClick={() => openTrailer(rec.trailerUrl!, rec.title)}
-                          className="rounded-pill border border-border bg-surface-2 px-4 py-1.5 text-xs text-text transition-colors hover:border-accent"
+                          className="rounded-pill bg-surface-2 px-4 py-1.5 text-xs text-text transition-colors hover:opacity-80"
                           aria-label={`Watch trailer for ${rec.title}`}
                         >
                           View trailer
@@ -395,10 +456,10 @@ export default function ResultsPage({
           aria-labelledby="trailer-title"
         >
           <div
-            className="w-full max-w-4xl overflow-hidden rounded-lg border border-border bg-surface shadow-card-hover"
+            className="w-full max-w-4xl overflow-hidden rounded-lg bg-surface shadow-card-hover"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-border p-4">
+            <div className="flex items-center justify-between p-4">
               <h2 id="trailer-title" className="text-xl font-semibold tracking-[-0.03em] text-text">
                 {trailerModal.title} - Trailer
               </h2>
@@ -421,7 +482,7 @@ export default function ResultsPage({
               />
             </div>
 
-            <div className="border-t border-border p-4 text-center">
+            <div className="p-4 text-center">
               <button
                 onClick={closeTrailer}
                 className="rounded-pill border border-border bg-surface-2 px-6 py-2 text-text transition-colors hover:border-accent"

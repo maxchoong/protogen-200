@@ -42,6 +42,22 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: "Migra";
+  src: url("/fonts/migra/migra-extrabold.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Migra";
+  src: url("/fonts/migra/migraitalic-mediumitalic.woff2") format("woff2");
+  font-style: italic;
+  font-weight: 500;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
 
@@ -86,6 +102,41 @@
 
   --shadow-card: rgba(0, 0, 0, 0.12) 0px 12px 12px 0px;
   --shadow-soft: rgba(4, 4, 7, 0.25) 0px 2px 4px 0px, rgba(4, 4, 7, 0.4) 0px 8px 24px 0px;
+
+  --editorial-rhythm-1: 8px;
+  --editorial-rhythm-2: 16px;
+  --editorial-rhythm-3: 24px;
+  --editorial-rhythm-4: 32px;
+  --editorial-rhythm-5: 40px;
+  --editorial-divider-opacity: 0.25;
+}
+
+@media (max-width: 1279px) {
+  :root {
+    --editorial-rhythm-5: 36px;
+    --editorial-divider-opacity: 0.22;
+  }
+}
+
+@media (max-width: 1023px) {
+  :root {
+    --editorial-rhythm-1: 6px;
+    --editorial-rhythm-2: 12px;
+    --editorial-rhythm-3: 18px;
+    --editorial-rhythm-4: 24px;
+    --editorial-rhythm-5: 30px;
+    --editorial-divider-opacity: 0.18;
+  }
+}
+
+@media (max-width: 767px) {
+  :root {
+    --editorial-rhythm-1: 6px;
+    --editorial-rhythm-2: 10px;
+    --editorial-rhythm-3: 14px;
+    --editorial-rhythm-4: 20px;
+    --editorial-rhythm-5: 24px;
+  }
 }
 
 [data-theme="light"] {

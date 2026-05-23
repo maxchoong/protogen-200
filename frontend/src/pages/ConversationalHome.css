@@ -5,6 +5,67 @@
   overflow: hidden;
 }
 
+.editorial-message-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editorial-rhythm-3);
+}
+
+.editorial-intro {
+  padding-top: 6px;
+}
+
+.editorial-hero {
+  font-size: clamp(2.2rem, 6vw, 3.75rem);
+  margin-bottom: var(--editorial-rhythm-3);
+  line-height: 1.06;
+  letter-spacing: -0.034em;
+}
+
+.editorial-kicker {
+  margin-bottom: var(--editorial-rhythm-2);
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.editorial-chip-row {
+  gap: var(--editorial-rhythm-1);
+}
+
+.editorial-composer-band {
+  padding-top: calc(var(--editorial-rhythm-2) + var(--editorial-rhythm-1));
+  padding-bottom: calc(var(--editorial-rhythm-2) + var(--editorial-rhythm-1));
+}
+
+.editorial-composer-row {
+  gap: var(--editorial-rhythm-1);
+}
+
+.editorial-composer-help {
+  margin-top: calc(var(--editorial-rhythm-1) + 4px);
+}
+
+@media (max-width: 1023px) {
+  .editorial-intro {
+    padding-top: var(--editorial-rhythm-1);
+  }
+
+  .editorial-hero {
+    letter-spacing: -0.028em;
+  }
+}
+
+@media (max-width: 767px) {
+  .editorial-hero {
+    line-height: 1.08;
+    letter-spacing: -0.024em;
+  }
+
+  .editorial-kicker {
+    margin-bottom: var(--editorial-rhythm-1);
+  }
+}
+
 .conversational-home textarea:focus {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-focus-ring) 20%, transparent),
     0 0 0 1px var(--color-focus-ring);

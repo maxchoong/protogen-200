@@ -267,14 +267,13 @@ export default function ConversationalHome({
     <div className="conversational-home flex h-full flex-col bg-bg text-text">
 
       {/* Messages Container */}
-      <div className="flex-1 overflow-y-auto px-4 py-6">
-        <div className="mx-auto max-w-4xl space-y-5">
+      <div className="editorial-conversation-scroll flex-1 overflow-y-auto px-4">
+        <div className="editorial-message-stack mx-auto max-w-4xl">
           {state.messages.length === 0 && (
-            <div className="mt-10 rounded-lg border border-border bg-surface px-6 py-8 text-center shadow-card">
-              <p className="mb-1 text-xs uppercase tracking-[0.16em] text-text-muted">Opening brief</p>
-              <p className="mb-3 font-serif text-2xl font-medium tracking-[-0.02em] text-text">What are you in the mood for?</p>
-              <p className="text-sm text-text-muted">Try a prompt:</p>
-              <div className="mt-4 flex flex-wrap justify-center gap-3">
+            <div className="editorial-intro max-w-2xl px-2 py-2 text-left">
+              <p className="editorial-hero font-serif font-medium text-text">What are you in the mood for?</p>
+              <p className="editorial-kicker font-serif text-base italic text-text-muted">Try a prompt:</p>
+              <div className="editorial-chip-row flex flex-wrap">
                 {[
                   'Something funny with Ryan Gosling',
                   'Like Inception but more relaxing',
@@ -285,7 +284,7 @@ export default function ConversationalHome({
                     key={i}
                     onClick={() => void submitMessage(example)}
                     disabled={state.isLoading}
-                    className="rounded-pill border border-border bg-surface-2 px-4 py-2 text-sm text-text transition-colors hover:border-accent disabled:opacity-50"
+                    className="rounded-pill bg-surface-2 px-4 py-2 text-sm text-text transition-colors hover:bg-surface disabled:opacity-50"
                   >
                     {example}
                   </button>
@@ -399,9 +398,9 @@ export default function ConversationalHome({
       </div>
 
       {/* Input Area */}
-      <div className="border-t border-border/80 bg-surface/95 px-4 py-4 backdrop-blur-sm">
+      <div className="editorial-composer-band border-t border-border/50 bg-surface/90 px-4 backdrop-blur-sm">
         <div className="mx-auto max-w-4xl">
-          <div className="flex gap-3 rounded-lg border border-border bg-surface px-3 py-3 shadow-card">
+          <div className="editorial-composer-row flex">
             <textarea
               value={inputValue}
               onChange={e => setInputValue(e.target.value)}
@@ -413,17 +412,17 @@ export default function ConversationalHome({
               }
               disabled={state.isLoading}
               rows={3}
-              className="flex-1 resize-none rounded-lg border border-border bg-surface-2 px-4 py-3 text-text placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-focus disabled:opacity-50"
+              className="flex-1 resize-none rounded-lg bg-surface-2 px-4 py-3 text-text placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-focus disabled:opacity-50"
             />
             <button
               onClick={handleSubmitMessage}
               disabled={!inputValue.trim() || state.isLoading}
-              className="h-fit rounded-pill border border-border bg-surface-2 px-4 py-2 font-medium text-text transition-colors hover:border-accent disabled:cursor-not-allowed disabled:opacity-50"
+              className="h-fit rounded-pill bg-surface-2 px-4 py-2 font-medium text-text transition-colors hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50"
             >
               {state.isLoading ? 'Curating...' : 'Submit'}
             </button>
           </div>
-          <p className="mt-2 text-xs text-text-muted">Press Enter to submit, Shift+Enter for a new line.</p>
+          <p className="editorial-composer-help text-xs text-text-muted">Press Enter to submit, Shift+Enter for a new line.</p>
         </div>
       </div>
     </div>
