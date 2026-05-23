@@ -5,6 +5,12 @@ interface Recommendation {
   title: string
   year: string
   type: string
+  genres?: string[]
+  originalLanguage?: string
+  certification?: string
+  runtimeMinutes?: number
+  rating?: number
+  voteCount?: number
   synopsis?: string
   whyThis?: string
   posterUrl?: string
@@ -56,6 +62,33 @@ const formatTurnOperation = (turnOperation?: TurnOperation): string => {
 
   const continuity = turnOperation.continuity.replace('_', ' ')
   return `${continuity} + ${turnOperation.operation}`
+}
+
+const formatRuntime = (runtimeMinutes?: number): string | null => {
+  if (!runtimeMinutes || runtimeMinutes <= 0) {
+    return null
+  }
+
+  const hours = Math.floor(runtimeMinutes / 60)
+  const minutes = runtimeMinutes % 60
+
+  if (hours === 0) {
+    return `${minutes}m`
+  }
+
+  if (minutes === 0) {
+    return `${hours}h`
+  }
+
+  return `${hours}h ${minutes}m`
+}
+
+const formatVoteCount = (voteCount?: number): string | null => {
+  if (!voteCount || voteCount <= 0) {
+    return null
+  }
+
+  return voteCount.toLocaleString()
 }
 
 export default function ResultsPage({
@@ -110,7 +143,6 @@ export default function ResultsPage({
     <div className="h-full overflow-y-auto px-4 py-6">
       <div className="mx-auto max-w-3xl">
         <div className="mb-6">
-          <p className="mb-2 text-xs uppercase tracking-[0.16em] text-text-muted">Current result set</p>
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-surface-2 px-4 py-3">
             <div>
               <h2 className="font-serif text-2xl font-medium tracking-[-0.02em] text-text">Recommendations</h2>
@@ -250,6 +282,35 @@ export default function ResultsPage({
                     <div className="flex-1">
                       <h3 className="mb-1 font-serif text-xl font-medium tracking-[-0.02em] text-text">{rec.title}</h3>
                       <p className="mb-3 text-xs text-text-muted">{rec.year} • {rec.type}</p>
+
+                      <div className="mb-3 flex flex-wrap gap-2 text-xs text-text-muted">
+                        {typeof rec.rating === 'number' && rec.rating > 0 && (
+                          <span className="rounded-pill border border-border bg-surface-2 px-2 py-1">
+                            Rating {rec.rating.toFixed(1)}/10
+                            {formatVoteCount(rec.voteCount) ? ` • ${formatVoteCount(rec.voteCount)} votes` : ''}
+                          </span>
+                        )}
+                        {rec.genres && rec.genres.length > 0 && (
+                          <span className="rounded-pill border border-border bg-surface-2 px-2 py-1">
+                            {rec.genres.slice(0, 3).join(', ')}
+                          </span>
+                        )}
+                        {rec.originalLanguage && (
+                          <span className="rounded-pill border border-border bg-surface-2 px-2 py-1">
+                            Language {rec.originalLanguage.toUpperCase()}
+                          </span>
+                        )}
+                        {formatRuntime(rec.runtimeMinutes) && (
+                          <span className="rounded-pill border border-border bg-surface-2 px-2 py-1">
+                            Runtime {formatRuntime(rec.runtimeMinutes)}
+                          </span>
+                        )}
+                        {rec.certification && (
+                          <span className="rounded-pill border border-border bg-surface-2 px-2 py-1">
+                            Rated {rec.certification}
+                          </span>
+                        )}
+                      </div>
 
                       {rec.synopsis && (
                         <p className="mb-3 text-sm text-text-muted">{rec.synopsis}</p>

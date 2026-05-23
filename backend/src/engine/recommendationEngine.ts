@@ -18,6 +18,12 @@ export interface Recommendation {
   title: string
   year: string
   type: 'movie' | 'tv'
+  genres?: string[]
+  originalLanguage?: string
+  certification?: string
+  runtimeMinutes?: number
+  rating?: number
+  voteCount?: number
   synopsis: string
   posterUrl: string
   trailerUrl?: string
@@ -184,6 +190,8 @@ export class RecommendationEngine {
       rating: item.vote_average || undefined,
       plot: item.overview || undefined,
       genres: tmdbClient.mapGenreIdsToNames(item.genre_ids || []),
+      originalLanguage: item.original_language || undefined,
+      runtimeMinutes: item.runtime || undefined,
       rated: undefined,
       director: undefined,
       actors: actorHints.length > 0 ? actorHints.join(', ') : undefined,
@@ -384,14 +392,23 @@ export class RecommendationEngine {
         }
 
         const mediaType = title.tmdbMediaType === 'tv' ? 'tv' : 'movie'
-        const externalIds = await tmdbClient.getExternalIds(title.tmdbId, mediaType)
-        if (!externalIds.imdbId) {
-          return title
-        }
+        const [externalIds, details] = await Promise.all([
+          tmdbClient.getExternalIds(title.tmdbId, mediaType),
+          tmdbClient.getTitleDetails(title.tmdbId, mediaType)
+        ])
+
+        const runtimeMinutes = title.runtimeMinutes || details?.runtime
+        const originalLanguage = title.originalLanguage || details?.original_language
+        const genres = (title.genres && title.genres.length > 0)
+          ? title.genres
+          : tmdbClient.mapGenreIdsToNames(details?.genre_ids || [])
 
         return {
           ...title,
-          id: externalIds.imdbId
+          id: externalIds.imdbId || title.id,
+          runtimeMinutes,
+          originalLanguage,
+          genres
         }
       })
     )
@@ -1280,6 +1297,12 @@ export class RecommendationEngine {
       title: item.title,
       year,
       type,
+      genres: item.genres || undefined,
+      originalLanguage: item.originalLanguage || undefined,
+      certification: item.rated || undefined,
+      runtimeMinutes: item.runtimeMinutes || undefined,
+      rating: item.rating || undefined,
+      voteCount: item.voteCount || undefined,
       synopsis: item.plot || 'No synopsis available.',
       posterUrl: item.poster || 'https://via.placeholder.com/300x450?text=No+Poster',
       trailerUrl,

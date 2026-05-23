@@ -42,6 +42,12 @@ interface Recommendation {
   title: string
   year: string
   type: string
+  genres?: string[]
+  originalLanguage?: string
+  certification?: string
+  runtimeMinutes?: number
+  rating?: number
+  voteCount?: number
   synopsis?: string
   whyThis?: string
   posterUrl?: string

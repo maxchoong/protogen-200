@@ -34,6 +34,7 @@ export interface TMDBTitle {
   first_air_date?: string
   media_type: 'movie' | 'tv'
   genre_ids: number[]
+  runtime?: number
   vote_average: number
   vote_count?: number
   adult: boolean
@@ -613,6 +614,20 @@ export class TMDBClient {
     data: any,
     mediaType: 'movie' | 'tv'
   ): TMDBTitle {
+    const genreIds = Array.isArray(data.genre_ids)
+      ? data.genre_ids
+      : Array.isArray(data.genres)
+        ? data.genres
+          .map((genre: { id?: number }) => genre.id)
+          .filter((id: number | undefined): id is number => typeof id === 'number')
+        : []
+
+    const runtime = typeof data.runtime === 'number'
+      ? data.runtime
+      : Array.isArray(data.episode_run_time) && data.episode_run_time.length > 0
+        ? Number(data.episode_run_time[0]) || undefined
+        : undefined
+
     return {
       id: data.id,
       title: data.title || data.name,
@@ -622,7 +637,8 @@ export class TMDBClient {
       release_date: data.release_date,
       first_air_date: data.first_air_date,
       media_type: mediaType,
-      genre_ids: data.genre_ids || [],
+      genre_ids: genreIds,
+      runtime,
       vote_average: data.vote_average || 0,
       vote_count: data.vote_count || 0,
       adult: data.adult || false,
