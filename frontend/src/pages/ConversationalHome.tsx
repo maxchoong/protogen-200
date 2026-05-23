@@ -108,6 +108,8 @@ export default function ConversationalHome({
 
     const shouldAppendUserMessage = options.appendUserMessage ?? true
     const shouldTreatAsFollowUp = options.forceFollowUp ?? false
+    const isFollowUp = state.hasCompletedInitialRequest || shouldTreatAsFollowUp
+    const baseQuery = state.lastQuery || trimmed
 
     if (shouldAppendUserMessage) {
       conversation.addMessage({
@@ -128,15 +130,26 @@ export default function ConversationalHome({
     const askedQuestionIds = state.messages.flatMap(message =>
       (message.clarificationQuestions || []).map(question => question.id)
     )
+    const latestPass = state.recommendationPasses[state.recommendationPasses.length - 1]
+    const previousRecommendationIds = (latestPass?.recommendations || [])
+      .map((item: any) => item?.id)
+      .filter((id: string | undefined): id is string => !!id)
+    const cumulativeConstraints = Array.from(
+      new Set(
+        state.recommendationPasses.flatMap(pass => pass.appliedConstraints || [])
+      )
+    )
 
     try {
       const response = await onSubmit(
-        state.clarificationRound === 0 && !shouldTreatAsFollowUp ? trimmed : state.lastQuery,
-        state.clarificationRound > 0 || shouldTreatAsFollowUp
+        isFollowUp ? baseQuery : trimmed,
+        isFollowUp
           ? {
               clarificationRound: Math.max(1, state.clarificationRound),
               userClarification: trimmed,
-              askedQuestionIds
+              askedQuestionIds,
+              previousRecommendationIds,
+              cumulativeConstraints
             }
           : undefined
       )
@@ -157,6 +170,8 @@ export default function ConversationalHome({
         conversation.updateClarificationRound(state.clarificationRound + 1)
       } else if (response.recommendations && response.recommendations.length > 0) {
         const lowConfidenceTurn = (response.turnOperation?.confidence || 1) < 0.62
+        const shouldAskDirectionConfirmation =
+          lowConfidenceTurn && response.recommendations.length > 3
 
         conversation.addMessage({
           role: 'assistant',
@@ -165,13 +180,13 @@ export default function ConversationalHome({
           recommendations: response.recommendations,
           detectedIntent: response.detectedIntent,
           turnOperation: response.turnOperation,
-          clarificationQuestions: lowConfidenceTurn
+          clarificationQuestions: shouldAskDirectionConfirmation
             ? [
                 {
                   id: 'turn_direction_confirm',
-                  question: 'Quick check: want me to stay close to this lane, or take a bigger swing next pass?',
+                  question: 'Quick check: should I stay close to this direction, or broaden things on the next round?',
                   type: 'select',
-                  options: ['Stay close to this lane', 'Take a bigger swing']
+                  options: ['Stay close to this direction', 'Broaden the search']
                 }
               ]
             : undefined
@@ -184,7 +199,7 @@ export default function ConversationalHome({
             triggerText: trimmed,
             detectedIntent: response.detectedIntent,
             turnOperation: response.turnOperation,
-            requiresDirectionConfirmation: lowConfidenceTurn,
+            requiresDirectionConfirmation: shouldAskDirectionConfirmation,
             refinementSuggestions: response.refinementSuggestions,
             appliedConstraints: response.appliedConstraints,
             retrievalDiagnostics: response.retrievalDiagnostics
@@ -201,8 +216,9 @@ export default function ConversationalHome({
         conversation.updateClarificationRound(0)
       }
 
-      if (state.clarificationRound === 0 && !shouldTreatAsFollowUp) {
+      if (!state.hasCompletedInitialRequest && !shouldTreatAsFollowUp) {
         conversation.updateLastQuery(trimmed)
+        conversation.markInitialRequestComplete()
       }
 
       if (response.detectedIntent) {
@@ -229,11 +245,11 @@ export default function ConversationalHome({
       return
     }
 
-    if (optionText === 'Stay close to this lane') {
+    if (optionText === 'Stay close to this direction') {
       conversation.resolveLatestDirectionConfirmation('keep_direction')
     }
 
-    if (optionText === 'Take a bigger swing') {
+    if (optionText === 'Broaden the search') {
       conversation.resolveLatestDirectionConfirmation('pivot_direction')
     }
 
@@ -264,10 +280,10 @@ export default function ConversationalHome({
     latestMessage?.role === 'assistant' && latestMessage?.clarificationQuestions
   const pendingLabel =
     pendingPhase === 'delayed'
-      ? 'Still curating your next pass.'
+      ? 'Still refining your next round of results.'
       : pendingPhase === 'slow'
-        ? 'Shaping your selections.'
-        : 'Curating your selections.'
+        ? 'Refining your selections.'
+        : 'Finding your best matches.'
 
   return (
     <div className="conversational-home flex h-full flex-col bg-bg text-text">

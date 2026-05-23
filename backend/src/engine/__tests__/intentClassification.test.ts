@@ -253,6 +253,92 @@ describe('Phase 5: Intent Classification & Clarification', () => {
       expect(preferences.constraints).toContain('decade:1980s')
       expect(preferences.constraints).toContain('popularity:mainstream')
     })
+
+    it('should parse top-rated top-N refinement signals from follow-up context', () => {
+      const request: RecommendationRequest = {
+        description: 'Something funny with Ryan Gosling',
+        clarificationContext: {
+          clarificationRound: 1,
+          userClarification: 'Show me the top 3 rated titles'
+        }
+      }
+
+      const preferences = PreferenceParser.parse(request)
+
+      expect(preferences.discoveryMode).toBe('talent')
+      expect(preferences.resultLimit).toBe(3)
+      expect(preferences.preferTopRated).toBe(true)
+      expect(preferences.constraints).toEqual(
+        expect.arrayContaining(['top:3', 'sort:rating_desc'])
+      )
+    })
+
+    it('should avoid mixed disambiguation for clear refinement follow-ups', () => {
+      const request: RecommendationRequest = {
+        description: 'Something funny with Ryan Gosling',
+        clarificationContext: {
+          clarificationRound: 1,
+          userClarification: 'Show me the top 3 rated titles'
+        }
+      }
+
+      const preferences = PreferenceParser.parse(request)
+      const clarification = PreferenceParser.needsClarification(
+        preferences,
+        0,
+        request.clarificationContext?.userClarification
+      )
+
+      expect(clarification).toBeNull()
+    })
+
+    it('should use generic mixed disambiguation copy when novelty cue is absent', () => {
+      const request: RecommendationRequest = {
+        description: 'funny but dark with action and great acting'
+      }
+
+      const preferences = PreferenceParser.parse(request)
+      const clarification = PreferenceParser.needsClarification(preferences, 0, request.description)
+
+      if (!clarification || clarification.length === 0) {
+        throw new Error('Expected a clarification question for low-confidence mixed intent')
+      }
+
+      expect(clarification[0].id).toBe('mixed_disambiguation')
+      expect(clarification[0].question).toBe('I can tune this a few ways. Which should I prioritise?')
+    })
+
+    it('should parse strategy selection as ranking preference without dropping talent anchor', () => {
+      const request: RecommendationRequest = {
+        description: 'Something funny with Ryan Gosling',
+        clarificationContext: {
+          clarificationRound: 1,
+          userClarification: 'Go mood-first'
+        }
+      }
+
+      const preferences = PreferenceParser.parse(request)
+
+      expect(preferences.discoveryMode).toBe('talent')
+      expect(preferences.detectedActors).toEqual(expect.arrayContaining(['Ryan Gosling']))
+      expect(preferences.rankingStrategyPreference).toBe('mood_first')
+      expect(preferences.constraints).toContain('strategy:mood_first')
+    })
+
+    it('should parse cast-director strategy preference from clarification option text', () => {
+      const request: RecommendationRequest = {
+        description: 'Something funny with Ryan Gosling',
+        clarificationContext: {
+          clarificationRound: 1,
+          userClarification: 'Go cast/director first'
+        }
+      }
+
+      const preferences = PreferenceParser.parse(request)
+
+      expect(preferences.rankingStrategyPreference).toBe('talent_first')
+      expect(preferences.constraints).toContain('strategy:talent_first')
+    })
   })
 
   describe('Turn Operation Classification', () => {

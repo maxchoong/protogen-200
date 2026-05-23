@@ -62,6 +62,7 @@ export interface ConversationState {
   messages: ConversationMessage[]
   isLoading: boolean
   error: string | null
+  hasCompletedInitialRequest: boolean
   clarificationRound: number
   lastQuery: string
   lastIntent?: DetectedIntent
@@ -76,6 +77,7 @@ export function useConversation() {
     messages: [],
     isLoading: false,
     error: null,
+    hasCompletedInitialRequest: false,
     clarificationRound: 0,
     lastQuery: '',
     recommendationPasses: [],
@@ -113,6 +115,10 @@ export function useConversation() {
 
   const updateLastIntent = useCallback((intent: DetectedIntent | undefined) => {
     setState(prev => ({ ...prev, lastIntent: intent }))
+  }, [])
+
+  const markInitialRequestComplete = useCallback(() => {
+    setState(prev => ({ ...prev, hasCompletedInitialRequest: true }))
   }, [])
 
   const addRecommendationPass = useCallback((pass: Omit<RecommendationPass, 'id' | 'timestamp'>) => {
@@ -195,6 +201,7 @@ export function useConversation() {
       messages: [],
       isLoading: false,
       error: null,
+      hasCompletedInitialRequest: false,
       clarificationRound: 0,
       lastQuery: '',
       lastIntent: undefined,
@@ -211,6 +218,7 @@ export function useConversation() {
     updateClarificationRound,
     updateLastQuery,
     updateLastIntent,
+    markInitialRequestComplete,
     addRecommendationPass,
     setActivePassIndex,
     resolveLatestDirectionConfirmation,

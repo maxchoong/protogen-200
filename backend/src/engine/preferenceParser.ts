@@ -62,6 +62,9 @@ export interface ParsedPreferences {
   reducedMoods?: string[]         // Moods to explicitly de-emphasize
   noveltyIntent?: boolean         // true for discovery language like "indie gems"
   popularityPreference?: 'mainstream' | 'niche'
+  rankingStrategyPreference?: 'mood_first' | 'reference_first' | 'talent_first'
+  resultLimit?: number
+  preferTopRated?: boolean
   turnOperation?: TurnOperation
 }
 
@@ -472,6 +475,15 @@ export class PreferenceParser {
     if (refinementSignals.yearRange) {
       preferences.yearRange = refinementSignals.yearRange
     }
+    if (refinementSignals.rankingStrategyPreference) {
+      preferences.rankingStrategyPreference = refinementSignals.rankingStrategyPreference
+    }
+    if (refinementSignals.resultLimit) {
+      preferences.resultLimit = refinementSignals.resultLimit
+    }
+    if (refinementSignals.preferTopRated) {
+      preferences.preferTopRated = refinementSignals.preferTopRated
+    }
     if (refinementSignals.constraints.length > 0) {
       preferences.constraints = Array.from(
         new Set([...(preferences.constraints || []), ...refinementSignals.constraints])
@@ -600,16 +612,26 @@ export class PreferenceParser {
       return base
     }
 
-    return `${base} ${cumulative} ${clarification || ''}`.trim()
+    // Use explicit separators so cross-turn text does not merge into accidental entities.
+    return [base, cumulative, clarification || '']
+      .map(value => value.trim())
+      .filter(Boolean)
+      .join(' | ')
   }
 
   private static extractRefinementSignals(description: string): {
     popularityPreference?: 'mainstream' | 'niche'
     yearRange?: { min?: number; max?: number }
+    rankingStrategyPreference?: 'mood_first' | 'reference_first' | 'talent_first'
+    resultLimit?: number
+    preferTopRated?: boolean
     constraints: string[]
   } {
     const constraints: string[] = []
     let popularityPreference: 'mainstream' | 'niche' | undefined
+    let rankingStrategyPreference: 'mood_first' | 'reference_first' | 'talent_first' | undefined
+    let resultLimit: number | undefined
+    let preferTopRated = false
 
     const hasMainstream = this.MAINSTREAM_KEYWORDS.some(keyword => description.includes(keyword))
     const hasNiche = this.NOVELTY_KEYWORDS.some(keyword => description.includes(keyword))
@@ -650,9 +672,54 @@ export class PreferenceParser {
       constraints.push(`decade:${yearRange.min}s`)
     }
 
+    if (
+      /\bgo\s+mood[-\s]?first\b/.test(description) ||
+      /\bprioriti[sz]e\s+mood\b/.test(description) ||
+      /\bmood\/tone\s+first\b/.test(description)
+    ) {
+      rankingStrategyPreference = 'mood_first'
+      constraints.push('strategy:mood_first')
+    } else if (
+      /\bgo\s+title[-\s]?similarity\s+first\b/.test(description) ||
+      /\bprioriti[sz]e\s+title\s+similarity\b/.test(description) ||
+      /\bprioriti[sz]e\s+genre\s+first\b/.test(description)
+    ) {
+      rankingStrategyPreference = 'reference_first'
+      constraints.push('strategy:reference_first')
+    } else if (
+      /\bgo\s+cast\/?director\s+first\b/.test(description) ||
+      /\bprioriti[sz]e\s+cast\/?director\b/.test(description) ||
+      /\bprioriti[sz]e\s+cast\b/.test(description)
+    ) {
+      rankingStrategyPreference = 'talent_first'
+      constraints.push('strategy:talent_first')
+    }
+
+    const topCountMatch = description.match(/\b(?:top|best|highest)\s+(\d{1,2})\b/)
+    if (topCountMatch?.[1]) {
+      const parsed = parseInt(topCountMatch[1], 10)
+      if (Number.isFinite(parsed) && parsed > 0) {
+        resultLimit = Math.min(10, parsed)
+        constraints.push(`top:${resultLimit}`)
+      }
+    }
+
+    const hasRatingOrderCue =
+      /\b(top|best|highest)\s+\d{1,2}\s+(rated|rating|reviewed)\b/.test(description) ||
+      /\b(top|best|highest)\s+(rated|rating|reviewed)\b/.test(description) ||
+      /\b(rated|rating)\s+(highest|best)\b/.test(description)
+
+    if (hasRatingOrderCue) {
+      preferTopRated = true
+      constraints.push('sort:rating_desc')
+    }
+
     return {
       popularityPreference,
       yearRange,
+      rankingStrategyPreference,
+      resultLimit,
+      preferTopRated,
       constraints
     }
   }
@@ -715,6 +782,15 @@ export class PreferenceParser {
   private static hasNoveltyIntent(description: string): boolean {
     const lower = description.toLowerCase()
     return this.NOVELTY_KEYWORDS.some(keyword => lower.includes(keyword))
+  }
+
+  private static isClearRefinementRequest(preferences: ParsedPreferences): boolean {
+    return Boolean(
+      preferences.resultLimit ||
+      preferences.preferTopRated ||
+      preferences.popularityPreference ||
+      (preferences.yearRange?.min !== undefined && preferences.yearRange?.max !== undefined)
+    )
   }
 
   private static extractComparativeMoodShifts(description: string): {
@@ -929,7 +1005,8 @@ export class PreferenceParser {
    */
   static needsClarification(
     preferences: ParsedPreferences,
-    clarificationRound: number = 0
+    clarificationRound: number = 0,
+    latestUserClarification?: string
   ): Array<{
     id: string
     question: string
@@ -945,6 +1022,11 @@ export class PreferenceParser {
       return null
     }
 
+    // Clear refinement instructions should execute directly.
+    if (this.isClearRefinementRequest(preferences)) {
+      return null
+    }
+
     // Contrastive reference requests need a directional target to rank properly.
     if (
       preferences.isContrastiveReference &&
@@ -956,7 +1038,7 @@ export class PreferenceParser {
       return [
         {
           id: 'contrastive_target',
-          question: `You asked for something like "${preferences.referenceTitle[0]}" with a different vibe. Which direction should I prioritize?`,
+          question: `You asked for something like "${preferences.referenceTitle[0]}" with a different vibe. Which direction should I prioritise?`,
           type: 'select',
           options: ['More relaxing', 'More intense', 'Funnier', 'Darker']
         }
@@ -965,10 +1047,14 @@ export class PreferenceParser {
 
     // Mixed intent near threshold is fragile; ask one disambiguation question.
     if (preferences.discoveryMode === 'mixed' && confidence < MIXED_SAFE_THRESHOLD) {
+      const lowerClarification = latestUserClarification?.toLowerCase() || ''
+      const noveltyPrompt = lowerClarification.includes('surprise me') || preferences.noveltyIntent
       return [
         {
           id: 'mixed_disambiguation',
-          question: 'What do you mean by "surprise me"?',
+          question: noveltyPrompt
+            ? 'What do you mean by "surprise me"?'
+            : 'I can tune this a few ways. Which should I prioritise?',
           type: 'select',
           options: ['Go mood-first', 'Go title-similarity first', 'Go cast/director first']
         }
@@ -1008,7 +1094,7 @@ export class PreferenceParser {
         // Both actor and reference detected
         questions.push({
           id: 'actor_vs_reference',
-          question: 'Should I prioritize movies with those actors, or movies similar to the reference you mentioned?',
+          question: 'Should I prioritise movies with those actors, or movies similar to the reference you mentioned?',
           type: 'select',
           options: ['Actors are key', 'Reference title matters more', 'Both equally']
         })

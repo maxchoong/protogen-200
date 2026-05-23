@@ -1054,17 +1054,82 @@ export class RecommendationEngine {
     const modeConfig = preferences.discoveryMode
       ? RankingScorer.getWeightsForMode(preferences.discoveryMode)
       : undefined
+
+    const scoringConfig = modeConfig
+      ? {
+          weights: { ...modeConfig.weights }
+        }
+      : undefined
+
+    if (preferences.rankingStrategyPreference && scoringConfig) {
+      if (preferences.rankingStrategyPreference === 'mood_first') {
+        scoringConfig.weights = {
+          ...scoringConfig.weights,
+          mood: Math.max(0.35, scoringConfig.weights.mood),
+          talent: Math.max(
+            preferences.discoveryMode === 'talent' ? 0.3 : 0.12,
+            scoringConfig.weights.talent * 0.8
+          ),
+          genre: Math.max(0.12, scoringConfig.weights.genre * 0.75),
+          rating: Math.max(0.12, scoringConfig.weights.rating * 0.85),
+          popularity: Math.max(0.06, scoringConfig.weights.popularity * 0.75),
+          recency: Math.max(0.03, scoringConfig.weights.recency * 0.75)
+        }
+      }
+
+      if (preferences.rankingStrategyPreference === 'reference_first') {
+        scoringConfig.weights = {
+          ...scoringConfig.weights,
+          genre: Math.max(0.32, scoringConfig.weights.genre),
+          talent: Math.max(
+            preferences.discoveryMode === 'talent' ? 0.28 : 0.2,
+            scoringConfig.weights.talent
+          ),
+          mood: Math.max(0.1, scoringConfig.weights.mood * 0.75),
+          rating: Math.max(0.1, scoringConfig.weights.rating * 0.9),
+          popularity: Math.max(0.05, scoringConfig.weights.popularity * 0.8),
+          recency: Math.max(0.03, scoringConfig.weights.recency * 0.8)
+        }
+      }
+
+      if (preferences.rankingStrategyPreference === 'talent_first') {
+        scoringConfig.weights = {
+          ...scoringConfig.weights,
+          talent: Math.max(0.55, scoringConfig.weights.talent),
+          genre: Math.max(0.1, scoringConfig.weights.genre * 0.75),
+          mood: Math.max(0.08, scoringConfig.weights.mood * 0.7),
+          rating: Math.max(0.1, scoringConfig.weights.rating * 0.8),
+          popularity: Math.max(0.04, scoringConfig.weights.popularity * 0.7),
+          recency: Math.max(0.03, scoringConfig.weights.recency * 0.7)
+        }
+      }
+    }
+
+    if (preferences.preferTopRated) {
+      const baseWeights = scoringConfig?.weights || RankingScorer.getWeightsForMode('mixed').weights
+      scoringConfig
+        ? Object.assign(scoringConfig.weights, {
+            genre: Math.max(0.1, baseWeights.genre * 0.6),
+            mood: Math.max(0.08, baseWeights.mood * 0.6),
+            talent: Math.max(preferences.discoveryMode === 'talent' ? 0.2 : 0.08, baseWeights.talent * 0.6),
+            rating: 0.5,
+            popularity: Math.max(0.05, baseWeights.popularity * 0.6),
+            recency: Math.max(0.03, baseWeights.recency * 0.6)
+          })
+        : undefined
+    }
     
-    if (modeConfig && preferences.discoveryMode) {
+    if (scoringConfig && preferences.discoveryMode) {
       console.log(
         `[Engine.Rank] Applying ${preferences.discoveryMode} mode weights: ` +
-        `genre=${(modeConfig.weights.genre * 100).toFixed(0)}%, ` +
-        `mood=${(modeConfig.weights.mood * 100).toFixed(0)}%, ` +
-        `talent=${(modeConfig.weights.talent * 100).toFixed(0)}%`
+        `genre=${(scoringConfig.weights.genre * 100).toFixed(0)}%, ` +
+        `mood=${(scoringConfig.weights.mood * 100).toFixed(0)}%, ` +
+        `talent=${(scoringConfig.weights.talent * 100).toFixed(0)}%, ` +
+        `rating=${(scoringConfig.weights.rating * 100).toFixed(0)}%`
       )
     }
 
-    const ranked = RankingScorer.rankTitles(filtered, preferences, modeConfig)
+    const ranked = RankingScorer.rankTitles(filtered, preferences, scoringConfig)
 
     // === PHASE 3.4: Apply Exclusion Penalties to Composite Scores ===
     // Reduce composite score for titles with excluded genres

@@ -113,26 +113,26 @@ const buildWeakResultRefinementSuggestions = (
   switch (mode) {
     case 'reference':
       return [
-        'Prioritize cast/director similarity',
+        'Prioritise cast/director similarity',
         'Lean more mainstream blockbusters',
         'Focus on titles from the 80s or 90s'
       ]
     case 'talent':
       return [
-        'Prioritize a specific genre',
+        'Prioritise a specific genre',
         'Only include movies (or only series)',
         'Prefer recent releases'
       ]
     case 'mood':
       return [
         'Adjust the intensity (calmer or more intense)',
-        'Prioritize faster or slower pacing',
+        'Prioritise faster or slower pacing',
         'Constrain to a specific decade'
       ]
     default:
       return [
-        'Prioritize mood/tone first',
-        'Prioritize genre first',
+        'Prioritise mood/tone first',
+        'Prioritise genre first',
         'Constrain to a specific era or decade'
       ]
   }
@@ -319,7 +319,7 @@ const buildWeakMatchClarification = (
     reference: [
       {
         id: 'quality_reference_axis',
-        question: 'For titles similar to your reference, what should I prioritize?',
+        question: 'For titles similar to your reference, what should I prioritise?',
         type: 'select',
         options: [
           ...(hasInferredMoodShift ? [] : ['Mood/tone']),
@@ -478,8 +478,15 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
     const clarificationRound = clarificationContext?.clarificationRound ?? 0
     const clarificationQuestions = PreferenceParser.needsClarification(
       parsedPreferences,
-      clarificationRound
+      clarificationRound,
+      clarificationContext?.userClarification
     )
+
+    const requestedLimit = parsedPreferences.resultLimit
+    const recommendationLimit =
+      requestedLimit && Number.isFinite(requestedLimit)
+        ? Math.max(1, Math.min(10, requestedLimit))
+        : 10
 
     const bypassInitialClarification = shouldPreferResultsFirst(
       clarificationQuestions,
@@ -494,7 +501,7 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
         success: true,
         requiresClarification: {
           questions: clarificationQuestions,
-          context: 'I can take this a few ways. Pick one, or type your own direction.',
+          context: 'I can tune this a few ways. Choose one, or type your own direction.',
           confidenceScore: parsedPreferences.intentConfidence
         },
         detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence
@@ -524,7 +531,7 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
         maxRating: preferences.maxRating
       } : undefined,
       clarificationContext: clarificationContext
-    })
+    }, recommendationLimit)
     const retrievalDiagnostics = recommendationEngine.getLastRetrievalDiagnostics()
 
     const shouldBypassWeakSet = shouldBypassWeakSetForReference(

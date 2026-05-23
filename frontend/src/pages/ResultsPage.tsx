@@ -51,7 +51,7 @@ interface ResultsPageProps {
 
 const formatTurnOperation = (turnOperation?: TurnOperation): string => {
   if (!turnOperation) {
-    return 'Initial pass'
+    return 'Initial round'
   }
 
   const continuity = turnOperation.continuity.replace('_', ' ')
@@ -110,12 +110,12 @@ export default function ResultsPage({
     <div className="h-full overflow-y-auto px-4 py-6">
       <div className="mx-auto max-w-3xl">
         <div className="mb-6">
-          <p className="mb-2 text-xs uppercase tracking-[0.16em] text-text-muted">Current curated pass</p>
+          <p className="mb-2 text-xs uppercase tracking-[0.16em] text-text-muted">Current result set</p>
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-surface-2 px-4 py-3">
             <div>
               <h2 className="font-serif text-2xl font-medium tracking-[-0.02em] text-text">Recommendations</h2>
               <p className="mt-1 text-sm text-text-muted">
-                {passCount > 0 ? `Pass ${passIndex + 1} of ${passCount}` : 'No passes yet'}
+                {passCount > 0 ? `Round ${passIndex + 1} of ${passCount}` : 'No rounds yet'}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -123,17 +123,17 @@ export default function ResultsPage({
                 onClick={onPreviousPass}
                 disabled={passCount === 0 || passIndex <= 0}
                 className="rounded-pill border border-border bg-surface px-3 py-1.5 text-xs text-text transition-colors hover:border-accent disabled:opacity-50"
-                aria-label="Previous recommendation pass"
+                aria-label="Previous recommendation round"
               >
-                Previous pass
+                Previous round
               </button>
               <button
                 onClick={onNextPass}
                 disabled={passCount === 0 || passIndex >= passCount - 1}
                 className="rounded-pill border border-border bg-surface px-3 py-1.5 text-xs text-text transition-colors hover:border-accent disabled:opacity-50"
-                aria-label="Next recommendation pass"
+                aria-label="Next recommendation round"
               >
-                Next pass
+                Next round
               </button>
             </div>
           </div>
@@ -149,19 +149,19 @@ export default function ResultsPage({
             <p className="mt-2 text-xs text-text-muted">Turn type: {formatTurnOperation(turnOperation)}</p>
             {requiresDirectionConfirmation && !directionConfirmationChoice && (
               <p className="mt-2 rounded-sm border border-amber-300/40 bg-amber-100/10 px-2 py-1 text-xs text-amber-100">
-                Quick check pending in the conversation: stay close to this lane, or take a bigger swing.
+                Quick check pending in the conversation: stay close to this direction, or broaden the search.
               </p>
             )}
             {directionConfirmationChoice && (
               <p className="mt-2 text-xs text-text-muted">
-                Direction set: {directionConfirmationChoice === 'keep_direction' ? 'Stay close to this lane' : 'Take a bigger swing'}
+                Direction set: {directionConfirmationChoice === 'keep_direction' ? 'Stay close to this direction' : 'Broaden the search'}
               </p>
             )}
             {confirmationTrace && (
               <p
                 className={`mt-2 text-xs ${confirmationTrace.aligned ? 'text-emerald-300' : 'text-amber-200'}`}
               >
-                Check-in: you picked {confirmationTrace.fromChoice === 'keep_direction' ? 'stay close to this lane' : 'take a bigger swing'}, and the next pass came back as {confirmationTrace.outcomeContinuity?.replace('_', ' ') || 'unknown'} {confirmationTrace.aligned ? '(aligned)' : '(diverged)'}. 
+                Check-in: you picked {confirmationTrace.fromChoice === 'keep_direction' ? 'stay close to this direction' : 'broaden the search'}, and the next round came back as {confirmationTrace.outcomeContinuity?.replace('_', ' ') || 'unknown'} {confirmationTrace.aligned ? '(aligned)' : '(diverged)'}. 
               </p>
             )}
           </div>
@@ -218,7 +218,7 @@ export default function ResultsPage({
 
         {results.length === 0 ? (
           <div className="rounded-lg border border-border bg-surface px-6 py-12 text-center shadow-card" role="status" aria-live="polite">
-            <p className="text-sm text-text-muted">No recommendations yet. Continue the conversation to generate your first curated pass.</p>
+            <p className="text-sm text-text-muted">No recommendations yet. Continue the conversation to generate your first result set.</p>
           </div>
         ) : (
           <div className="grid gap-5" role="list" aria-label="Movie and TV show recommendations">

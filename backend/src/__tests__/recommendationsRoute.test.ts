@@ -188,7 +188,68 @@ describe('POST /recommendations route guardrails', () => {
           previousRecommendationIds: ['tt1375666', 'tt0816692'],
           cumulativeConstraints: ['show me movies from the 80s']
         })
+      }),
+      10
+    )
+  })
+
+  it('should apply top-N refinement as recommendation limit', async () => {
+    const mockRecommendations = [
+      {
+        id: 'tt001',
+        title: 'Match One',
+        year: '2018',
+        type: 'movie',
+        synopsis: 'A relevant title.',
+        score: 7.9,
+        scoringFactors: { composite: 0.68 }
+      },
+      {
+        id: 'tt002',
+        title: 'Match Two',
+        year: '2019',
+        type: 'movie',
+        synopsis: 'A relevant title.',
+        score: 7.8,
+        scoringFactors: { composite: 0.66 }
+      },
+      {
+        id: 'tt003',
+        title: 'Match Three',
+        year: '2020',
+        type: 'movie',
+        synopsis: 'A relevant title.',
+        score: 7.7,
+        scoringFactors: { composite: 0.64 }
+      }
+    ]
+
+    const getRecommendationsSpy = jest
+      .spyOn(recommendationEngine, 'getRecommendations')
+      .mockResolvedValue(mockRecommendations as any)
+
+    const response = await request(app)
+      .post('/recommendations')
+      .send({
+        description: 'Something funny with Ryan Gosling',
+        region: 'US',
+        clarificationContext: {
+          clarificationRound: 1,
+          userClarification: 'Show me the top 3 rated titles'
+        }
       })
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+    expect(getRecommendationsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: 'Something funny with Ryan Gosling',
+        clarificationContext: expect.objectContaining({
+          clarificationRound: 1,
+          userClarification: 'Show me the top 3 rated titles'
+        })
+      }),
+      3
     )
   })
 
