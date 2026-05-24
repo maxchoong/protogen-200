@@ -852,8 +852,6 @@ export default function ResultsPage({
     }
   }, [
     activeDetailsRec,
-    availabilityByTitleId,
-    availabilityLoadingByTitleId,
     retrievalDiagnostics?.streaming?.country
   ])
 
