@@ -240,12 +240,22 @@
 - [x] No TypeScript errors in test files
 - [x] No lint violations
 
+### Editorial Panel and Highlights Enrichment (May 24, 2026)
+- [x] Unified details panel interaction for both recommendation cards and default highlight tiles
+- [x] Moved details panel navigation to top row with lightweight link-style Previous/Next controls
+- [x] Reduced panel metadata redundancy by removing duplicate quality line under poster block
+- [x] Added hover/focus affordances for highlight tiles and recommendation cards while preserving editorial baseline chrome
+- [x] Added backend route `GET /highlights/:type/:id` for enriched highlight metadata
+- [x] Added frontend on-demand fetch + cache for highlight details in panel view
+- [x] Highlight panel now supports synopsis, cast/director, genres/language, runtime/rating, and trailer data when available
+
 ---
 
 ## Open Follow-Ups
 
 - [ ] Refresh setup and summary docs that still mention legacy provider assumptions
 - [ ] Add automated regression tests for critics-intent transparency and unsupported-source guardrail
+- [ ] Add automated regression tests for `GET /highlights/:type/:id` and highlight details caching/fallback behavior
 - [ ] Rotate exposed development secrets
 - [ ] Consider backend pipeline optimization or refactoring if performance becomes an issue
 - [ ] Test full multi-turn flow end-to-end with live API and browser snapshots

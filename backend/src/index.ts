@@ -83,6 +83,7 @@ interface ApiResponse {
   success: boolean
   recommendations?: Recommendation[]
   highlights?: HighlightTile[]
+  highlightDetails?: Recommendation
   requiresClarification?: RequiresClarification
   appliedConstraints?: string[]
   interpretationNote?: string
@@ -114,6 +115,13 @@ interface HighlightTile {
   rating: number
   voteCount: number
   posterUrl: string
+  synopsis?: string
+  genres?: string[]
+  originalLanguage?: string
+  runtimeMinutes?: number
+  mainCast?: string[]
+  directors?: string[]
+  trailerUrl?: string
 }
 
 type ParsedPreferencesSnapshot = ReturnType<typeof PreferenceParser.parse>
@@ -466,6 +474,9 @@ app.get('/highlights', async (req: Request, res: Response<ApiResponse>) => {
       releaseDate?: string
       firstAirDate?: string
       mediaType: 'movie' | 'tv'
+      overview: string
+      genreIds: number[]
+      originalLanguage: string
       voteAverage: number
       voteCount: number
       posterPath: string
@@ -485,6 +496,9 @@ app.get('/highlights', async (req: Request, res: Response<ApiResponse>) => {
           releaseDate: item.release_date,
           firstAirDate: item.first_air_date,
           mediaType,
+          overview: item.overview || '',
+          genreIds: item.genre_ids || [],
+          originalLanguage: item.original_language || 'en',
           voteAverage: item.vote_average || 0,
           voteCount: item.vote_count || 0,
           posterPath: item.poster_path
@@ -511,7 +525,10 @@ app.get('/highlights', async (req: Request, res: Response<ApiResponse>) => {
         type: item.mediaType,
         rating: item.voteAverage,
         voteCount: item.voteCount,
-        posterUrl: `${TMDB_POSTER_BASE_URL}${item.posterPath}`
+        posterUrl: `${TMDB_POSTER_BASE_URL}${item.posterPath}`,
+        synopsis: item.overview,
+        genres: tmdbClient.mapGenreIdsToNames(item.genreIds),
+        originalLanguage: item.originalLanguage
       }))
 
     res.json({ success: true, highlights })
@@ -520,6 +537,70 @@ app.get('/highlights', async (req: Request, res: Response<ApiResponse>) => {
     res.status(500).json({
       success: false,
       message: 'Unable to load highlights'
+    })
+  }
+})
+
+app.get('/highlights/:type/:id', async (req: Request, res: Response<ApiResponse>) => {
+  try {
+    if (!tmdbClient.isEnabled()) {
+      return res.status(503).json({
+        success: false,
+        message: 'TMDB is not configured'
+      })
+    }
+
+    const typeParam = req.params.type === 'tv' ? 'tv' : req.params.type === 'movie' ? 'movie' : null
+    const idParam = Number.parseInt(req.params.id, 10)
+
+    if (!typeParam || !Number.isFinite(idParam) || idParam <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid highlight identifier'
+      })
+    }
+
+    const [details, credits, videos] = await Promise.all([
+      tmdbClient.getTitleDetails(idParam, typeParam),
+      tmdbClient.getTitleCredits(idParam, typeParam),
+      tmdbClient.getVideos(idParam, typeParam)
+    ])
+
+    if (!details) {
+      return res.status(404).json({
+        success: false,
+        message: 'Highlight not found'
+      })
+    }
+
+    const trailerUrl = videos.length > 0 ? `https://www.youtube.com/watch?v=${videos[0].key}` : undefined
+
+    const highlightDetails: Recommendation = {
+      id: `${typeParam}-${idParam}`,
+      title: details.title || details.name || 'Untitled',
+      year: (typeParam === 'tv' ? details.first_air_date : details.release_date)?.slice(0, 4) || 'Unknown year',
+      type: typeParam,
+      genres: tmdbClient.mapGenreIdsToNames(details.genre_ids || []),
+      originalLanguage: details.original_language,
+      runtimeMinutes: details.runtime,
+      rating: details.vote_average,
+      voteCount: details.vote_count,
+      mainCast: credits.mainCast,
+      directors: credits.directors,
+      synopsis: details.overview || undefined,
+      posterUrl: details.poster_path ? `${TMDB_POSTER_BASE_URL}${details.poster_path}` : undefined,
+      trailerUrl
+    }
+
+    return res.json({
+      success: true,
+      highlightDetails
+    })
+  } catch (error) {
+    console.error('Error in /highlights/:type/:id:', error)
+    return res.status(500).json({
+      success: false,
+      message: 'Unable to load highlight details'
     })
   }
 })

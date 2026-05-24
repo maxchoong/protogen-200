@@ -2,7 +2,7 @@
 
 ## Project Status
 
-**Date:** May 23, 2026  
+**Date:** May 24, 2026  
 **Phase:** Post-Phase-6 quality hardening and transparency updates
 **Overall Progress:** Conversational recommendation engine is operational end-to-end with stronger follow-up behavior, TMDB enrichment, explicit transparency messaging, and simplified UX (freeform-only next turns).
 
@@ -46,6 +46,19 @@
 ### Robustness Fixes
 - Prevented literal `"null"` explanation strings from leaking to UI by forcing fallback template explanations.
 
+### Editorial Results UX Refinements (May 24, 2026)
+- Recommendation cards and default highlight poster tiles now use clearer hover/focus affordances while maintaining a lower-chrome editorial baseline.
+- More-details interaction is unified: both recommendation cards and default highlight tiles open the same right-side panel format.
+- Panel navigation moved to the top row and restyled to lightweight link-style Previous/Next controls with a subtle `x of y` counter.
+- Removed redundant panel metadata line that duplicated runtime/rating/votes beneath the poster area.
+- Trailer modal fallback UX improved for failed embeds (explicit fallback message + source link).
+
+### Highlights Data Enrichment (May 24, 2026)
+- Root cause identified: default highlights were backed by lightweight `/highlights` payload and lacked full recommendation metadata.
+- Backend now exposes `GET /highlights/:type/:id` for enriched highlight details (synopsis, cast, directors, genres, language, runtime, trailer).
+- Frontend details panel now fetches highlight details on demand and caches per-highlight to avoid repeated requests.
+- Highlight details now render richer metadata parity with recommendation details (subject to TMDB data availability per title).
+
 ---
 
 ## Current Architecture Snapshot
@@ -78,6 +91,9 @@
 - [x] `Critics favourites from 2020` now returns movie-only 2020 set with interpretation note and proxy constraint.
 - [x] Explicit unsupported source query (e.g., Rotten Tomatoes) returns clarification prompt instead of pretending source support.
 - [x] `Show me more` remains in blockbuster/year frame without TV drift.
+- [x] Unified details panel opens from both recommendation cards and default highlight poster tiles.
+- [x] Top-row panel navigation (`Previous / x of y / Next + close`) validated in browser.
+- [x] Highlight details now include cast/director/language/trailer data after backend endpoint activation.
 
 ---
 
@@ -86,11 +102,13 @@
 - [ ] Run full browser smoke pass for all major conversational journeys after latest transparency changes.
 - [ ] Refresh older long-form memory docs where legacy assumptions still appear.
 - [ ] Add targeted automated tests for critics-intent guardrails and interpretation-note behavior.
+- [ ] Add automated coverage for `GET /highlights/:type/:id` and frontend highlight-details caching/fallback behavior.
 
 ---
 
 ## Next Steps
 
 1. Add regression tests for critics proxy and unsupported source clarification.
-2. Validate production/deployed behavior matches local changes.
-3. Continue documentation convergence (README/phase docs and memory-bank consolidated docs).
+2. Add regression tests for enriched highlight details route and panel parity behavior.
+3. Validate production/deployed behavior matches local changes.
+4. Continue documentation convergence (README/phase docs and memory-bank consolidated docs).

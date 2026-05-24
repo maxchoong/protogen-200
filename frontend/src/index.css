@@ -100,8 +100,8 @@
   --radius-pill: 48px;
   --radius-badge: 22px;
 
-  --shadow-card: rgba(0, 0, 0, 0.12) 0px 12px 12px 0px;
-  --shadow-soft: rgba(4, 4, 7, 0.25) 0px 2px 4px 0px, rgba(4, 4, 7, 0.4) 0px 8px 24px 0px;
+  --shadow-card: rgba(4, 4, 7, 0.11) 0px 1px 6px 0px;
+  --shadow-soft: rgba(4, 4, 7, 0.16) 0px 4px 12px 0px;
 
   --editorial-rhythm-1: 8px;
   --editorial-rhythm-2: 16px;
