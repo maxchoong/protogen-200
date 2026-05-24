@@ -1,5 +1,5 @@
 import { Fragment, useState, useEffect, useRef } from 'react'
-import { buttonClass, inlineLinkClass } from '../buttonStyles'
+import { buttonClass, inlineActionClass, inlineLinkClass } from '../buttonStyles'
 
 interface Recommendation {
   id: string
@@ -857,32 +857,34 @@ export default function ResultsPage({
                       }
                     }}
                   >
-                    <div className="relative overflow-hidden rounded-lg">
-                      {!highlightPosterReady[item.id] && (
-                        <div
-                          className="absolute inset-0 animate-pulse bg-surface-2/70"
-                          aria-hidden="true"
-                        />
-                      )}
-                      <img
-                        src={item.posterUrl}
-                        alt={`${item.title} poster`}
-                        className={`aspect-[2/3] w-full rounded-lg object-cover shadow-card transition-all duration-300 group-hover:shadow-[0_12px_24px_rgba(4,4,7,0.34)] group-focus-visible:shadow-[0_12px_24px_rgba(4,4,7,0.34)] ${
-                          highlightPosterReady[item.id] ? 'opacity-100' : 'opacity-0'
-                        }`}
-                        loading="lazy"
-                        ref={(img) => {
-                          if (img && img.complete) {
+                    <div className="relative rounded-lg shadow-card transition-all duration-300 group-hover:-translate-y-[2px] group-focus-visible:-translate-y-[2px] group-hover:shadow-[0_10px_20px_rgba(4,4,7,0.24)] group-focus-visible:shadow-[0_10px_20px_rgba(4,4,7,0.24)]">
+                      <div className="relative overflow-hidden rounded-lg">
+                        {!highlightPosterReady[item.id] && (
+                          <div
+                            className="absolute inset-0 rounded-lg animate-pulse bg-surface-2/70"
+                            aria-hidden="true"
+                          />
+                        )}
+                        <img
+                          src={item.posterUrl}
+                          alt={`${item.title} poster`}
+                          className={`aspect-[2/3] w-full rounded-lg object-cover transition-opacity duration-300 ${
+                            highlightPosterReady[item.id] ? 'opacity-100' : 'opacity-0'
+                          }`}
+                          loading="lazy"
+                          ref={(img) => {
+                            if (img && img.complete) {
+                              markHighlightPosterReady(item.id)
+                            }
+                          }}
+                          onLoad={() => {
                             markHighlightPosterReady(item.id)
-                          }
-                        }}
-                        onLoad={() => {
-                          markHighlightPosterReady(item.id)
-                        }}
-                        onError={() => {
-                          markHighlightPosterReady(item.id)
-                        }}
-                      />
+                          }}
+                          onError={() => {
+                            markHighlightPosterReady(item.id)
+                          }}
+                        />
+                      </div>
                     </div>
                     <p className="text-sm font-medium leading-snug tracking-[-0.01em] text-text">{item.title}</p>
                     <p className="text-xs leading-relaxed tracking-[-0.004em] text-text-muted">
@@ -912,7 +914,7 @@ export default function ResultsPage({
             {results.map((rec, index) => (
               <article
                 key={rec.id}
-                className="overflow-hidden rounded-lg border border-border/40 bg-surface shadow-none cursor-pointer transition-all duration-200 hover:border-border/80 hover:shadow-[0_10px_24px_rgba(4,4,7,0.3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+                className="group rounded-lg shadow-none cursor-pointer transition-all duration-200 hover:-translate-y-[1px] hover:bg-surface-2/35 hover:shadow-[0_8px_18px_rgba(4,4,7,0.26)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
                 role="button"
                 tabIndex={0}
                 aria-label={`Open more details for ${rec.title}`}
@@ -946,22 +948,22 @@ export default function ResultsPage({
                     <div className="min-w-0 flex-1">
                       <div className="mb-3 min-w-0">
                         <h3 className="font-serif text-xl font-medium tracking-[-0.018em] text-text">{rec.title}</h3>
-                        <p className="text-xs text-text-muted">{getMetaLine(rec)}</p>
+                        <p className="text-xs text-text-muted/80">{getMetaLine(rec)}</p>
                       </div>
 
                       {rec.synopsis ? (
-                        <p className="mb-3 text-sm text-text-muted" style={clampLinesStyle(2)}>{rec.synopsis}</p>
+                        <p className="mb-4 text-sm text-text-muted/90" style={clampLinesStyle(2)}>{rec.synopsis}</p>
                       ) : rec.whyThis ? (
-                        <p className="mb-3 text-sm text-text-muted" style={clampLinesStyle(2)}>{rec.whyThis}</p>
+                        <p className="mb-4 text-sm text-text-muted/90" style={clampLinesStyle(2)}>{rec.whyThis}</p>
                       ) : null}
 
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="mt-2 flex flex-wrap items-center gap-5">
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
                             openRecommendationDetails(index)
                           }}
-                          className={buttonClass({ variant: 'secondary', size: 'xs' })}
+                          className={inlineActionClass()}
                           aria-label={`Open more details for ${rec.title}`}
                         >
                           More details
@@ -972,7 +974,7 @@ export default function ResultsPage({
                               e.stopPropagation()
                               openTrailer(rec.trailerUrl!, rec.title)
                             }}
-                            className={buttonClass({ variant: 'secondary', size: 'xs' })}
+                            className={inlineActionClass()}
                             aria-label={`Watch trailer for ${rec.title}`}
                           >
                             View trailer
@@ -1009,7 +1011,7 @@ export default function ResultsPage({
                 <button
                   onClick={showPreviousDetails}
                   disabled={activeDetailsIndex === null || activeDetailsIndex === 0}
-                  className={buttonClass({ variant: 'ghost', size: 'xs', className: 'gap-1 hover:underline disabled:no-underline' })}
+                  className={inlineActionClass('gap-1 text-xs disabled:opacity-45 disabled:cursor-not-allowed disabled:no-underline')}
                   aria-label="Previous title"
                 >
                   <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -1025,7 +1027,7 @@ export default function ResultsPage({
                 <button
                   onClick={showNextDetails}
                   disabled={activeDetailsIndex === null || activeDetailsIndex >= activeDetailsCount - 1}
-                  className={buttonClass({ variant: 'ghost', size: 'xs', className: 'gap-1 hover:underline disabled:no-underline' })}
+                  className={inlineActionClass('gap-1 text-xs disabled:opacity-45 disabled:cursor-not-allowed disabled:no-underline')}
                   aria-label="Next title"
                 >
                   <span>Next</span>
@@ -1056,11 +1058,11 @@ export default function ResultsPage({
                 <img
                   src={activeDetailsRec.posterUrl}
                   alt={`${activeDetailsRec.title} poster`}
-                  className="h-[252px] w-[168px] rounded-sm object-cover shadow-soft"
+                  className="h-[252px] w-[168px] rounded-lg object-cover shadow-soft"
                   loading="lazy"
                 />
               ) : (
-                <div className="flex h-[252px] w-[168px] items-center justify-center rounded-sm bg-surface-2 text-text-muted">No poster</div>
+                <div className="flex h-[252px] w-[168px] items-center justify-center rounded-lg bg-surface-2 text-text-muted">No poster</div>
               )}
 
               <div className="min-w-0">

@@ -300,20 +300,20 @@ export default function ConversationalHome({
               className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
               <div
-                className={`max-w-xs lg:max-w-md px-4 py-3 rounded-lg shadow-card ${
+                className={`max-w-xs lg:max-w-md px-4 py-3 rounded-lg ${
                   msg.role === 'user'
-                    ? 'bg-accent text-accent-contrast rounded-br-none'
-                    : 'bg-surface text-text rounded-bl-none border border-border'
+                    ? 'bg-accent text-accent-contrast rounded-br-none shadow-card'
+                    : 'bg-surface/88 text-text rounded-bl-none border border-border/45 shadow-none'
                 }`}
               >
                 <p className="text-sm">{msg.text}</p>
 
                 {msg.detectedIntent && (
                   <div className="mt-3 flex flex-wrap gap-2 text-xs text-text-muted">
-                    <span className="rounded-pill border border-border bg-surface-2 px-2.5 py-1">
+                    <span className="rounded-pill border border-border/50 bg-surface-2/50 px-2.5 py-1">
                       Intent: <span className="font-semibold text-text">{msg.detectedIntent.mode}</span>
                     </span>
-                    <span className="rounded-pill border border-border bg-surface-2 px-2.5 py-1">
+                    <span className="rounded-pill border border-border/50 bg-surface-2/50 px-2.5 py-1">
                       Confidence {(msg.detectedIntent.confidence * 100).toFixed(0)}%
                     </span>
                   </div>
@@ -329,7 +329,7 @@ export default function ConversationalHome({
                 {msg.clarificationQuestions && msg.clarificationQuestions.length > 0 && (
                   <div className="mt-4 space-y-3">
                     {msg.clarificationQuestions.map(q => (
-                      <div key={q.id} className="rounded-lg border border-border bg-surface-2 p-3">
+                      <div key={q.id} className="rounded-lg border border-border/45 bg-surface-2/55 p-3">
                         <p className="mb-2 text-sm font-semibold text-text">{q.question}</p>
                         {q.type === 'select' && q.options && (
                           <div className="space-y-2">
@@ -361,7 +361,7 @@ export default function ConversationalHome({
           {state.isLoading && (
             <div className="flex justify-start">
               <div
-                className="max-w-xs rounded-lg rounded-bl-none border border-border bg-surface px-4 py-3 text-text shadow-card"
+                className="max-w-xs rounded-lg rounded-bl-none border border-border/45 bg-surface/88 px-4 py-3 text-text shadow-none"
                 aria-live="polite"
                 role="status"
               >

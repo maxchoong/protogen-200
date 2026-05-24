@@ -75,6 +75,14 @@
 - Migrated core action buttons in `frontend/src/pages/ConversationalHome.tsx`, `frontend/src/pages/ResultsPage.tsx`, and `frontend/src/pages/HomePage.tsx` to shared class generation for consistent spacing, typography, focus, hover, and disabled states.
 - Added shared `inlineLinkClass` utility and applied it to interactive links in `ResultsPage` (streaming links + trailer source link) to align anchor focus/hover treatment with button system tokens.
 
+### Layout and Interaction Follow-ups (May 24, 2026)
+- Reworked two-column divider implementation: removed right-panel `border-left` and moved divider to a centered `editorial-main::after` separator so the split reads as visually balanced.
+- Added shared `inlineActionClass` and applied it to recommendation-card "More details" / "View trailer" controls to remove inherited `h-7 px-3` padding and restore true inline action rhythm.
+- Applied the same inline-action treatment to details-panel `Previous` / `Next` navigation while keeping semantic button behavior for keyboard/accessibility.
+- Fixed subtle/ghost hover-state reliability by replacing unsupported slash-opacity token classes on CSS-variable colors with valid Tailwind token classes.
+- Restored restrained hover styling after debugging (kept subtle style language consistent with the rest of the app).
+- Fixed highlight poster-tile hover-lift regression by moving shadow/lift to a non-clipping wrapper and tuning hover lift to avoid side clipping while preserving visible elevation.
+
 ---
 
 ## Current Architecture Snapshot
@@ -115,6 +123,9 @@
 - [x] "Lumera note" style and trailer action polish validated in browser iteration.
 - [x] Shared button/link style utility integrated across app header, conversational actions, results actions, and home preference controls.
 - [x] Frontend production build passes after style-system migration and anchor parity updates.
+- [x] Divider now renders in the inter-panel gap center (`.editorial-main::after`) with symmetric spacing on both columns.
+- [x] Recommendation and details-panel navigation actions now use inline action styling without padded pill geometry.
+- [x] Highlight tile hover lift restored with wrapper-based elevation and clipping-safe hover tuning.
 
 ---
 

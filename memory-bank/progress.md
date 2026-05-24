@@ -269,6 +269,15 @@
 - [x] Added shared `inlineLinkClass` and applied to interactive result links for anchor/button parity
 - [x] Verified frontend `npm run build` passes after migration
 
+### UI Follow-up Fixes (May 24, 2026)
+- [x] Replaced right-panel border divider with centered grid-gap divider (`.editorial-main::after`) to remove visual split imbalance
+- [x] Converted recommendation-card actions (`More details`, `View trailer`) to inline-action controls with no pill padding/height inheritance
+- [x] Converted details-panel `Previous` / `Next` controls to inline-action styling while preserving semantic buttons
+- [x] Fixed hover-state class reliability by replacing unsupported slash-opacity token classes on CSS-variable colors
+- [x] Restored subtle hover treatment to match app-wide visual language after hover-state bug fix
+- [x] Restored highlight poster tile hover lift by moving elevation to an unclipped wrapper
+- [x] Tuned tile hover lift/shadow to increase visibility without reintroducing left/right clipping
+
 ---
 
 ## Open Follow-Ups
@@ -277,6 +286,7 @@
 - [ ] Add automated regression tests for critics-intent transparency and unsupported-source guardrail
 - [ ] Add automated regression tests for `GET /highlights/:type/:id` and highlight details caching/fallback behavior
 - [ ] Add targeted UI regression coverage for shared `buttonStyles` variants across light/dark themes and key interactive states
+- [ ] Add targeted visual regression coverage for highlight tile hover-lift states (including edge-column clipping checks)
 - [ ] Rotate exposed development secrets
 - [ ] Consider backend pipeline optimization or refactoring if performance becomes an issue
 - [ ] Test full multi-turn flow end-to-end with live API and browser snapshots

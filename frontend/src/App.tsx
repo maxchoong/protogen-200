@@ -86,6 +86,8 @@ function App() {
       clarificationContext
     }
 
+    const connectivityMessage = "We couldn't connect to our recommendation service just now. Please try again."
+
     try {
       const backendUrl =
         import.meta.env.VITE_BACKEND_URL ||
@@ -108,6 +110,17 @@ function App() {
       const data: RecommendationResponse = await response.json()
       return data
     } catch (error) {
+      // Keep technical details in console, but surface user-safe copy in the UI.
+      if (error instanceof TypeError) {
+        console.error('Recommendation request connectivity error:', error)
+        throw new Error(connectivityMessage)
+      }
+
+      if (error instanceof Error && error.message.toLowerCase().includes('failed to fetch')) {
+        console.error('Recommendation request fetch failure:', error)
+        throw new Error(connectivityMessage)
+      }
+
       const errorMsg = error instanceof Error ? error.message : 'Something went wrong'
       throw new Error(errorMsg)
     }
@@ -184,7 +197,7 @@ function App() {
             </button>
             <button
               onClick={toggleTheme}
-              className={buttonClass({ variant: 'secondary', size: 'icon' })}
+              className={buttonClass({ variant: 'subtle', size: 'icon' })}
               aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
               title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
             >
