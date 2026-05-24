@@ -3,6 +3,7 @@ import { buttonClass, inlineActionClass } from '../buttonStyles'
 
 interface Recommendation {
   id: string
+  imdbId?: string
   title: string
   year: string
   type: string
@@ -368,15 +369,16 @@ export default function ResultsPage({
     !!turnOperation
 
   const dataSourceSummary = getDataSourceSummary()
-  const activeAvailabilityDiagnostics = activeDetailsRec
-    ? availabilityDiagnosticsByTitleId[activeDetailsRec.id] || retrievalDiagnostics?.streaming
+  const availabilityId = activeDetailsRec ? (activeDetailsRec.imdbId || (isImdbId(activeDetailsRec.id) ? activeDetailsRec.id : undefined)) : undefined
+  const activeAvailabilityDiagnostics = activeDetailsRec && availabilityId
+    ? availabilityDiagnosticsByTitleId[availabilityId] || retrievalDiagnostics?.streaming
     : undefined
   const streamingRegionName = formatRegionName(activeAvailabilityDiagnostics?.country)
   const streamingStatus = activeAvailabilityDiagnostics?.status
   const watchOptions = normalizeWatchOptions(
-    activeDetailsRec ? (availabilityByTitleId[activeDetailsRec.id] || activeDetailsRec.availability) : undefined
+    activeDetailsRec && availabilityId ? (availabilityByTitleId[availabilityId] || activeDetailsRec.availability) : undefined
   )
-  const isAvailabilityLoading = !!(activeDetailsRec && availabilityLoadingByTitleId[activeDetailsRec.id])
+  const isAvailabilityLoading = !!(activeDetailsRec && availabilityId && availabilityLoadingByTitleId[availabilityId])
   const streamingEmptyMessage =
     isAvailabilityLoading
       ? `Checking streaming options in ${streamingRegionName}...`
@@ -760,28 +762,36 @@ export default function ResultsPage({
   }, [highlightDetails, highlightDetailsCache])
 
   useEffect(() => {
-    if (!activeDetailsRec || !isImdbId(activeDetailsRec.id)) {
+    if (!activeDetailsRec) {
       return
     }
 
-    if (availabilityByTitleId[activeDetailsRec.id]) {
+    // Determine which ID to use for availability lookups
+    // Prefer IMDb ID if available, otherwise check if the current ID is already an IMDb ID
+    const availabilityId = activeDetailsRec.imdbId || (isImdbId(activeDetailsRec.id) ? activeDetailsRec.id : undefined)
+
+    if (!availabilityId) {
       return
     }
 
-    if (availabilityLoadingByTitleId[activeDetailsRec.id]) {
+    if (availabilityByTitleId[availabilityId]) {
+      return
+    }
+
+    if (availabilityLoadingByTitleId[availabilityId]) {
       return
     }
 
     let cancelled = false
 
     const loadAvailability = async () => {
-      setAvailabilityLoadingByTitleId(prev => ({ ...prev, [activeDetailsRec.id]: true }))
+      setAvailabilityLoadingByTitleId(prev => ({ ...prev, [availabilityId]: true }))
 
       try {
         const backendUrl = getBackendUrl()
         const region = retrievalDiagnostics?.streaming?.country?.toUpperCase() || inferRegionFromLocale()
         const response = await fetch(
-          `${backendUrl}/availability/${activeDetailsRec.id}?region=${encodeURIComponent(region)}`
+          `${backendUrl}/availability/${availabilityId}?region=${encodeURIComponent(region)}`
         )
 
         if (!response.ok) {
@@ -800,13 +810,13 @@ export default function ResultsPage({
 
         setAvailabilityByTitleId(prev => ({
           ...prev,
-          [activeDetailsRec.id]: (data.availability || []) as NonNullable<Recommendation['availability']>
+          [availabilityId]: (data.availability || []) as NonNullable<Recommendation['availability']>
         }))
 
         if (data.diagnostics) {
           setAvailabilityDiagnosticsByTitleId(prev => ({
             ...prev,
-            [activeDetailsRec.id]: data.diagnostics!
+            [availabilityId]: data.diagnostics!
           }))
         }
       } catch {
@@ -816,13 +826,13 @@ export default function ResultsPage({
 
         setAvailabilityByTitleId(prev => ({
           ...prev,
-          [activeDetailsRec.id]: []
+          [availabilityId]: []
         }))
 
         const fallbackCountry = retrievalDiagnostics?.streaming?.country || inferRegionFromLocale().toLowerCase()
         setAvailabilityDiagnosticsByTitleId(prev => ({
           ...prev,
-          [activeDetailsRec.id]: {
+          [availabilityId]: {
             enabled: true,
             country: fallbackCountry,
             status: 'error'
@@ -830,7 +840,7 @@ export default function ResultsPage({
         }))
       } finally {
         if (!cancelled) {
-          setAvailabilityLoadingByTitleId(prev => ({ ...prev, [activeDetailsRec.id]: false }))
+          setAvailabilityLoadingByTitleId(prev => ({ ...prev, [availabilityId]: false }))
         }
       }
     }

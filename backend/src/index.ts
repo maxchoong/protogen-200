@@ -41,6 +41,7 @@ interface RecommendationRequest {
 
 interface Recommendation {
   id: string
+  imdbId?: string                       // IMDb ID for availability lookups (optional, especially for highlights)
   title: string
   year: string
   type: string
@@ -566,10 +567,11 @@ app.get('/highlights/:type/:id', async (req: Request, res: Response<ApiResponse>
       })
     }
 
-    const [details, credits, videos] = await Promise.all([
+    const [details, credits, videos, externalIds] = await Promise.all([
       tmdbClient.getTitleDetails(idParam, typeParam),
       tmdbClient.getTitleCredits(idParam, typeParam),
-      tmdbClient.getVideos(idParam, typeParam)
+      tmdbClient.getVideos(idParam, typeParam),
+      tmdbClient.getExternalIds(idParam, typeParam)
     ])
 
     if (!details) {
@@ -583,6 +585,7 @@ app.get('/highlights/:type/:id', async (req: Request, res: Response<ApiResponse>
 
     const highlightDetails: Recommendation = {
       id: `${typeParam}-${idParam}`,
+      imdbId: externalIds.imdbId,
       title: details.title || details.name || 'Untitled',
       year: (typeParam === 'tv' ? details.first_air_date : details.release_date)?.slice(0, 4) || 'Unknown year',
       type: typeParam,
