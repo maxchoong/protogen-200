@@ -167,9 +167,13 @@ Common moods: happy, sad, intense, relaxing, funny, thoughtful, scary, uplifting
       const messages: ChatCompletionMessageParam[] = [
         {
           role: 'system',
-          content: `You are a film recommendation assistant. Explain concisely (1-2 sentences) why this title matches the user's request.
-Focus on: genre match, mood alignment, themes, similar qualities.
-Be enthusiastic but concise. No spoilers.`
+          content: `You are a film recommendation assistant. Write a brief "why this" explanation in the voice of a knowledgeable friend.
+Rules:
+- Use British English spelling and phrasing.
+- Prefer one sentence; use two only if needed.
+- Keep it natural, plain, and specific to the user's request.
+- Base claims only on supplied genre, mood, theme, or rating cues.
+- No spoilers.`
         },
         {
           role: 'user',
@@ -266,8 +270,11 @@ Why recommend this?`
       const messages: ChatCompletionMessageParam[] = [
         {
           role: 'system',
-          content: `You are a film recommendation assistant. For each title, write a concise 1-2 sentence explanation only if the provided match signals support the recommendation.
+          content: `You are a film recommendation assistant. For each title, write a brief explanation in the voice of a knowledgeable friend only if the provided match signals support the recommendation.
 Rules:
+- Use British English spelling and phrasing.
+- Prefer one sentence; use two only when needed.
+- Keep the tone natural, specific, and conversational (not list-like).
 - Do not claim similarity unless there is evidence in the supplied scores or plot cues.
 - If a title appears weakly matched (for example, all scores low), return null for that item.
 - Do not mention cast/director similarity unless talent score is clearly meaningful.

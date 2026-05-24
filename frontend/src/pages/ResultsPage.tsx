@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 interface Recommendation {
   id: string
@@ -179,8 +179,7 @@ const mapHighlightToRecommendation = (highlight: HighlightTile): Recommendation 
   directors: highlight.directors,
   synopsis: highlight.synopsis,
   posterUrl: highlight.posterUrl,
-  trailerUrl: highlight.trailerUrl,
-  whyThis: 'This title is currently featured in your session highlights.'
+  trailerUrl: highlight.trailerUrl
 })
 
 const parseHighlightId = (id: string): { type: 'movie' | 'tv'; tmdbId: number } | null => {
@@ -236,6 +235,8 @@ export default function ResultsPage({
   const [highlightDetailsLoading, setHighlightDetailsLoading] = useState(false)
   const [trailerLoadError, setTrailerLoadError] = useState(false)
   const [trailerLoading, setTrailerLoading] = useState(false)
+  const [detailsPanelEntered, setDetailsPanelEntered] = useState(false)
+  const closeDetailsTimerRef = useRef<number | null>(null)
 
   const detailsRec = detailsIndex !== null && detailsIndex >= 0 && detailsIndex < results.length
     ? results[detailsIndex]
@@ -273,16 +274,39 @@ export default function ResultsPage({
       : 0
 
   const closeDetailsPanel = () => {
-    setDetailsIndex(null)
-    setHighlightDetailsIndex(null)
+    if (!activeDetailsRec) {
+      return
+    }
+
+    setDetailsPanelEntered(false)
+
+    if (closeDetailsTimerRef.current !== null) {
+      window.clearTimeout(closeDetailsTimerRef.current)
+    }
+
+    closeDetailsTimerRef.current = window.setTimeout(() => {
+      setDetailsIndex(null)
+      setHighlightDetailsIndex(null)
+      closeDetailsTimerRef.current = null
+    }, 300)
   }
 
   const openRecommendationDetails = (index: number) => {
+    if (closeDetailsTimerRef.current !== null) {
+      window.clearTimeout(closeDetailsTimerRef.current)
+      closeDetailsTimerRef.current = null
+    }
+
     setHighlightDetailsIndex(null)
     setDetailsIndex(index)
   }
 
   const openHighlightDetails = (index: number) => {
+    if (closeDetailsTimerRef.current !== null) {
+      window.clearTimeout(closeDetailsTimerRef.current)
+      closeDetailsTimerRef.current = null
+    }
+
     setDetailsIndex(null)
     setHighlightDetailsIndex(index)
   }
@@ -420,8 +444,7 @@ export default function ResultsPage({
             ...prev,
             [highlightDetails.id]: {
               ...mapHighlightToRecommendation(highlightDetails),
-              ...data.highlightDetails,
-              whyThis: mapHighlightToRecommendation(highlightDetails).whyThis
+              ...data.highlightDetails
             }
           }))
         }
@@ -460,6 +483,29 @@ export default function ResultsPage({
       window.clearTimeout(timeoutId)
     }
   }, [trailerModal.isOpen, trailerModal.embedUrl, trailerLoadError, trailerLoading])
+
+  useEffect(() => {
+    if (!activeDetailsRec) {
+      setDetailsPanelEntered(false)
+      return
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      setDetailsPanelEntered(true)
+    })
+
+    return () => {
+      window.cancelAnimationFrame(frame)
+    }
+  }, [activeDetailsRec])
+
+  useEffect(() => {
+    return () => {
+      if (closeDetailsTimerRef.current !== null) {
+        window.clearTimeout(closeDetailsTimerRef.current)
+      }
+    }
+  }, [])
 
   const parseYouTubeVideoId = (url: string): string | null => {
     try {
@@ -774,14 +820,18 @@ export default function ResultsPage({
 
       {activeDetailsRec && (
         <div
-          className="fixed inset-0 z-40 bg-black/55"
+          className={`fixed inset-0 z-40 bg-black/55 transition-opacity duration-300 ease-out motion-reduce:transition-none ${
+            detailsPanelEntered ? 'opacity-100' : 'opacity-0'
+          }`}
           onClick={closeDetailsPanel}
           role="dialog"
           aria-modal="true"
           aria-labelledby="details-title"
         >
           <aside
-            className="absolute right-0 top-0 h-full w-full max-w-xl overflow-y-auto border-l border-border bg-surface p-6 shadow-card-hover"
+            className={`absolute right-0 top-0 h-full w-full max-w-2xl overflow-y-auto border-l border-border/60 bg-surface px-6 py-7 shadow-card-hover transition-transform duration-300 ease-out motion-reduce:transform-none motion-reduce:transition-none sm:px-8 lg:min-w-[40rem] lg:max-w-[54vw] xl:max-w-[50vw] ${
+              detailsPanelEntered ? 'translate-x-0' : 'translate-x-8'
+            }`}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-3 flex items-center justify-between gap-3">
@@ -824,98 +874,144 @@ export default function ResultsPage({
               </button>
             </div>
 
-            <div className="mb-4">
-              <h2 id="details-title" className="font-serif text-3xl font-medium tracking-[-0.02em] text-text">{activeDetailsRec.title}</h2>
-              <p className="text-xs text-text-muted">{getMetaLine(activeDetailsRec)}</p>
-            </div>
+            <header className="mb-6">
+              <h2 id="details-title" className="font-serif text-[2.2rem] font-medium leading-[1.06] tracking-[-0.024em] text-text sm:text-[2.5rem]">
+                {activeDetailsRec.title}
+              </h2>
+              <p className="mt-1 text-[11px] uppercase tracking-[0.11em] text-text-muted/90">{getMetaLine(activeDetailsRec)}</p>
+            </header>
 
-            <div className="mb-4 flex gap-4">
+            <section className="mb-8 grid gap-6 border-b border-border/30 pb-8 md:grid-cols-[168px_1fr]">
               {activeDetailsRec.posterUrl ? (
                 <img
                   src={activeDetailsRec.posterUrl}
                   alt={`${activeDetailsRec.title} poster`}
-                  className="h-56 w-36 flex-shrink-0 rounded-lg object-cover"
+                  className="h-[252px] w-[168px] rounded-sm object-cover shadow-soft"
                   loading="lazy"
                 />
               ) : (
-                <div className="flex h-56 w-36 flex-shrink-0 items-center justify-center rounded-lg bg-surface-2 text-text-muted">No poster</div>
+                <div className="flex h-[252px] w-[168px] items-center justify-center rounded-sm bg-surface-2 text-text-muted">No poster</div>
               )}
-              <div className="min-w-0 flex-1 space-y-3">
+
+              <div className="min-w-0">
                 {highlightDetails && !highlightDetailsCache[highlightDetails.id] && highlightDetailsLoading && (
-                  <p className="text-xs text-text-muted">Loading full title details...</p>
+                  <p className="mb-3 text-xs text-text-muted">Loading full title details...</p>
                 )}
+
                 {activeDetailsRec.whyThis && (
-                  <div className="rounded-lg bg-surface-2 p-3">
-                    <p className="mb-1 text-xs uppercase tracking-[0.12em] text-text-muted">Why this</p>
-                    <p className="text-sm text-text-muted">{activeDetailsRec.whyThis}</p>
+                  <div className="mb-5">
+                    <div className="mb-2 flex items-center gap-3">
+                      <p className="text-[11px] uppercase tracking-[0.11em] text-text-muted">
+                        Lumera note
+                      </p>
+                      <span
+                        className="h-px flex-1"
+                        style={{ backgroundColor: 'var(--color-accent)', opacity: 0.45 }}
+                        aria-hidden="true"
+                      />
+                    </div>
+                    <p className="max-w-[60ch] font-serif text-[1.08rem] font-medium italic leading-relaxed text-text/95">
+                      {activeDetailsRec.whyThis}
+                    </p>
                   </div>
                 )}
-              </div>
-            </div>
 
-            {activeDetailsRec.synopsis && (
-              <div className="mb-4">
-                <p className="mb-2 text-xs uppercase tracking-[0.12em] text-text-muted">Synopsis</p>
-                <p className="text-sm text-text-muted">{activeDetailsRec.synopsis}</p>
-              </div>
-            )}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-text-muted">
+                  {activeDetailsRec.trailerUrl && (
+                    <button
+                      onClick={() => openTrailer(activeDetailsRec.trailerUrl!, activeDetailsRec.title)}
+                      className="inline-flex items-center gap-1.5 rounded-pill bg-surface-2 px-3 py-1.5 text-xs text-text transition-colors hover:opacity-80"
+                      aria-label={`Watch trailer for ${activeDetailsRec.title}`}
+                    >
+                      <span>Watch trailer</span>
+                    </button>
+                  )}
 
-            {(activeDetailsRec.mainCast?.length || activeDetailsRec.directors?.length || activeDetailsRec.genres?.length || activeDetailsRec.originalLanguage) && (
-              <div className="mb-4 space-y-2 text-sm text-text-muted">
-                {activeDetailsRec.mainCast && activeDetailsRec.mainCast.length > 0 && (
-                  <p><span className="text-text">Cast:</span> {activeDetailsRec.mainCast.slice(0, 5).join(', ')}</p>
-                )}
-                {activeDetailsRec.directors && activeDetailsRec.directors.length > 0 && (
-                  <p><span className="text-text">Director:</span> {activeDetailsRec.directors.join(', ')}</p>
-                )}
-                {activeDetailsRec.genres && activeDetailsRec.genres.length > 0 && (
-                  <p><span className="text-text">Genres:</span> {activeDetailsRec.genres.join(', ')}</p>
-                )}
-                {formatLanguageName(activeDetailsRec.originalLanguage) && (
-                  <p><span className="text-text">Language:</span> {formatLanguageName(activeDetailsRec.originalLanguage)}</p>
-                )}
-              </div>
-            )}
+                  <span className="hidden h-3 w-px bg-border/45 sm:inline-block" aria-hidden="true" />
 
-            <div className="mb-4">
-              <p className="mb-2 text-xs uppercase tracking-[0.12em] text-text-muted">Where to stream</p>
-              {activeDetailsRec.availability && activeDetailsRec.availability.length > 0 ? (
-                <div className="flex flex-wrap gap-2" role="list" aria-label="Streaming platforms">
-                  {activeDetailsRec.availability.map((avail, idx) => (
-                    avail.link ? (
-                      <a
-                        key={idx}
-                        href={avail.link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="rounded-pill bg-surface-2 px-3 py-1 text-xs text-text transition-colors hover:opacity-80"
-                        role="listitem"
-                      >
-                        {avail.platform} ({avail.type})
-                      </a>
+                  <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] uppercase tracking-[0.11em] text-text-muted">Streaming:</span>
+                    {activeDetailsRec.availability && activeDetailsRec.availability.length > 0 ? (
+                      <>
+                        {activeDetailsRec.availability.slice(0, 3).map((avail, idx) => (
+                          <React.Fragment key={`${avail.platform}-${avail.type}-${idx}`}>
+                            {avail.link ? (
+                              <a
+                                href={avail.link}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-text underline decoration-border/50 underline-offset-2 transition-colors hover:text-accent"
+                              >
+                                {avail.platform}
+                              </a>
+                            ) : (
+                              <span className="text-text">{avail.platform}</span>
+                            )}
+                            {idx < Math.min(activeDetailsRec.availability.length, 3) - 1 && (
+                              <span aria-hidden="true">,</span>
+                            )}
+                          </React.Fragment>
+                        ))}
+                      </>
                     ) : (
-                      <span key={idx} className="rounded-pill bg-surface-2 px-3 py-1 text-xs text-text" role="listitem">
-                        {avail.platform} ({avail.type})
-                      </span>
-                    )
-                  ))}
+                      <span>Not currently listed</span>
+                    )}
+                  </div>
                 </div>
-              ) : (
-                <p className="text-sm text-text-muted">Availability info not available.</p>
-              )}
-            </div>
+              </div>
+            </section>
 
-            <div className="flex flex-wrap items-center gap-2">
-              {activeDetailsRec.trailerUrl && (
-                <button
-                  onClick={() => openTrailer(activeDetailsRec.trailerUrl!, activeDetailsRec.title)}
-                  className="rounded-pill bg-surface-2 px-4 py-1.5 text-xs text-text transition-colors hover:opacity-80"
-                  aria-label={`Watch trailer for ${activeDetailsRec.title}`}
-                >
-                  View trailer
-                </button>
-              )}
-            </div>
+            {(activeDetailsRec.synopsis || activeDetailsRec.mainCast?.length || activeDetailsRec.directors?.length || activeDetailsRec.genres?.length || activeDetailsRec.originalLanguage) && (
+              <section className="mb-2 border-b border-border/30 pb-8 md:grid md:grid-cols-[minmax(0,1fr)_220px] md:gap-8">
+                <div>
+                  {activeDetailsRec.synopsis && (
+                    <>
+                      <p className="mb-2 text-[11px] uppercase tracking-[0.11em] text-text-muted">Synopsis</p>
+                      <p className="max-w-[62ch] text-[15px] leading-[1.8] text-text/92">{activeDetailsRec.synopsis}</p>
+                    </>
+                  )}
+                </div>
+
+                {(activeDetailsRec.mainCast?.length || activeDetailsRec.directors?.length || activeDetailsRec.genres?.length || activeDetailsRec.originalLanguage) && (
+                  <aside className="mt-6 border-t border-border/25 pt-5 md:mt-0 md:border-t-0 md:pt-0">
+                    <div className="grid gap-y-4">
+                      {activeDetailsRec.mainCast && activeDetailsRec.mainCast.length > 0 && (
+                        <div>
+                          <p className="mb-1 text-[10px] uppercase tracking-[0.11em] text-text-muted">Cast</p>
+                          <ul className="space-y-0.5 text-[12px] leading-relaxed text-text-muted">
+                            {activeDetailsRec.mainCast.slice(0, 4).map((name) => (
+                              <li key={name}>{name}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {activeDetailsRec.directors && activeDetailsRec.directors.length > 0 && (
+                        <div>
+                          <p className="mb-1 text-[10px] uppercase tracking-[0.11em] text-text-muted">Director</p>
+                          <ul className="space-y-0.5 text-[12px] leading-relaxed text-text-muted">
+                            {activeDetailsRec.directors.slice(0, 3).map((name) => (
+                              <li key={name}>{name}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {activeDetailsRec.genres && activeDetailsRec.genres.length > 0 && (
+                        <div>
+                          <p className="mb-1 text-[10px] uppercase tracking-[0.11em] text-text-muted">Genres</p>
+                          <p className="text-[12px] leading-relaxed text-text-muted">{activeDetailsRec.genres.join(', ')}</p>
+                        </div>
+                      )}
+                      {formatLanguageName(activeDetailsRec.originalLanguage) && (
+                        <div>
+                          <p className="mb-1 text-[10px] uppercase tracking-[0.11em] text-text-muted">Language</p>
+                          <p className="text-[12px] leading-relaxed text-text-muted">{formatLanguageName(activeDetailsRec.originalLanguage)}</p>
+                        </div>
+                      )}
+                    </div>
+                  </aside>
+                )}
+              </section>
+            )}
           </aside>
         </div>
       )}

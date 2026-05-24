@@ -14,6 +14,7 @@
 - [x] Meta-steering prompt removed from UX
 - [x] Refinement suggestion chips removed from UX
 - [x] Transparency policy implemented for critics-style requests (proxy explanation + unsupported-source guardrail)
+- [x] Editorial details panel redesign iteration complete (hero narrative, metadata rail, motion, and typography pass)
 - [ ] Documentation fully aligned with current implementation
 - [x] Frontend lint configuration added
 - [ ] TMDB configured locally for trailer verification
@@ -217,6 +218,17 @@
 - [x] Deterministic blockbuster pagination via `blockbuster_page`
 - [x] Removed false TV intent trigger from generic "show/show me more" wording
 - [x] Added generalized genre alias parsing (`scifi`, `romcom`, plural/hyphenated variants)
+
+### Editorial UI and Explanation Quality
+- [x] Removed generic highlight fallback rationale text from details panel.
+- [x] Added highlight detail parity behavior so rationale appears only when meaningful detail data exists.
+- [x] Tightened LLM explanation prompts for concise knowledgeable-friend style with British-English leaning wording.
+- [x] Updated template fallback explanation generation to shorter conversational rationale style.
+- [x] Refined details panel to editorial composition with stronger hierarchy and reduced chrome.
+- [x] Tested multiple synopsis/metadata layout permutations and selected asymmetrical narrative + metadata side-rail variant.
+- [x] Converted metadata block to quieter, lower-contrast, list-friendly presentation.
+- [x] Added panel open/close motion (backdrop fade + right slide) with 300ms ease-out timing and reduced-motion fallback.
+- [x] Added responsive panel width behavior to preserve 50:50 intent while improving mid-desktop readability.
 
 ### UX Simplification
 - [x] Removed meta-steering "stay close / broaden" prompt and state tracking

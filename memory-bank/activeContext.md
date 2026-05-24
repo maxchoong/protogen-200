@@ -59,6 +59,16 @@
 - Frontend details panel now fetches highlight details on demand and caches per-highlight to avoid repeated requests.
 - Highlight details now render richer metadata parity with recommendation details (subject to TMDB data availability per title).
 
+### Editorial Panel Art Direction Iteration (May 24, 2026)
+- Updated "Why this" treatment to a cleaner editorial label (`Lumera note`) with Migra italic body and reduced structural chrome.
+- Removed default highlight "why this" filler text so highlight details only show rationale when meaningful data exists.
+- Refined explanation tone toward concise knowledgeable-friend phrasing with British-English leaning prompt guidance and fallback wording updates.
+- Reworked details composition into a stronger editorial structure: hero with poster + note/actions and explicit narrative/metadata separation.
+- Landed asymmetrical narrative + side rail layout as the preferred panel variant after testing multiple synopsis/metadata permutations.
+- Added lighter-weight metadata presentation (smaller, quieter labels) and list-style cast/director blocks.
+- Added right-aligned panel open/close motion: fade backdrop + slide-in/out panel at 300ms ease-out with reduced-motion support.
+- Added responsive panel-width behavior preserving 50:50 feel at large sizes while allowing modest extra room on mid-sized desktops.
+
 ---
 
 ## Current Architecture Snapshot
@@ -94,6 +104,9 @@
 - [x] Unified details panel opens from both recommendation cards and default highlight poster tiles.
 - [x] Top-row panel navigation (`Previous / x of y / Next + close`) validated in browser.
 - [x] Highlight details now include cast/director/language/trailer data after backend endpoint activation.
+- [x] Details panel motion now includes both enter and exit animation with reduced-motion fallback.
+- [x] Preferred details layout variant validated: asymmetrical narrative/synopsis column with metadata side rail.
+- [x] "Lumera note" style and trailer action polish validated in browser iteration.
 
 ---
 
@@ -103,6 +116,8 @@
 - [ ] Refresh older long-form memory docs where legacy assumptions still appear.
 - [ ] Add targeted automated tests for critics-intent guardrails and interpretation-note behavior.
 - [ ] Add automated coverage for `GET /highlights/:type/:id` and frontend highlight-details caching/fallback behavior.
+- [ ] Add frontend visual regression coverage for details-panel layout variants and motion states.
+- [ ] Revisit metadata rail density once real title data breadth is tested across wider genres/languages.
 
 ---
 

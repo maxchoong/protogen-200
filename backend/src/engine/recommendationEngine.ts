@@ -1594,13 +1594,14 @@ export class RecommendationEngine {
    * Generate explanation for why this title was recommended
    */
   private generateWhyThis(item: any, preferences: ParsedPreferences): string {
-    const reasons: string[] = []
+    const primaryReasons: string[] = []
+    const supportingReasons: string[] = []
 
-    // === PHASE 4: Enhanced template fallback with scoring context ===
+    // === PHASE 4: Template fallback in a brief, conversational tone ===
 
     // Talent matching (Phase 2 signal)
     if (item.talentMatchScore && item.talentMatchScore > 0.7) {
-      reasons.push(`Features cast/director from titles you mentioned`)
+      primaryReasons.push('It has cast or directing links to titles you mentioned')
     }
 
     // Genre match
@@ -1609,7 +1610,7 @@ export class RecommendationEngine {
         preferences.genres.some(pg => pg.toLowerCase() === g.toLowerCase())
       )
       if (matchedGenres.length > 0) {
-        reasons.push(`Matches your ${matchedGenres.join(', ')} preference`)
+        primaryReasons.push(`It lines up with your ${matchedGenres.join(', ')} preference`)
       }
     }
 
@@ -1619,9 +1620,8 @@ export class RecommendationEngine {
         preferences.excludedGenres!.some(eg => eg.toLowerCase() === g.toLowerCase())
       )
       if (!hasExcluded) {
-        // Explicitly mention that we avoided excluded genres
         const excludedList = preferences.excludedGenres.join(', ')
-        reasons.push(`Avoids ${excludedList}`)
+        supportingReasons.push(`It also steers clear of ${excludedList}`)
       }
     }
 
@@ -1643,8 +1643,7 @@ export class RecommendationEngine {
       for (const [mood, keywords] of Object.entries(moodKeywords)) {
         const confidence = preferences.moodStrength.get(mood) || 0
         if (keywords.some(kw => plotLower.includes(kw)) && confidence > 0.5) {
-          const strength = confidence > 0.85 ? 'definitely' : 'nicely'
-          reasons.push(`${strength.charAt(0).toUpperCase() + strength.slice(1)} fits your ${mood} mood`)
+          supportingReasons.push(`It should suit your ${mood} mood`)
           break
         }
       }
@@ -1652,14 +1651,23 @@ export class RecommendationEngine {
 
     // Rating
     if (item.rating && item.rating >= 8.0) {
-      reasons.push(`Highly rated (${item.rating}/10 on IMDb)`)
+      supportingReasons.push(`It is very well regarded (${item.rating}/10 on IMDb)`)
     } else if (item.rating && item.rating >= 7.0) {
-      reasons.push(`Well-reviewed (${item.rating}/10)`)
+      supportingReasons.push(`It is well reviewed (${item.rating}/10)`)
     }
 
-    return reasons.length > 0
-      ? reasons.join('. ') + '.'
-      : 'Recommended based on overall catalog fit to your request.'
+    const firstReason = primaryReasons[0] || supportingReasons[0]
+    const secondReason = primaryReasons[1] || (primaryReasons[0] ? supportingReasons[0] : supportingReasons[1])
+
+    if (!firstReason) {
+      return 'This feels like a solid fit for what you asked for.'
+    }
+
+    if (secondReason) {
+      return `${firstReason}. ${secondReason}.`
+    }
+
+    return `${firstReason}.`
   }
 }
 
