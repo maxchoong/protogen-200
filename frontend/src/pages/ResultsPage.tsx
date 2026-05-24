@@ -209,7 +209,7 @@ export default function ResultsPage({
   turnOperation,
   activeConstraints: _activeConstraints = [],
   interpretationNote,
-  retrievalDiagnostics: _retrievalDiagnostics,
+  retrievalDiagnostics,
   onPreviousPass,
   onNextPass
 }: ResultsPageProps) {
@@ -273,6 +273,8 @@ export default function ResultsPage({
     !!interpretationNote ||
     !!turnOperation
 
+  const dataSourceSummary = getDataSourceSummary()
+
   const getTurnSummary = (): string => {
     if (!turnOperation) {
       return 'Initial round based on your conversation context.'
@@ -287,6 +289,34 @@ export default function ResultsPage({
     }
 
     return 'Shifted direction this round based on your latest message.'
+  }
+
+  function getDataSourceSummary(): string | null {
+    if (!retrievalDiagnostics) {
+      return null
+    }
+
+    if (retrievalDiagnostics.omdbFallbackUsed) {
+      return 'TMDB + OMDB fallback (TMDB available, OMDB used for result coverage).'
+    }
+
+    if (!retrievalDiagnostics.tmdbEnabled && retrievalDiagnostics.usedOmdb) {
+      return 'OMDB only (TMDB is not configured in this environment).'
+    }
+
+    if (retrievalDiagnostics.usedTmdb && retrievalDiagnostics.usedOmdb) {
+      return 'TMDB + OMDB.'
+    }
+
+    if (retrievalDiagnostics.usedTmdb) {
+      return 'TMDB.'
+    }
+
+    if (retrievalDiagnostics.usedOmdb) {
+      return 'OMDB.'
+    }
+
+    return 'Unavailable.'
   }
 
   const closeDetailsPanel = () => {
@@ -370,11 +400,15 @@ export default function ResultsPage({
       if (e.key === 'Escape' && infoPopoverOpen) {
         setInfoPopoverOpen(false)
       }
+
+      if (e.key === 'Escape' && roundMenuOpen) {
+        setRoundMenuOpen(false)
+      }
     }
 
     document.addEventListener('keydown', handleEscape)
     return () => document.removeEventListener('keydown', handleEscape)
-  }, [trailerModal.isOpen, detailsRec, highlightDetails, infoPopoverOpen])
+  }, [trailerModal.isOpen, detailsRec, highlightDetails, infoPopoverOpen, roundMenuOpen])
 
   useEffect(() => {
     if (!infoPopoverOpen) {
@@ -394,6 +428,25 @@ export default function ResultsPage({
     document.addEventListener('mousedown', handlePointerDown)
     return () => document.removeEventListener('mousedown', handlePointerDown)
   }, [infoPopoverOpen])
+
+  useEffect(() => {
+    if (!roundMenuOpen) {
+      return
+    }
+
+    const handlePointerDown = (e: MouseEvent) => {
+      if (!headerControlsRef.current) {
+        return
+      }
+
+      if (!headerControlsRef.current.contains(e.target as Node)) {
+        setRoundMenuOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => document.removeEventListener('mousedown', handlePointerDown)
+  }, [roundMenuOpen])
 
   useEffect(() => {
     setInfoPopoverOpen(false)
@@ -619,11 +672,11 @@ export default function ResultsPage({
                     setRoundMenuOpen(false)
                   }}
                   className={buttonClass({ variant: 'ghost', size: 'icon-sm' })}
-                  aria-label="Why these recommendations"
+                  aria-label="Why these picks"
                   aria-haspopup="dialog"
                   aria-expanded={infoPopoverOpen}
                   aria-controls="recommendation-context-popover"
-                  title="Why these recommendations"
+                  title="Why these picks"
                   disabled={!hasInfoPopoverContent}
                 >
                   <svg
@@ -668,11 +721,11 @@ export default function ResultsPage({
                   <div
                     id="recommendation-context-popover"
                     role="dialog"
-                    aria-label="Why these recommendations"
-                    className="absolute right-8 top-full z-20 mt-2 w-[19rem] rounded-lg border border-border/80 bg-surface px-4 py-3 shadow-card"
+                    aria-label="Why these picks"
+                    className="absolute right-8 top-full z-20 mt-2 w-[22rem] rounded-lg border border-border/80 bg-surface px-4 py-4 shadow-card"
                   >
                     <p className="text-[11px] uppercase tracking-[0.11em] text-text-muted">Why these picks</p>
-                    <div className="mt-2 space-y-2 text-[12px] leading-[1.6] text-text-muted">
+                    <div className="mt-3 space-y-2.5 text-[12px] leading-[1.6] text-text-muted">
                       <p>
                         <span className="font-medium text-text">Round:</span> {passIndex + 1} of {passCount}
                       </p>
@@ -688,12 +741,28 @@ export default function ResultsPage({
                       )}
                       {interpretationNote && <p>{interpretationNote}</p>}
                       <p>{getTurnSummary()}</p>
+                      {dataSourceSummary && (
+                        <p>
+                          <span className="font-medium text-text">Data source:</span> {dataSourceSummary}
+                        </p>
+                      )}
+                      <div className="pt-1.5">
+                        <img
+                          src="/assets/tmdb/tmdb-primary-long-blue.svg"
+                          alt="TMDB logo"
+                          className="mb-2 h-3.5 w-auto"
+                          loading="lazy"
+                        />
+                        <p className="max-w-[34ch] text-[10px] leading-[1.5] text-text-muted">
+                          This application uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise approved by TMDB.
+                        </p>
+                      </div>
                     </div>
                   </div>
                 )}
 
                 {roundMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-44 rounded-lg border border-border bg-surface shadow-card z-10">
+                  <div className="absolute right-0 top-full mt-2 w-44 rounded-lg border border-border bg-surface shadow-card z-10">
                     <div className="p-2">
                       {Array.from({ length: passCount }).map((_, idx) => (
                         <button
@@ -712,7 +781,7 @@ export default function ResultsPage({
                           }}
                           className={`w-full text-left px-3 py-2 text-sm rounded transition-colors ${
                             idx === passIndex
-                              ? 'bg-accent text-text font-medium'
+                              ? 'bg-surface-2 text-text font-medium ring-1 ring-border/70'
                               : 'text-text hover:bg-surface-2'
                           }`}
                         >
