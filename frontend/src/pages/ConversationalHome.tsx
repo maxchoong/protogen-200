@@ -387,13 +387,14 @@ export default function ConversationalHome({
           )}
 
           {state.error && (
-            <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-              <p>{state.error}</p>
+            <div className="rounded-lg border px-4 py-3 text-sm [background-color:var(--color-alert-bg)] [border-color:var(--color-alert-border)] [color:var(--color-alert-text)]">
+              <p className="font-medium">Connection issue</p>
+              <p className="mt-1">{state.error}</p>
               {lastSubmittedText && (
                 <button
                   onClick={handleRetry}
                   disabled={state.isLoading}
-                  className={buttonClass({ variant: 'chip', size: 'xs', className: 'mt-3' })}
+                  className={buttonClass({ variant: 'secondary', size: 'xs', className: 'mt-3' })}
                 >
                   Try again
                 </button>
