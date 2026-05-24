@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { buttonClass } from '../buttonStyles'
 
 interface HomePageProps {
   onSubmit: (request: {
@@ -104,7 +105,7 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
           <button
             type="button"
             onClick={() => setShowPreferences(!showPreferences)}
-            className="mb-4 text-sm text-accent underline transition-opacity hover:opacity-80"
+            className={buttonClass({ variant: 'link', size: 'sm', className: 'mb-4' })}
             aria-expanded={showPreferences}
             aria-controls="preferences-panel"
           >
@@ -125,11 +126,10 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
                       key={genre}
                       type="button"
                       onClick={() => handleToggleGenre(genre)}
-                      className={`px-4 py-2 rounded-full text-sm transition-colors ${
-                        preferences.genres.includes(genre)
-                          ? 'bg-accent text-accent-contrast'
-                          : 'border border-border bg-surface text-text hover:border-accent'
-                      }`}
+                      className={buttonClass({
+                        variant: preferences.genres.includes(genre) ? 'primary' : 'chip',
+                        size: 'sm'
+                      })}
                       disabled={loading}
                       aria-pressed={preferences.genres.includes(genre)}
                       aria-label={`${genre} genre`}
@@ -151,11 +151,10 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
                       key={mood}
                       type="button"
                       onClick={() => handleToggleMood(mood)}
-                      className={`px-4 py-2 rounded-full text-sm transition-colors ${
-                        preferences.mood.includes(mood)
-                          ? 'bg-accent text-accent-contrast'
-                          : 'border border-border bg-surface text-text hover:border-accent'
-                      }`}
+                      className={buttonClass({
+                        variant: preferences.mood.includes(mood) ? 'primary' : 'chip',
+                        size: 'sm'
+                      })}
                       disabled={loading}
                       aria-pressed={preferences.mood.includes(mood)}
                       aria-label={`${mood} mood`}
@@ -213,7 +212,7 @@ export default function HomePage({ onSubmit, loading = false, error = null }: Ho
           <button
             type="submit"
             disabled={loading || (!description.trim() && !hasSelectedPreferences) || (description.trim().length > 0 && description.trim().length < 3)}
-            className="w-full rounded-lg bg-accent px-6 py-3 font-semibold text-accent-contrast transition-opacity duration-200 hover:opacity-90 disabled:opacity-50"
+            className={buttonClass({ variant: 'primary', size: 'lg', fullWidth: true, className: 'rounded-lg' })}
           >
             {loading ? 'Finding recommendations...' : 'Get Recommendations'}
           </button>

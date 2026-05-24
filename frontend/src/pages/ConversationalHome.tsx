@@ -1,5 +1,6 @@
 import { useRef, useState, type KeyboardEvent } from 'react'
 import { ClarificationQuestion, ConversationController, DetectedIntent } from '../hooks/useConversation'
+import { buttonClass } from '../buttonStyles'
 import './ConversationalHome.css'
 
 interface ConversationalHomeProps {
@@ -284,7 +285,7 @@ export default function ConversationalHome({
                     key={i}
                     onClick={() => void submitMessage(example)}
                     disabled={state.isLoading}
-                    className="rounded-pill bg-surface-2 px-4 py-2 text-sm text-text transition-colors hover:bg-surface disabled:opacity-50"
+                    className={buttonClass({ variant: 'chip', size: 'sm' })}
                   >
                     {example}
                   </button>
@@ -337,7 +338,12 @@ export default function ConversationalHome({
                                 key={i}
                                 onClick={() => handleClarificationSelect(option)}
                                 disabled={state.isLoading}
-                                className="w-full rounded-pill border border-border bg-surface px-3 py-2 text-left text-sm text-text transition-colors hover:border-accent disabled:opacity-50"
+                                className={buttonClass({
+                                  variant: 'chip',
+                                  size: 'sm',
+                                  fullWidth: true,
+                                  className: 'justify-start text-left'
+                                })}
                               >
                                 {option}
                               </button>
@@ -370,7 +376,7 @@ export default function ConversationalHome({
                   <div className="mt-3">
                     <button
                       onClick={handleCancelPending}
-                      className="rounded-pill border border-border px-3 py-1 text-xs text-text transition-colors hover:border-accent"
+                      className={buttonClass({ variant: 'chip', size: 'xs' })}
                     >
                       Cancel curation
                     </button>
@@ -387,7 +393,7 @@ export default function ConversationalHome({
                 <button
                   onClick={handleRetry}
                   disabled={state.isLoading}
-                  className="mt-3 rounded-pill border border-border px-3 py-1 text-xs text-text transition-colors hover:border-accent disabled:opacity-50"
+                  className={buttonClass({ variant: 'chip', size: 'xs', className: 'mt-3' })}
                 >
                   Try again
                 </button>
@@ -417,7 +423,7 @@ export default function ConversationalHome({
             <button
               onClick={handleSubmitMessage}
               disabled={!inputValue.trim() || state.isLoading}
-              className="h-fit rounded-pill bg-surface-2 px-4 py-2 font-medium text-text transition-colors hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50"
+              className={buttonClass({ variant: 'secondary', size: 'md', className: 'h-fit' })}
             >
               {state.isLoading ? 'Curating...' : 'Submit'}
             </button>

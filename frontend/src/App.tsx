@@ -3,6 +3,7 @@ import ConversationalHome from './pages/ConversationalHome'
 import ResultsPage from './pages/ResultsPage'
 import { useTheme } from './hooks/useTheme'
 import { useConversation } from './hooks/useConversation'
+import { buttonClass } from './buttonStyles'
 import './App.css'
 
 interface RecommendationRequest {
@@ -172,17 +173,56 @@ function App() {
           <div className="flex items-center gap-2">
             <button
               onClick={handleStartNewConversation}
-              className="rounded-pill border border-border bg-surface-2 px-4 py-2 text-sm font-medium text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus"
+              className={buttonClass({
+                variant: showResetConfirm ? 'secondary' : 'subtle',
+                size: 'sm',
+                className: showResetConfirm ? 'border-accent' : ''
+              })}
               aria-label="Start a new conversation"
             >
               {showResetConfirm ? 'Confirm reset' : 'Start new conversation'}
             </button>
             <button
               onClick={toggleTheme}
-              className="rounded-pill border border-border bg-surface-2 px-4 py-2 text-sm font-medium text-text transition-colors hover:border-accent focus:outline-none focus:ring-2 focus:ring-focus"
+              className={buttonClass({ variant: 'secondary', size: 'icon' })}
               aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+              title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
             >
-              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+              {theme === 'dark' ? (
+                <svg
+                  className="h-4 w-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2" />
+                  <path d="M12 20v2" />
+                  <path d="m4.93 4.93 1.41 1.41" />
+                  <path d="m17.66 17.66 1.41 1.41" />
+                  <path d="M2 12h2" />
+                  <path d="M20 12h2" />
+                  <path d="m6.34 17.66-1.41 1.41" />
+                  <path d="m19.07 4.93-1.41 1.41" />
+                </svg>
+              ) : (
+                <svg
+                  className="h-4 w-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
+                </svg>
+              )}
             </button>
           </div>
         </div>

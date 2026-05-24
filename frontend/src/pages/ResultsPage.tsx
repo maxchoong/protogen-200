@@ -1,4 +1,5 @@
 import { Fragment, useState, useEffect, useRef } from 'react'
+import { buttonClass, inlineLinkClass } from '../buttonStyles'
 
 interface Recommendation {
   id: string
@@ -79,15 +80,6 @@ const pickRandomItems = <T,>(items: T[], count: number): T[] => {
     ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
   }
   return shuffled.slice(0, Math.min(count, shuffled.length))
-}
-
-const formatTurnOperation = (turnOperation?: TurnOperation): string => {
-  if (!turnOperation) {
-    return 'Initial round'
-  }
-
-  const continuity = turnOperation.continuity.replace('_', ' ')
-  return `${continuity} + ${turnOperation.operation}`
 }
 
 const formatRuntime = (runtimeMinutes?: number): string | null => {
@@ -215,9 +207,9 @@ export default function ResultsPage({
   passCount,
   triggerText,
   turnOperation,
-  activeConstraints = [],
+  activeConstraints: _activeConstraints = [],
   interpretationNote,
-  retrievalDiagnostics,
+  retrievalDiagnostics: _retrievalDiagnostics,
   onPreviousPass,
   onNextPass
 }: ResultsPageProps) {
@@ -236,7 +228,9 @@ export default function ResultsPage({
   const [trailerLoadError, setTrailerLoadError] = useState(false)
   const [trailerLoading, setTrailerLoading] = useState(false)
   const [detailsPanelEntered, setDetailsPanelEntered] = useState(false)
+  const [infoPopoverOpen, setInfoPopoverOpen] = useState(false)
   const closeDetailsTimerRef = useRef<number | null>(null)
+  const headerControlsRef = useRef<HTMLDivElement | null>(null)
 
   const detailsRec = detailsIndex !== null && detailsIndex >= 0 && detailsIndex < results.length
     ? results[detailsIndex]
@@ -272,6 +266,28 @@ export default function ResultsPage({
     : highlightDetails
       ? sessionHighlights.length
       : 0
+
+  const hasInfoPopoverContent =
+    !!query ||
+    (!!triggerText && triggerText !== query) ||
+    !!interpretationNote ||
+    !!turnOperation
+
+  const getTurnSummary = (): string => {
+    if (!turnOperation) {
+      return 'Initial round based on your conversation context.'
+    }
+
+    if (turnOperation.operation === 'narrow') {
+      return 'Narrowed this round based on your latest refinement.'
+    }
+
+    if (turnOperation.operation === 'widen') {
+      return 'Broadened this round to offer a wider set of options.'
+    }
+
+    return 'Shifted direction this round based on your latest message.'
+  }
 
   const closeDetailsPanel = () => {
     if (!activeDetailsRec) {
@@ -350,11 +366,38 @@ export default function ResultsPage({
       if (e.key === 'Escape' && trailerModal.isOpen) {
         closeTrailer()
       }
+
+      if (e.key === 'Escape' && infoPopoverOpen) {
+        setInfoPopoverOpen(false)
+      }
     }
 
     document.addEventListener('keydown', handleEscape)
     return () => document.removeEventListener('keydown', handleEscape)
-  }, [trailerModal.isOpen, detailsRec, highlightDetails])
+  }, [trailerModal.isOpen, detailsRec, highlightDetails, infoPopoverOpen])
+
+  useEffect(() => {
+    if (!infoPopoverOpen) {
+      return
+    }
+
+    const handlePointerDown = (e: MouseEvent) => {
+      if (!headerControlsRef.current) {
+        return
+      }
+
+      if (!headerControlsRef.current.contains(e.target as Node)) {
+        setInfoPopoverOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => document.removeEventListener('mousedown', handlePointerDown)
+  }, [infoPopoverOpen])
+
+  useEffect(() => {
+    setInfoPopoverOpen(false)
+  }, [passIndex, query])
 
   useEffect(() => {
     if (results.length === 0 && detailsIndex !== null) {
@@ -566,10 +609,45 @@ export default function ResultsPage({
           <div className="mb-8">
             <div className="flex items-center justify-between gap-3 pb-4 border-b border-border">
               <h2 className="font-serif text-2xl font-medium tracking-[-0.02em] text-text">Recommendations</h2>
-              <div className="relative">
+              <div ref={headerControlsRef} className="relative flex items-center gap-1">
                 <button
-                  onClick={() => setRoundMenuOpen(!roundMenuOpen)}
-                  className="p-1 transition-opacity hover:opacity-70"
+                  onClick={() => {
+                    if (!hasInfoPopoverContent) {
+                      return
+                    }
+                    setInfoPopoverOpen(prev => !prev)
+                    setRoundMenuOpen(false)
+                  }}
+                  className={buttonClass({ variant: 'ghost', size: 'icon-sm' })}
+                  aria-label="Why these recommendations"
+                  aria-haspopup="dialog"
+                  aria-expanded={infoPopoverOpen}
+                  aria-controls="recommendation-context-popover"
+                  title="Why these recommendations"
+                  disabled={!hasInfoPopoverContent}
+                >
+                  <svg
+                    className="h-5 w-5 text-text"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M12 10v6" />
+                    <circle cx="12" cy="7" r="1" fill="currentColor" stroke="none" />
+                  </svg>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setRoundMenuOpen(prev => !prev)
+                    setInfoPopoverOpen(false)
+                  }}
+                  className={buttonClass({ variant: 'ghost', size: 'icon-sm' })}
                   aria-label="Round selection menu"
                   title="Select round"
                 >
@@ -585,6 +663,34 @@ export default function ResultsPage({
                     <circle cx="12" cy="19" r="1" />
                   </svg>
                 </button>
+
+                {infoPopoverOpen && hasInfoPopoverContent && (
+                  <div
+                    id="recommendation-context-popover"
+                    role="dialog"
+                    aria-label="Why these recommendations"
+                    className="absolute right-8 top-full z-20 mt-2 w-[19rem] rounded-lg border border-border/80 bg-surface px-4 py-3 shadow-card"
+                  >
+                    <p className="text-[11px] uppercase tracking-[0.11em] text-text-muted">Why these picks</p>
+                    <div className="mt-2 space-y-2 text-[12px] leading-[1.6] text-text-muted">
+                      <p>
+                        <span className="font-medium text-text">Round:</span> {passIndex + 1} of {passCount}
+                      </p>
+                      {query && (
+                        <p>
+                          <span className="font-medium text-text">You asked for:</span> {query}
+                        </p>
+                      )}
+                      {triggerText && triggerText !== query && (
+                        <p>
+                          <span className="font-medium text-text">Latest refinement:</span> {triggerText}
+                        </p>
+                      )}
+                      {interpretationNote && <p>{interpretationNote}</p>}
+                      <p>{getTurnSummary()}</p>
+                    </div>
+                  </div>
+                )}
 
                 {roundMenuOpen && (
                   <div className="absolute right-0 mt-2 w-44 rounded-lg border border-border bg-surface shadow-card z-10">
@@ -619,70 +725,6 @@ export default function ResultsPage({
               </div>
             </div>
           </div>
-        )}
-
-        {query && (
-          <details className="mb-8">
-            <summary className="cursor-pointer flex items-center gap-2 pb-3 border-b border-border mb-4">
-              <span className="text-xs uppercase tracking-[0.14em] text-text-muted font-medium">
-                Why This Recommendation
-              </span>
-            </summary>
-            <div className="space-y-4 pl-0">
-              <div>
-                <p className="text-xs uppercase tracking-[0.14em] text-text-muted mb-2">Based on</p>
-                <p className="text-sm text-text">{query}</p>
-                {triggerText && triggerText !== query && (
-                  <p className="mt-2 text-xs text-text-muted">Latest note: {triggerText}</p>
-                )}
-              </div>
-
-              {activeConstraints.length > 0 && (
-                <div>
-                  <p className="text-xs uppercase tracking-[0.14em] text-text-muted mb-2">Active direction</p>
-                  <div className="flex flex-wrap gap-2">
-                    {activeConstraints.map((constraint, idx) => (
-                      <span
-                        key={`${constraint}-${idx}`}
-                        className="bg-surface-2 px-2 py-1 text-xs text-text rounded"
-                      >
-                        {constraint}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {interpretationNote && (
-                <div>
-                  <p className="text-xs uppercase tracking-[0.14em] text-text-muted mb-2">Interpretation</p>
-                  <p className="text-sm text-text-muted">{interpretationNote}</p>
-                </div>
-              )}
-
-              <div>
-                <p className="text-xs uppercase tracking-[0.14em] text-text-muted mb-2">Turn type</p>
-                <p className="text-sm text-text-muted">{formatTurnOperation(turnOperation)}</p>
-              </div>
-
-              {retrievalDiagnostics && (
-                <div>
-                  <p className="text-xs uppercase tracking-[0.14em] text-text-muted mb-2">Data source</p>
-                  <p className="text-sm text-text-muted">
-                    {retrievalDiagnostics.omdbFallbackUsed
-                      ? 'OMDB fallback (TMDB available but no candidates)'
-                      : !retrievalDiagnostics.tmdbEnabled && retrievalDiagnostics.usedOmdb
-                        ? 'OMDB (TMDB not configured)'
-                        : retrievalDiagnostics.usedTmdb && !retrievalDiagnostics.usedOmdb
-                          ? 'TMDB'
-                          : retrievalDiagnostics.usedTmdb && retrievalDiagnostics.usedOmdb
-                            ? 'TMDB + OMDB'
-                            : 'Unavailable'}
-                  </p>
-                </div>
-              )}
-            </div>
-          </details>
         )}
 
         {results.length === 0 ? (
@@ -791,7 +833,7 @@ export default function ResultsPage({
                             e.stopPropagation()
                             openRecommendationDetails(index)
                           }}
-                          className="rounded-pill bg-surface-2 px-4 py-1.5 text-xs text-text transition-colors hover:opacity-80"
+                          className={buttonClass({ variant: 'secondary', size: 'xs' })}
                           aria-label={`Open more details for ${rec.title}`}
                         >
                           More details
@@ -802,7 +844,7 @@ export default function ResultsPage({
                               e.stopPropagation()
                               openTrailer(rec.trailerUrl!, rec.title)
                             }}
-                            className="rounded-pill bg-surface-2 px-4 py-1.5 text-xs text-text transition-colors hover:opacity-80"
+                            className={buttonClass({ variant: 'secondary', size: 'xs' })}
                             aria-label={`Watch trailer for ${rec.title}`}
                           >
                             View trailer
@@ -834,12 +876,12 @@ export default function ResultsPage({
             }`}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="mb-4 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <button
                   onClick={showPreviousDetails}
                   disabled={activeDetailsIndex === null || activeDetailsIndex === 0}
-                  className="inline-flex items-center gap-1 text-xs text-text-muted transition-colors hover:text-text hover:underline disabled:opacity-45 disabled:no-underline"
+                  className={buttonClass({ variant: 'ghost', size: 'xs', className: 'gap-1 hover:underline disabled:no-underline' })}
                   aria-label="Previous title"
                 >
                   <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -855,7 +897,7 @@ export default function ResultsPage({
                 <button
                   onClick={showNextDetails}
                   disabled={activeDetailsIndex === null || activeDetailsIndex >= activeDetailsCount - 1}
-                  className="inline-flex items-center gap-1 text-xs text-text-muted transition-colors hover:text-text hover:underline disabled:opacity-45 disabled:no-underline"
+                  className={buttonClass({ variant: 'ghost', size: 'xs', className: 'gap-1 hover:underline disabled:no-underline' })}
                   aria-label="Next title"
                 >
                   <span>Next</span>
@@ -867,21 +909,21 @@ export default function ResultsPage({
 
               <button
                 onClick={closeDetailsPanel}
-                className="rounded text-2xl leading-none text-text-muted transition-colors hover:text-text"
+                className={buttonClass({ variant: 'ghost', size: 'icon-sm', className: 'text-2xl leading-none' })}
                 aria-label="Close details panel"
               >
                 ×
               </button>
             </div>
 
-            <header className="mb-6">
+            <header className="mb-7">
               <h2 id="details-title" className="font-serif text-[2.2rem] font-medium leading-[1.06] tracking-[-0.024em] text-text sm:text-[2.5rem]">
                 {activeDetailsRec.title}
               </h2>
-              <p className="mt-1 text-[11px] uppercase tracking-[0.11em] text-text-muted/90">{getMetaLine(activeDetailsRec)}</p>
+              <p className="mt-2 text-[11px] uppercase tracking-[0.11em] text-text-muted/90">{getMetaLine(activeDetailsRec)}</p>
             </header>
 
-            <section className="mb-8 grid gap-6 border-b border-border/30 pb-8 md:grid-cols-[168px_1fr]">
+            <section className="mb-9 grid gap-7 border-b border-border/30 pb-9 md:grid-cols-[168px_1fr]">
               {activeDetailsRec.posterUrl ? (
                 <img
                   src={activeDetailsRec.posterUrl}
@@ -899,7 +941,7 @@ export default function ResultsPage({
                 )}
 
                 {activeDetailsRec.whyThis && (
-                  <div className="mb-5">
+                  <div className="mb-6">
                     <div className="mb-2 flex items-center gap-3">
                       <p className="text-[11px] uppercase tracking-[0.11em] text-text-muted">
                         Lumera note
@@ -910,7 +952,7 @@ export default function ResultsPage({
                         aria-hidden="true"
                       />
                     </div>
-                    <p className="max-w-[60ch] font-serif text-[1.08rem] font-medium italic leading-relaxed text-text/95">
+                    <p className="max-w-[60ch] font-serif text-[1.08rem] font-medium italic leading-[1.75] text-text/95">
                       {activeDetailsRec.whyThis}
                     </p>
                   </div>
@@ -920,7 +962,7 @@ export default function ResultsPage({
                   {activeDetailsRec.trailerUrl && (
                     <button
                       onClick={() => openTrailer(activeDetailsRec.trailerUrl!, activeDetailsRec.title)}
-                      className="inline-flex items-center gap-1.5 rounded-pill bg-surface-2 px-3 py-1.5 text-xs text-text transition-colors hover:opacity-80"
+                      className={buttonClass({ variant: 'secondary', size: 'xs', className: 'gap-1.5' })}
                       aria-label={`Watch trailer for ${activeDetailsRec.title}`}
                     >
                       <span>Watch trailer</span>
@@ -940,7 +982,7 @@ export default function ResultsPage({
                                 href={avail.link}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-text underline decoration-border/50 underline-offset-2 transition-colors hover:text-accent"
+                                className={inlineLinkClass()}
                               >
                                 {avail.platform}
                               </a>
@@ -962,23 +1004,23 @@ export default function ResultsPage({
             </section>
 
             {(activeDetailsRec.synopsis || activeDetailsRec.mainCast?.length || activeDetailsRec.directors?.length || activeDetailsRec.genres?.length || activeDetailsRec.originalLanguage) && (
-              <section className="mb-2 border-b border-border/30 pb-8 md:grid md:grid-cols-[minmax(0,1fr)_220px] md:gap-8">
+              <section className="mb-2 pb-9 md:grid md:grid-cols-[minmax(0,1fr)_220px] md:gap-10">
                 <div>
                   {activeDetailsRec.synopsis && (
                     <>
-                      <p className="mb-2 text-[11px] uppercase tracking-[0.11em] text-text-muted">Synopsis</p>
-                      <p className="max-w-[62ch] text-[15px] leading-[1.8] text-text/92">{activeDetailsRec.synopsis}</p>
+                      <p className="mb-3 text-[11px] uppercase tracking-[0.11em] text-text-muted">Synopsis</p>
+                      <p className="max-w-[62ch] text-[15px] leading-[1.9] text-text/92">{activeDetailsRec.synopsis}</p>
                     </>
                   )}
                 </div>
 
                 {(activeDetailsRec.mainCast?.length || activeDetailsRec.directors?.length || activeDetailsRec.genres?.length || activeDetailsRec.originalLanguage) && (
-                  <aside className="mt-6 border-t border-border/25 pt-5 md:mt-0 md:border-t-0 md:pt-0">
-                    <div className="grid gap-y-4">
+                  <aside className="mt-7 border-t border-border/25 pt-5 md:mt-0 md:border-t-0 md:pt-0">
+                    <div className="grid gap-y-5">
                       {activeDetailsRec.mainCast && activeDetailsRec.mainCast.length > 0 && (
                         <div>
-                          <p className="mb-1 text-[10px] uppercase tracking-[0.11em] text-text-muted">Cast</p>
-                          <ul className="space-y-0.5 text-[12px] leading-relaxed text-text-muted">
+                          <p className="mb-1 text-[10px] uppercase tracking-[0.12em] text-text-muted/90">Cast</p>
+                          <ul className="space-y-0.5 text-[12px] leading-[1.75] text-text/80">
                             {activeDetailsRec.mainCast.slice(0, 4).map((name) => (
                               <li key={name}>{name}</li>
                             ))}
@@ -987,8 +1029,8 @@ export default function ResultsPage({
                       )}
                       {activeDetailsRec.directors && activeDetailsRec.directors.length > 0 && (
                         <div>
-                          <p className="mb-1 text-[10px] uppercase tracking-[0.11em] text-text-muted">Director</p>
-                          <ul className="space-y-0.5 text-[12px] leading-relaxed text-text-muted">
+                          <p className="mb-1 text-[10px] uppercase tracking-[0.12em] text-text-muted/90">Director</p>
+                          <ul className="space-y-0.5 text-[12px] leading-[1.75] text-text/80">
                             {activeDetailsRec.directors.slice(0, 3).map((name) => (
                               <li key={name}>{name}</li>
                             ))}
@@ -997,14 +1039,14 @@ export default function ResultsPage({
                       )}
                       {activeDetailsRec.genres && activeDetailsRec.genres.length > 0 && (
                         <div>
-                          <p className="mb-1 text-[10px] uppercase tracking-[0.11em] text-text-muted">Genres</p>
-                          <p className="text-[12px] leading-relaxed text-text-muted">{activeDetailsRec.genres.join(', ')}</p>
+                          <p className="mb-1 text-[10px] uppercase tracking-[0.12em] text-text-muted/90">Genres</p>
+                          <p className="text-[12px] leading-[1.75] text-text/80">{activeDetailsRec.genres.join(', ')}</p>
                         </div>
                       )}
                       {formatLanguageName(activeDetailsRec.originalLanguage) && (
                         <div>
-                          <p className="mb-1 text-[10px] uppercase tracking-[0.11em] text-text-muted">Language</p>
-                          <p className="text-[12px] leading-relaxed text-text-muted">{formatLanguageName(activeDetailsRec.originalLanguage)}</p>
+                          <p className="mb-1 text-[10px] uppercase tracking-[0.12em] text-text-muted/90">Language</p>
+                          <p className="text-[12px] leading-[1.75] text-text/80">{formatLanguageName(activeDetailsRec.originalLanguage)}</p>
                         </div>
                       )}
                     </div>
@@ -1034,7 +1076,7 @@ export default function ResultsPage({
               </h2>
               <button
                 onClick={closeTrailer}
-                className="rounded text-2xl leading-none text-text-muted transition-colors hover:text-text"
+                className={buttonClass({ variant: 'ghost', size: 'icon-sm', className: 'text-2xl leading-none' })}
                 aria-label="Close trailer"
               >
                 ×
@@ -1073,14 +1115,14 @@ export default function ResultsPage({
                   href={trailerModal.sourceUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="rounded-pill border border-border bg-surface-2 px-6 py-2 text-text transition-colors hover:border-accent"
+                  className={buttonClass({ variant: 'secondary', size: 'md' })}
                 >
                   Open trailer on source site
                 </a>
               )}
               <button
                 onClick={closeTrailer}
-                className="rounded-pill border border-border bg-surface-2 px-6 py-2 text-text transition-colors hover:border-accent"
+                className={buttonClass({ variant: 'secondary', size: 'md' })}
                 aria-label="Close trailer modal"
               >
                 Close

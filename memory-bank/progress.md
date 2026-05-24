@@ -15,6 +15,7 @@
 - [x] Refinement suggestion chips removed from UX
 - [x] Transparency policy implemented for critics-style requests (proxy explanation + unsupported-source guardrail)
 - [x] Editorial details panel redesign iteration complete (hero narrative, metadata rail, motion, and typography pass)
+- [x] Shared button/link style utility pass complete across primary frontend interaction surfaces
 - [ ] Documentation fully aligned with current implementation
 - [x] Frontend lint configuration added
 - [ ] TMDB configured locally for trailer verification
@@ -261,6 +262,13 @@
 - [x] Added frontend on-demand fetch + cache for highlight details in panel view
 - [x] Highlight panel now supports synopsis, cast/director, genres/language, runtime/rating, and trailer data when available
 
+### UI Consistency and Reuse (May 24, 2026)
+- [x] Added `frontend/src/buttonStyles.ts` as shared interaction-style utility module
+- [x] Standardized button variants and sizes for header, conversational controls, results actions, and home preference controls
+- [x] Converted icon controls and utility actions to consistent focus-visible ring and disabled-state treatment
+- [x] Added shared `inlineLinkClass` and applied to interactive result links for anchor/button parity
+- [x] Verified frontend `npm run build` passes after migration
+
 ---
 
 ## Open Follow-Ups
@@ -268,6 +276,7 @@
 - [ ] Refresh setup and summary docs that still mention legacy provider assumptions
 - [ ] Add automated regression tests for critics-intent transparency and unsupported-source guardrail
 - [ ] Add automated regression tests for `GET /highlights/:type/:id` and highlight details caching/fallback behavior
+- [ ] Add targeted UI regression coverage for shared `buttonStyles` variants across light/dark themes and key interactive states
 - [ ] Rotate exposed development secrets
 - [ ] Consider backend pipeline optimization or refactoring if performance becomes an issue
 - [ ] Test full multi-turn flow end-to-end with live API and browser snapshots

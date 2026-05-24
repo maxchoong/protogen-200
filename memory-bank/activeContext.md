@@ -69,6 +69,12 @@
 - Added right-aligned panel open/close motion: fade backdrop + slide-in/out panel at 300ms ease-out with reduced-motion support.
 - Added responsive panel-width behavior preserving 50:50 feel at large sizes while allowing modest extra room on mid-sized desktops.
 
+### UI Consistency and Component Reuse Pass (May 24, 2026)
+- Added shared button style utility in `frontend/src/buttonStyles.ts` with standard variants (`primary`, `secondary`, `subtle`, `ghost`, `chip`, `link`) and sizes (`xs`, `sm`, `md`, `lg`, `icon`, `icon-sm`).
+- Migrated header controls in `frontend/src/App.tsx` to shared styles, including subtler reset action hierarchy and icon-only theme toggle parity.
+- Migrated core action buttons in `frontend/src/pages/ConversationalHome.tsx`, `frontend/src/pages/ResultsPage.tsx`, and `frontend/src/pages/HomePage.tsx` to shared class generation for consistent spacing, typography, focus, hover, and disabled states.
+- Added shared `inlineLinkClass` utility and applied it to interactive links in `ResultsPage` (streaming links + trailer source link) to align anchor focus/hover treatment with button system tokens.
+
 ---
 
 ## Current Architecture Snapshot
@@ -107,6 +113,8 @@
 - [x] Details panel motion now includes both enter and exit animation with reduced-motion fallback.
 - [x] Preferred details layout variant validated: asymmetrical narrative/synopsis column with metadata side rail.
 - [x] "Lumera note" style and trailer action polish validated in browser iteration.
+- [x] Shared button/link style utility integrated across app header, conversational actions, results actions, and home preference controls.
+- [x] Frontend production build passes after style-system migration and anchor parity updates.
 
 ---
 
@@ -118,6 +126,7 @@
 - [ ] Add automated coverage for `GET /highlights/:type/:id` and frontend highlight-details caching/fallback behavior.
 - [ ] Add frontend visual regression coverage for details-panel layout variants and motion states.
 - [ ] Revisit metadata rail density once real title data breadth is tested across wider genres/languages.
+- [ ] Evaluate whether to extract a typed `Button` React component wrapper on top of `buttonClass` for stricter usage consistency and reduced className drift.
 
 ---
 
