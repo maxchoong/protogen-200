@@ -423,7 +423,7 @@ export default function ConversationalHome({
             <button
               onClick={handleSubmitMessage}
               disabled={!inputValue.trim() || state.isLoading}
-              className={buttonClass({ variant: 'secondary', size: 'md', className: 'h-fit' })}
+              className={buttonClass({ variant: 'secondary', size: 'md' })}
             >
               {state.isLoading ? 'Curating...' : 'Submit'}
             </button>
