@@ -1257,7 +1257,7 @@ export default function ResultsPage({
           aria-labelledby="details-title"
         >
           <aside
-            className={`absolute right-0 top-0 h-full w-full max-w-2xl overflow-y-auto border-l border-border/60 bg-surface px-6 py-7 shadow-card-hover transition-transform duration-300 ease-out motion-reduce:transform-none motion-reduce:transition-none sm:px-8 lg:min-w-[40rem] lg:max-w-[54vw] xl:max-w-[50vw] ${
+            className={`details-panel-shell absolute right-0 top-0 h-full w-full max-w-2xl overflow-y-auto bg-surface px-6 py-7 transition-transform duration-300 ease-out motion-reduce:transform-none motion-reduce:transition-none sm:px-8 lg:min-w-[40rem] lg:max-w-[54vw] xl:max-w-[50vw] ${
               detailsPanelEntered ? 'translate-x-0' : 'translate-x-8'
             }`}
             onClick={(e) => e.stopPropagation()}

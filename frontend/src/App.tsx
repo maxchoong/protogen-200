@@ -203,11 +203,11 @@ function App() {
               className={buttonClass({
                 variant: showResetConfirm ? 'secondary' : 'subtle',
                 size: 'sm',
-                className: showResetConfirm ? 'border-accent' : ''
+                className: `${showResetConfirm ? 'border-accent' : ''} whitespace-nowrap`
               })}
               aria-label="Start a new conversation"
             >
-              {showResetConfirm ? 'Confirm reset' : 'Start new conversation'}
+              {showResetConfirm ? 'Confirm reset' : 'New chat'}
             </button>
             <button
               onClick={toggleTheme}

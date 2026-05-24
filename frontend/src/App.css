@@ -25,6 +25,22 @@
   padding-block: var(--editorial-rhythm-4);
 }
 
+.details-panel-shell {
+  border-left: 0;
+  box-shadow: none;
+}
+
+@media (min-width: 673px) {
+  .details-panel-shell {
+    border-left: 1px solid color-mix(
+      in srgb,
+      var(--color-border) 60%,
+      transparent
+    );
+    box-shadow: var(--shadow-soft);
+  }
+}
+
 @media (min-width: 1024px) {
   .editorial-main {
     gap: var(--editorial-rhythm-5);
