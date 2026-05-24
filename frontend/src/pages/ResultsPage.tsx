@@ -221,6 +221,8 @@ export default function ResultsPage({
   })
   const [roundMenuOpen, setRoundMenuOpen] = useState(false)
   const [sessionHighlights, setSessionHighlights] = useState<HighlightTile[]>([])
+  const [highlightsLoading, setHighlightsLoading] = useState(false)
+  const [highlightPosterReady, setHighlightPosterReady] = useState<Record<string, boolean>>({})
   const [detailsIndex, setDetailsIndex] = useState<number | null>(null)
   const [highlightDetailsIndex, setHighlightDetailsIndex] = useState<number | null>(null)
   const [highlightDetailsCache, setHighlightDetailsCache] = useState<Record<string, Recommendation>>({})
@@ -317,6 +319,15 @@ export default function ResultsPage({
     }
 
     return 'Unavailable.'
+  }
+
+  const markHighlightPosterReady = (highlightId: string) => {
+    setHighlightPosterReady(prev => {
+      if (prev[highlightId]) {
+        return prev
+      }
+      return { ...prev, [highlightId]: true }
+    })
   }
 
   const closeDetailsPanel = () => {
@@ -464,17 +475,28 @@ export default function ResultsPage({
   }, [detailsIndex, results.length])
 
   useEffect(() => {
+    setHighlightPosterReady({})
+  }, [sessionHighlights])
+
+  useEffect(() => {
     if (results.length > 0) {
+      setHighlightsLoading(false)
       return
     }
 
+    let cancelled = false
+
     const loadHighlights = async () => {
+      setHighlightsLoading(true)
       const storedHighlights = sessionStorage.getItem(HIGHLIGHTS_STORAGE_KEY)
       if (storedHighlights) {
         try {
           const parsed = JSON.parse(storedHighlights) as HighlightTile[]
           if (Array.isArray(parsed) && parsed.length > 0) {
-            setSessionHighlights(parsed)
+            if (!cancelled) {
+              setSessionHighlights(parsed)
+              setHighlightsLoading(false)
+            }
             return
           }
         } catch {
@@ -499,14 +521,26 @@ export default function ResultsPage({
         const source = qualityFiltered.length >= HIGHLIGHT_COUNT ? qualityFiltered : highlights
         const selected = pickRandomItems(source, HIGHLIGHT_COUNT)
 
-        setSessionHighlights(selected)
+        if (!cancelled) {
+          setSessionHighlights(selected)
+        }
         sessionStorage.setItem(HIGHLIGHTS_STORAGE_KEY, JSON.stringify(selected))
       } catch {
-        setSessionHighlights([])
+        if (!cancelled) {
+          setSessionHighlights([])
+        }
+      } finally {
+        if (!cancelled) {
+          setHighlightsLoading(false)
+        }
       }
     }
 
     void loadHighlights()
+
+    return () => {
+      cancelled = true
+    }
   }, [results.length])
 
   useEffect(() => {
@@ -823,12 +857,33 @@ export default function ResultsPage({
                       }
                     }}
                   >
-                    <img
-                      src={item.posterUrl}
-                      alt={`${item.title} poster`}
-                      className="aspect-[2/3] w-full rounded-lg object-cover shadow-card transition-shadow duration-200 group-hover:shadow-[0_12px_24px_rgba(4,4,7,0.34)] group-focus-visible:shadow-[0_12px_24px_rgba(4,4,7,0.34)]"
-                      loading="lazy"
-                    />
+                    <div className="relative overflow-hidden rounded-lg">
+                      {!highlightPosterReady[item.id] && (
+                        <div
+                          className="absolute inset-0 animate-pulse bg-surface-2/70"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <img
+                        src={item.posterUrl}
+                        alt={`${item.title} poster`}
+                        className={`aspect-[2/3] w-full rounded-lg object-cover shadow-card transition-all duration-300 group-hover:shadow-[0_12px_24px_rgba(4,4,7,0.34)] group-focus-visible:shadow-[0_12px_24px_rgba(4,4,7,0.34)] ${
+                          highlightPosterReady[item.id] ? 'opacity-100' : 'opacity-0'
+                        }`}
+                        loading="lazy"
+                        ref={(img) => {
+                          if (img && img.complete) {
+                            markHighlightPosterReady(item.id)
+                          }
+                        }}
+                        onLoad={() => {
+                          markHighlightPosterReady(item.id)
+                        }}
+                        onError={() => {
+                          markHighlightPosterReady(item.id)
+                        }}
+                      />
+                    </div>
                     <p className="text-sm font-medium leading-snug tracking-[-0.01em] text-text">{item.title}</p>
                     <p className="text-xs leading-relaxed tracking-[-0.004em] text-text-muted">
                       {item.year || 'Unknown year'} • {item.type === 'tv' ? 'Series' : 'Film'} • {item.rating.toFixed(1)}
@@ -837,12 +892,16 @@ export default function ResultsPage({
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3" aria-hidden="true">
+              <div
+                className="grid grid-cols-2 gap-x-4 gap-y-8 sm:grid-cols-3"
+                aria-hidden="true"
+                aria-label={highlightsLoading ? 'Loading highlight posters' : 'Highlights unavailable'}
+              >
                 {Array.from({ length: HIGHLIGHT_COUNT }).map((_, idx) => (
                   <div key={idx} className="space-y-3">
-                    <div className="aspect-[2/3] w-full rounded-lg bg-surface-2/70" />
-                    <div className="h-3 w-3/4 rounded bg-surface-2/70" />
-                    <div className="h-2 w-1/2 rounded bg-surface-2/60" />
+                    <div className="aspect-[2/3] w-full animate-pulse rounded-lg bg-surface-2/70" />
+                    <div className="h-3 w-3/4 animate-pulse rounded bg-surface-2/70" />
+                    <div className="h-2 w-1/2 animate-pulse rounded bg-surface-2/60" />
                   </div>
                 ))}
               </div>
