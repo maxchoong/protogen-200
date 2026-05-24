@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { Fragment, useState, useEffect, useRef } from 'react'
 
 interface Recommendation {
   id: string
@@ -934,7 +934,7 @@ export default function ResultsPage({
                     {activeDetailsRec.availability && activeDetailsRec.availability.length > 0 ? (
                       <>
                         {activeDetailsRec.availability.slice(0, 3).map((avail, idx) => (
-                          <React.Fragment key={`${avail.platform}-${avail.type}-${idx}`}>
+                          <Fragment key={`${avail.platform}-${avail.type}-${idx}`}>
                             {avail.link ? (
                               <a
                                 href={avail.link}
@@ -947,10 +947,10 @@ export default function ResultsPage({
                             ) : (
                               <span className="text-text">{avail.platform}</span>
                             )}
-                            {idx < Math.min(activeDetailsRec.availability.length, 3) - 1 && (
+                            {idx < Math.min(activeDetailsRec.availability?.length ?? 0, 3) - 1 && (
                               <span aria-hidden="true">,</span>
                             )}
-                          </React.Fragment>
+                          </Fragment>
                         ))}
                       </>
                     ) : (
