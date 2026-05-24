@@ -79,6 +79,21 @@ interface TMDBCreditsResponse {
   crew?: TMDBCrewMember[]
 }
 
+interface CacheEntry<T> {
+  expiresAt: number
+  value: T
+}
+
+const TMDB_DETAILS_TTL_MS = 12 * 60 * 60 * 1000
+const TMDB_CREDITS_TTL_MS = 12 * 60 * 60 * 1000
+const TMDB_VIDEOS_TTL_MS = 24 * 60 * 60 * 1000
+const TMDB_EXTERNAL_IDS_TTL_MS = 24 * 60 * 60 * 1000
+const TMDB_FIND_BY_IMDB_TTL_MS = 24 * 60 * 60 * 1000
+const TMDB_PERSON_LOOKUP_TTL_MS = 12 * 60 * 60 * 1000
+const TMDB_PERSON_CREDITS_TTL_MS = 12 * 60 * 60 * 1000
+const TMDB_TRAILER_BY_IMDB_TTL_MS = 24 * 60 * 60 * 1000
+const TMDB_FAILURE_TTL_MS = 2 * 60 * 1000
+
 export interface SearchQuery {
   query?: string
   includeMovies: boolean
@@ -95,6 +110,14 @@ export class TMDBClient {
   private apiKey: string
   private readAccessToken: string
   private baseUrl: string
+  private titleDetailsCache = new Map<string, CacheEntry<TMDBTitle | null>>()
+  private videosCache = new Map<string, CacheEntry<Array<{ key: string; type: string }>>>()
+  private externalIdsCache = new Map<string, CacheEntry<{ imdbId?: string }>>()
+  private titleCreditsCache = new Map<string, CacheEntry<{ mainCast: string[]; directors: string[] }>>()
+  private findByImdbCache = new Map<string, CacheEntry<{ tmdbId: number; mediaType: 'movie' | 'tv' } | null>>()
+  private personIdCache = new Map<string, CacheEntry<number | null>>()
+  private personCreditsCache = new Map<string, CacheEntry<TMDBTitle[]>>()
+  private trailerByImdbCache = new Map<string, CacheEntry<string | null>>()
 
   constructor() {
     this.apiKey = config.tmdb.apiKey
@@ -281,6 +304,12 @@ export class TMDBClient {
       return null
     }
 
+    const cacheKey = `${mediaType}:${titleId}`
+    const cached = this.getCachedValue(this.titleDetailsCache, cacheKey)
+    if (cached !== undefined) {
+      return cached
+    }
+
     try {
       const params = this.applyAuth(new URLSearchParams())
 
@@ -293,13 +322,17 @@ export class TMDBClient {
       )
 
       if (!response.ok) {
+        this.setCachedValue(this.titleDetailsCache, cacheKey, null, TMDB_FAILURE_TTL_MS)
         throw new Error(`TMDB API error: ${response.status}`)
       }
 
       const data = await response.json()
-      return this.normalizeTMDBResponse(data, mediaType)
+      const normalized = this.normalizeTMDBResponse(data, mediaType)
+      this.setCachedValue(this.titleDetailsCache, cacheKey, normalized, TMDB_DETAILS_TTL_MS)
+      return normalized
     } catch (error) {
       console.error('[TMDB] Details error:', error)
+      this.setCachedValue(this.titleDetailsCache, cacheKey, null, TMDB_FAILURE_TTL_MS)
       return null
     }
   }
@@ -316,6 +349,12 @@ export class TMDBClient {
       return []
     }
 
+    const cacheKey = `${mediaType}:${titleId}`
+    const cached = this.getCachedValue(this.videosCache, cacheKey)
+    if (cached !== undefined) {
+      return cached
+    }
+
     try {
       const params = this.applyAuth(new URLSearchParams({
         language: 'en-US'
@@ -330,13 +369,17 @@ export class TMDBClient {
       )
 
       if (!response.ok) {
+        this.setCachedValue(this.videosCache, cacheKey, [], TMDB_FAILURE_TTL_MS)
         return []
       }
 
       const data = await response.json() as { results: { key: string; type: string }[] }
-      return data.results.filter(v => v.type === 'Trailer')
+      const trailers = data.results.filter(v => v.type === 'Trailer')
+      this.setCachedValue(this.videosCache, cacheKey, trailers, TMDB_VIDEOS_TTL_MS)
+      return trailers
     } catch (error) {
       console.error('[TMDB] Videos error:', error)
+      this.setCachedValue(this.videosCache, cacheKey, [], TMDB_FAILURE_TTL_MS)
       return []
     }
   }
@@ -347,6 +390,12 @@ export class TMDBClient {
   ): Promise<{ imdbId?: string }> {
     if (!this.isEnabled()) {
       return {}
+    }
+
+    const cacheKey = `${mediaType}:${titleId}`
+    const cached = this.getCachedValue(this.externalIdsCache, cacheKey)
+    if (cached !== undefined) {
+      return cached
     }
 
     try {
@@ -361,15 +410,19 @@ export class TMDBClient {
       )
 
       if (!response.ok) {
+        this.setCachedValue(this.externalIdsCache, cacheKey, {}, TMDB_FAILURE_TTL_MS)
         return {}
       }
 
       const data = await response.json() as { imdb_id?: string }
-      return {
+      const externalIds = {
         imdbId: data.imdb_id || undefined
       }
+      this.setCachedValue(this.externalIdsCache, cacheKey, externalIds, TMDB_EXTERNAL_IDS_TTL_MS)
+      return externalIds
     } catch (error) {
       console.error('[TMDB] External IDs error:', error)
+      this.setCachedValue(this.externalIdsCache, cacheKey, {}, TMDB_FAILURE_TTL_MS)
       return {}
     }
   }
@@ -380,6 +433,12 @@ export class TMDBClient {
   ): Promise<{ mainCast: string[]; directors: string[] }> {
     if (!this.isEnabled()) {
       return { mainCast: [], directors: [] }
+    }
+
+    const cacheKey = `${mediaType}:${titleId}`
+    const cached = this.getCachedValue(this.titleCreditsCache, cacheKey)
+    if (cached !== undefined) {
+      return cached
     }
 
     try {
@@ -393,6 +452,8 @@ export class TMDBClient {
       )
 
       if (!response.ok) {
+        const emptyCredits = { mainCast: [], directors: [] }
+        this.setCachedValue(this.titleCreditsCache, cacheKey, emptyCredits, TMDB_FAILURE_TTL_MS)
         return { mainCast: [], directors: [] }
       }
 
@@ -422,12 +483,15 @@ export class TMDBClient {
         .map(member => member.name!.trim())
         .filter(name => name.length > 0)
 
-      return {
+      const credits = {
         mainCast: Array.from(new Set(cast)).slice(0, 5),
         directors: Array.from(new Set(directors)).slice(0, 2)
       }
+      this.setCachedValue(this.titleCreditsCache, cacheKey, credits, TMDB_CREDITS_TTL_MS)
+      return credits
     } catch (error) {
       console.error('[TMDB] Credits error:', error)
+      this.setCachedValue(this.titleCreditsCache, cacheKey, { mainCast: [], directors: [] }, TMDB_FAILURE_TTL_MS)
       return { mainCast: [], directors: [] }
     }
   }
@@ -438,6 +502,12 @@ export class TMDBClient {
   ): Promise<{ tmdbId: number; mediaType: 'movie' | 'tv' } | null> {
     if (!this.isEnabled()) {
       return null
+    }
+
+    const cacheKey = `${imdbId}:${typeHint || 'any'}`
+    const cached = this.getCachedValue(this.findByImdbCache, cacheKey)
+    if (cached !== undefined) {
+      return cached
     }
 
     try {
@@ -454,6 +524,7 @@ export class TMDBClient {
       )
 
       if (!response.ok) {
+        this.setCachedValue(this.findByImdbCache, cacheKey, null, TMDB_FAILURE_TTL_MS)
         return null
       }
 
@@ -466,24 +537,34 @@ export class TMDBClient {
       const tvResult = data.tv_results?.[0]
 
       if (typeHint === 'movie' && movieResult) {
-        return { tmdbId: movieResult.id, mediaType: 'movie' }
+        const match = { tmdbId: movieResult.id, mediaType: 'movie' as const }
+        this.setCachedValue(this.findByImdbCache, cacheKey, match, TMDB_FIND_BY_IMDB_TTL_MS)
+        return match
       }
 
       if (typeHint === 'tv' && tvResult) {
-        return { tmdbId: tvResult.id, mediaType: 'tv' }
+        const match = { tmdbId: tvResult.id, mediaType: 'tv' as const }
+        this.setCachedValue(this.findByImdbCache, cacheKey, match, TMDB_FIND_BY_IMDB_TTL_MS)
+        return match
       }
 
       if (movieResult) {
-        return { tmdbId: movieResult.id, mediaType: 'movie' }
+        const match = { tmdbId: movieResult.id, mediaType: 'movie' as const }
+        this.setCachedValue(this.findByImdbCache, cacheKey, match, TMDB_FIND_BY_IMDB_TTL_MS)
+        return match
       }
 
       if (tvResult) {
-        return { tmdbId: tvResult.id, mediaType: 'tv' }
+        const match = { tmdbId: tvResult.id, mediaType: 'tv' as const }
+        this.setCachedValue(this.findByImdbCache, cacheKey, match, TMDB_FIND_BY_IMDB_TTL_MS)
+        return match
       }
 
+      this.setCachedValue(this.findByImdbCache, cacheKey, null, TMDB_FIND_BY_IMDB_TTL_MS)
       return null
     } catch (error) {
       console.error('[TMDB] Find by IMDb error:', error)
+      this.setCachedValue(this.findByImdbCache, cacheKey, null, TMDB_FAILURE_TTL_MS)
       return null
     }
   }
@@ -506,47 +587,7 @@ export class TMDBClient {
       if (!personId) {
         return []
       }
-
-      const params = this.applyAuth(new URLSearchParams())
-      const response = await fetch(
-        `${this.baseUrl}/person/${personId}/combined_credits?${params}`,
-        {
-          signal: AbortSignal.timeout(5000),
-          headers: this.buildAuthHeaders()
-        }
-      )
-
-      if (!response.ok) {
-        throw new Error(`TMDB credits API error: ${response.status}`)
-      }
-
-      const data = await response.json() as { cast?: TMDBPersonCredit[] }
-      const castCredits = data.cast || []
-
-      const normalized = castCredits
-        .map((credit): TMDBTitle | null => {
-          const mediaType = credit.media_type === 'tv' ? 'tv' : credit.media_type === 'movie' ? 'movie' : undefined
-          if (!mediaType) {
-            return null
-          }
-
-          return {
-            id: credit.id,
-            title: credit.title || credit.name || '',
-            name: credit.name,
-            poster_path: credit.poster_path,
-            overview: credit.overview || '',
-            release_date: credit.release_date,
-            first_air_date: credit.first_air_date,
-            media_type: mediaType,
-            genre_ids: credit.genre_ids || [],
-            vote_average: credit.vote_average || 0,
-            vote_count: credit.vote_count || 0,
-            adult: credit.adult || false,
-            original_language: credit.original_language || 'en'
-          }
-        })
-        .filter((item): item is TMDBTitle => item !== null)
+      const normalized = await this.getPersonCredits(personId)
 
       const filtered = this.filterTitles(normalized, {
         includeMovies: options.includeMovies ?? true,
@@ -595,6 +636,12 @@ export class TMDBClient {
       return undefined
     }
 
+    const cacheKey = `${imdbId}:${type}`
+    const cached = this.getCachedValue(this.trailerByImdbCache, cacheKey)
+    if (cached !== undefined) {
+      return cached || undefined
+    }
+
     try {
       console.log(`[TMDB] Fetching trailer for ${imdbId} (${type})`)
 
@@ -613,13 +660,16 @@ export class TMDBClient {
       if (videos.length > 0) {
         const url = `https://www.youtube.com/watch?v=${videos[0].key}`
         console.log(`[TMDB] Found trailer: ${url}`)
+        this.setCachedValue(this.trailerByImdbCache, cacheKey, url, TMDB_TRAILER_BY_IMDB_TTL_MS)
         return url
       }
 
       console.log(`[TMDB] No trailer found`)
+      this.setCachedValue(this.trailerByImdbCache, cacheKey, null, TMDB_FAILURE_TTL_MS)
       return undefined
     } catch (error) {
       console.error('[TMDB] Error fetching trailer:', error)
+      this.setCachedValue(this.trailerByImdbCache, cacheKey, null, TMDB_FAILURE_TTL_MS)
       return undefined
     }
   }
@@ -651,6 +701,12 @@ export class TMDBClient {
   // ===== Private methods =====
 
   private async searchPersonId(personName: string): Promise<number | undefined> {
+    const cacheKey = personName.trim().toLowerCase()
+    const cached = this.getCachedValue(this.personIdCache, cacheKey)
+    if (cached !== undefined) {
+      return cached || undefined
+    }
+
     const params = this.applyAuth(new URLSearchParams({
       query: personName,
       include_adult: 'false'
@@ -665,12 +721,14 @@ export class TMDBClient {
     )
 
     if (!response.ok) {
+      this.setCachedValue(this.personIdCache, cacheKey, null, TMDB_FAILURE_TTL_MS)
       return undefined
     }
 
     const data = await response.json() as { results?: TMDBPersonSearchResult[] }
     const results = data.results || []
     if (results.length === 0) {
+      this.setCachedValue(this.personIdCache, cacheKey, null, TMDB_PERSON_LOOKUP_TTL_MS)
       return undefined
     }
 
@@ -680,7 +738,62 @@ export class TMDBClient {
       return bActing - aActing
     })
 
-    return ranked[0].id
+    const personId = ranked[0].id
+    this.setCachedValue(this.personIdCache, cacheKey, personId, TMDB_PERSON_LOOKUP_TTL_MS)
+    return personId
+  }
+
+  private async getPersonCredits(personId: number): Promise<TMDBTitle[]> {
+    const cacheKey = String(personId)
+    const cached = this.getCachedValue(this.personCreditsCache, cacheKey)
+    if (cached !== undefined) {
+      return cached
+    }
+
+    const params = this.applyAuth(new URLSearchParams())
+    const response = await fetch(
+      `${this.baseUrl}/person/${personId}/combined_credits?${params}`,
+      {
+        signal: AbortSignal.timeout(5000),
+        headers: this.buildAuthHeaders()
+      }
+    )
+
+    if (!response.ok) {
+      this.setCachedValue(this.personCreditsCache, cacheKey, [], TMDB_FAILURE_TTL_MS)
+      throw new Error(`TMDB credits API error: ${response.status}`)
+    }
+
+    const data = await response.json() as { cast?: TMDBPersonCredit[] }
+    const castCredits = data.cast || []
+
+    const normalized = castCredits
+      .map((credit): TMDBTitle | null => {
+        const mediaType = credit.media_type === 'tv' ? 'tv' : credit.media_type === 'movie' ? 'movie' : undefined
+        if (!mediaType) {
+          return null
+        }
+
+        return {
+          id: credit.id,
+          title: credit.title || credit.name || '',
+          name: credit.name,
+          poster_path: credit.poster_path,
+          overview: credit.overview || '',
+          release_date: credit.release_date,
+          first_air_date: credit.first_air_date,
+          media_type: mediaType,
+          genre_ids: credit.genre_ids || [],
+          vote_average: credit.vote_average || 0,
+          vote_count: credit.vote_count || 0,
+          adult: credit.adult || false,
+          original_language: credit.original_language || 'en'
+        }
+      })
+      .filter((item): item is TMDBTitle => item !== null)
+
+    this.setCachedValue(this.personCreditsCache, cacheKey, normalized, TMDB_PERSON_CREDITS_TTL_MS)
+    return normalized
   }
 
   private async discoverMovies(
@@ -828,6 +941,27 @@ export class TMDBClient {
       adult: data.adult || false,
       original_language: data.original_language || 'en'
     }
+  }
+
+  private getCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string): T | undefined {
+    const entry = cache.get(key)
+    if (!entry) {
+      return undefined
+    }
+
+    if (Date.now() > entry.expiresAt) {
+      cache.delete(key)
+      return undefined
+    }
+
+    return entry.value
+  }
+
+  private setCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T, ttlMs: number): void {
+    cache.set(key, {
+      value,
+      expiresAt: Date.now() + ttlMs
+    })
   }
 }
 

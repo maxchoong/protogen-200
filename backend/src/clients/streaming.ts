@@ -27,11 +27,36 @@ interface StreamingAvailabilityResponse {
   }
 }
 
+export type StreamingDiagnosticsStatus = 'ok' | 'rate_limited' | 'error' | 'disabled' | 'not_requested'
+
+export interface StreamingBatchDiagnostics {
+  enabled: boolean
+  country: string
+  status: StreamingDiagnosticsStatus
+}
+
+interface AvailabilityCacheEntry {
+  expiresAt: number
+  status: StreamingDiagnosticsStatus
+  availability: StreamingSource[]
+}
+
+const AVAILABILITY_SUCCESS_TTL_MS = 6 * 60 * 60 * 1000
+const AVAILABILITY_RATE_LIMIT_TTL_MS = 2 * 60 * 1000
+const AVAILABILITY_ERROR_TTL_MS = 60 * 1000
+
 export class StreamingClient {
   private enabled: boolean
+  private availabilityCache = new Map<string, AvailabilityCacheEntry>()
+  private lastBatchDiagnostics: StreamingBatchDiagnostics = {
+    enabled: false,
+    country: 'us',
+    status: 'disabled'
+  }
 
   constructor() {
     this.enabled = !!STREAMING_API_KEY
+    this.lastBatchDiagnostics.enabled = this.enabled
     if (!this.enabled) {
       console.log('⚠️  RAPIDAPI_KEY not set. Streaming availability disabled.')
       console.log('   Sign up at https://rapidapi.com/movie-of-the-night-movie-of-the-night-default/api/streaming-availability')
@@ -40,19 +65,47 @@ export class StreamingClient {
     }
   }
 
+  isEnabled(): boolean {
+    return this.enabled
+  }
+
   /**
    * Get streaming availability for a title by IMDb ID
    */
   async getAvailability(imdbId: string, country: string = 'us'): Promise<StreamingSource[]> {
+    const normalizedCountry = country.toLowerCase()
+
     if (!this.enabled) {
+      this.lastBatchDiagnostics = {
+        enabled: false,
+        country: normalizedCountry,
+        status: 'disabled'
+      }
       return []
     }
 
+    const cacheKey = `${imdbId}:${normalizedCountry}`
+    const cached = this.getCachedAvailability(cacheKey)
+    if (cached) {
+      this.lastBatchDiagnostics = {
+        enabled: true,
+        country: normalizedCountry,
+        status: cached.status
+      }
+      return cached.availability
+    }
+
+    this.lastBatchDiagnostics = {
+      enabled: true,
+      country: normalizedCountry,
+      status: 'ok'
+    }
+
     try {
-      console.log(`[Streaming] Looking up availability for ${imdbId} in ${country}`)
+      console.log(`[Streaming] Looking up availability for ${imdbId} in ${normalizedCountry}`)
 
       const params = new URLSearchParams({
-        country,
+        country: normalizedCountry,
         output_language: 'en',
         series_granularity: 'show'
       })
@@ -71,14 +124,22 @@ export class StreamingClient {
 
       if (!response.ok) {
         console.warn(`[Streaming] HTTP error: ${response.status}`)
+        if (response.status === 429) {
+          this.lastBatchDiagnostics.status = 'rate_limited'
+          this.setAvailabilityCache(cacheKey, [], 'rate_limited', AVAILABILITY_RATE_LIMIT_TTL_MS)
+        } else if (this.lastBatchDiagnostics.status !== 'rate_limited') {
+          this.lastBatchDiagnostics.status = 'error'
+          this.setAvailabilityCache(cacheKey, [], 'error', AVAILABILITY_ERROR_TTL_MS)
+        }
         return []
       }
 
       const data = await response.json() as StreamingAvailabilityResponse
 
-      const streamingOptions = data.streamingOptions?.[country]
+      const streamingOptions = data.streamingOptions?.[normalizedCountry]
       if (!streamingOptions || streamingOptions.length === 0) {
-        console.log(`[Streaming] No availability data for ${country}`)
+        console.log(`[Streaming] No availability data for ${normalizedCountry}`)
+        this.setAvailabilityCache(cacheKey, [], 'ok', AVAILABILITY_SUCCESS_TTL_MS)
         return []
       }
 
@@ -96,9 +157,14 @@ export class StreamingClient {
         console.log(`[Streaming] Found ${dedupedSources.length} sources`)
       }
 
+      this.setAvailabilityCache(cacheKey, dedupedSources, 'ok', AVAILABILITY_SUCCESS_TTL_MS)
       return dedupedSources
     } catch (error) {
       console.error('[Streaming] Error fetching availability:', error)
+      if (this.lastBatchDiagnostics.status !== 'rate_limited') {
+        this.lastBatchDiagnostics.status = 'error'
+      }
+      this.setAvailabilityCache(cacheKey, [], this.lastBatchDiagnostics.status, AVAILABILITY_ERROR_TTL_MS)
       return []
     }
   }
@@ -111,6 +177,18 @@ export class StreamingClient {
     country: string = 'us'
   ): Promise<Map<string, StreamingSource[]>> {
     const results = new Map<string, StreamingSource[]>()
+    this.lastBatchDiagnostics = {
+      enabled: this.enabled,
+      country,
+      status: this.enabled ? 'ok' : 'disabled'
+    }
+
+    if (!this.enabled) {
+      imdbIds.forEach(id => {
+        results.set(id, [])
+      })
+      return results
+    }
 
     // Process in parallel but with some delay to respect rate limits
     for (const imdbId of imdbIds) {
@@ -125,6 +203,10 @@ export class StreamingClient {
     }
 
     return results
+  }
+
+  getLastBatchDiagnostics(): StreamingBatchDiagnostics {
+    return { ...this.lastBatchDiagnostics }
   }
 
   /**
@@ -163,6 +245,33 @@ export class StreamingClient {
     if (lowerType.includes('addon')) return 'addon'
 
     return 'subscription' // default
+  }
+
+  private getCachedAvailability(cacheKey: string): AvailabilityCacheEntry | null {
+    const cached = this.availabilityCache.get(cacheKey)
+    if (!cached) {
+      return null
+    }
+
+    if (Date.now() > cached.expiresAt) {
+      this.availabilityCache.delete(cacheKey)
+      return null
+    }
+
+    return cached
+  }
+
+  private setAvailabilityCache(
+    cacheKey: string,
+    availability: StreamingSource[],
+    status: StreamingDiagnosticsStatus,
+    ttlMs: number
+  ): void {
+    this.availabilityCache.set(cacheKey, {
+      expiresAt: Date.now() + ttlMs,
+      status,
+      availability
+    })
   }
 }
 

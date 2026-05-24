@@ -36,6 +36,11 @@ export interface RecommendationPass {
     usedTmdb: boolean
     usedOmdb: boolean
     omdbFallbackUsed: boolean
+    streaming?: {
+      enabled: boolean
+      country: string
+      status: 'ok' | 'rate_limited' | 'error' | 'disabled' | 'not_requested'
+    }
   }
 }
 

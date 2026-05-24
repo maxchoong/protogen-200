@@ -28,7 +28,19 @@ interface FMDBSearchResponse {
   Error?: string
 }
 
+interface CacheEntry<T> {
+  value: T
+  expiresAt: number
+}
+
+const FMDB_SEARCH_TTL_MS = 60 * 60 * 1000
+const FMDB_DETAILS_TTL_MS = 12 * 60 * 60 * 1000
+const FMDB_FAILURE_TTL_MS = 2 * 60 * 1000
+
 export class FMDBClient {
+  private searchCache = new Map<string, CacheEntry<FMDBMovie[]>>()
+  private detailsCache = new Map<string, CacheEntry<FMDBMovie | null>>()
+
   constructor() {
     console.log('✅ FM-DB Client initialized (no API key required)')
   }
@@ -38,6 +50,12 @@ export class FMDBClient {
    * Endpoint: /?s={title}&type={movie|series}
    */
   async searchByTitle(query: string, type?: 'movie' | 'series'): Promise<FMDBMovie[]> {
+    const cacheKey = `${query.trim().toLowerCase()}:${type || 'all'}`
+    const cached = this.getCachedValue(this.searchCache, cacheKey)
+    if (cached !== undefined) {
+      return cached
+    }
+
     try {
       console.log(`[FM-DB] Searching for: "${query}" (type: ${type || 'all'})`)
       
@@ -55,6 +73,7 @@ export class FMDBClient {
 
       if (!response.ok) {
         console.error(`[FM-DB] HTTP error: ${response.status}`)
+        this.setCachedValue(this.searchCache, cacheKey, [], FMDB_FAILURE_TTL_MS)
         return []
       }
 
@@ -62,12 +81,16 @@ export class FMDBClient {
 
       if (data.Response === 'False') {
         console.log(`[FM-DB] No results: ${data.Error}`)
+        this.setCachedValue(this.searchCache, cacheKey, [], FMDB_SEARCH_TTL_MS)
         return []
       }
 
-      return data.Search || []
+      const results = data.Search || []
+      this.setCachedValue(this.searchCache, cacheKey, results, FMDB_SEARCH_TTL_MS)
+      return results
     } catch (error) {
       console.error('[FM-DB] Search error:', error)
+      this.setCachedValue(this.searchCache, cacheKey, [], FMDB_FAILURE_TTL_MS)
       return []
     }
   }
@@ -77,6 +100,12 @@ export class FMDBClient {
    * Endpoint: /?i={imdbID}
    */
   async getDetails(imdbID: string): Promise<FMDBMovie | null> {
+    const cacheKey = imdbID.trim()
+    const cached = this.getCachedValue(this.detailsCache, cacheKey)
+    if (cached !== undefined) {
+      return cached
+    }
+
     try {
       console.log(`[FM-DB] Fetching details for ID: ${imdbID}`)
 
@@ -90,6 +119,7 @@ export class FMDBClient {
       })
 
       if (!response.ok) {
+        this.setCachedValue(this.detailsCache, cacheKey, null, FMDB_FAILURE_TTL_MS)
         return null
       }
 
@@ -97,12 +127,16 @@ export class FMDBClient {
 
       if (data.Response === 'False') {
         console.log(`[FM-DB] Details not found: ${data.Error || 'Unknown error'}`)
+        this.setCachedValue(this.detailsCache, cacheKey, null, FMDB_DETAILS_TTL_MS)
         return null
       }
 
-      return data as FMDBMovie
+      const details = data as FMDBMovie
+      this.setCachedValue(this.detailsCache, cacheKey, details, FMDB_DETAILS_TTL_MS)
+      return details
     } catch (error) {
       console.error('[FM-DB] Details error:', error)
+      this.setCachedValue(this.detailsCache, cacheKey, null, FMDB_FAILURE_TTL_MS)
       return null
     }
   }
@@ -156,6 +190,27 @@ export class FMDBClient {
       director: fmdbMovie.Director !== 'N/A' ? fmdbMovie.Director : undefined,
       actors: fmdbMovie.Actors !== 'N/A' ? fmdbMovie.Actors : undefined,
     }
+  }
+
+  private getCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string): T | undefined {
+    const entry = cache.get(key)
+    if (!entry) {
+      return undefined
+    }
+
+    if (Date.now() > entry.expiresAt) {
+      cache.delete(key)
+      return undefined
+    }
+
+    return entry.value
+  }
+
+  private setCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T, ttlMs: number): void {
+    cache.set(key, {
+      value,
+      expiresAt: Date.now() + ttlMs
+    })
   }
 }
 

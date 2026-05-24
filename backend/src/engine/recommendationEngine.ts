@@ -43,6 +43,11 @@ export interface RetrievalDiagnostics {
   usedTmdb: boolean
   usedOmdb: boolean
   omdbFallbackUsed: boolean
+  streaming?: {
+    enabled: boolean
+    country: string
+    status: 'ok' | 'rate_limited' | 'error' | 'disabled' | 'not_requested'
+  }
 }
 
 /**
@@ -60,7 +65,12 @@ export class RecommendationEngine {
     tmdbEnabled: false,
     usedTmdb: false,
     usedOmdb: false,
-    omdbFallbackUsed: false
+    omdbFallbackUsed: false,
+    streaming: {
+      enabled: false,
+      country: 'us',
+      status: 'not_requested'
+    }
   }
 
   private isImdbId(id: string): boolean {
@@ -925,18 +935,19 @@ export class RecommendationEngine {
       }
     }
 
-    // Fetch streaming availability in batch
-    let availabilityData = new Map<string, StreamingAvailability[]>()
-    if (final.length > 0) {
-      try {
-        const imdbIds = final.map(item => item.id).filter(id => this.isImdbId(id))
-        const country = (request.region || 'US').toLowerCase()
-        if (imdbIds.length > 0) {
-          availabilityData = await streamingClient.getAvailabilityBatch(imdbIds, country)
-        }
-      } catch (error) {
-        console.warn('[Engine] Streaming availability fetch failed')
-      }
+    // Streaming availability is fetched lazily on details-panel open.
+    const availabilityData = new Map<string, StreamingAvailability[]>()
+    const normalizedRegion = (request.region || 'GB').trim().toLowerCase()
+    const streamingCountry = normalizedRegion === 'uk' ? 'gb' : normalizedRegion
+    const availabilityDiagnostics: RetrievalDiagnostics['streaming'] = {
+      enabled: streamingClient.isEnabled(),
+      country: streamingCountry,
+      status: 'not_requested'
+    }
+
+    this.lastRetrievalDiagnostics = {
+      ...this.lastRetrievalDiagnostics,
+      streaming: availabilityDiagnostics
     }
 
     // Fetch trailers in batch

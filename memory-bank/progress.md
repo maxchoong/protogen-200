@@ -278,6 +278,16 @@
 - [x] Restored highlight poster tile hover lift by moving elevation to an unclipped wrapper
 - [x] Tuned tile hover lift/shadow to increase visibility without reintroducing left/right clipping
 
+### Caching and Panel Rhythm Follow-up (May 24, 2026)
+- [x] Added streaming availability TTL cache layer in `backend/src/clients/streaming.ts` with status-aware negative caching for `rate_limited` and `error` cases
+- [x] Added TMDB TTL caches in `backend/src/clients/tmdb.ts` for detail/credits/videos/external IDs/IMDb mapping/person lookup/person credits/trailer paths
+- [x] Added OMDb/FMDb TTL caches in `backend/src/clients/fmdb.ts` for search and detail requests
+- [x] Persisted frontend `highlightDetailsCache` to sessionStorage in `frontend/src/pages/ResultsPage.tsx`
+- [x] Simplified details-panel media actions to a single wrapping button row without a separate heading label
+- [x] Applied 8/16/24 vertical spacing rhythm updates across details panel sections
+- [x] Unified details-panel micro-label typography and extracted reusable label class constants to prevent style drift
+- [x] Verified backend and frontend builds pass after caching + panel rhythm updates
+
 ---
 
 ## Open Follow-Ups

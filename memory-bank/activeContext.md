@@ -83,6 +83,14 @@
 - Restored restrained hover styling after debugging (kept subtle style language consistent with the rest of the app).
 - Fixed highlight poster-tile hover-lift regression by moving shadow/lift to a non-clipping wrapper and tuning hover lift to avoid side clipping while preserving visible elevation.
 
+### Caching and Panel Rhythm Follow-ups (May 24, 2026)
+- Added backend in-memory TTL caching for Streaming Availability lookups (including short-lived negative cache entries for rate-limit/error statuses).
+- Added backend in-memory TTL caching across TMDB hot paths (details, credits, videos, external IDs, IMDb mapping, person lookup/credits, trailer-by-IMDb).
+- Added backend in-memory TTL caching for OMDb/FMDb search and detail endpoints to reduce repeated fan-out fetches.
+- Persisted `highlightDetailsCache` in frontend sessionStorage to avoid repeated highlight detail fetches on reload within the same session.
+- Reworked details-panel media actions into a single wrapping row (trailer + providers) without a separate heading to reduce visual clutter.
+- Standardized details-panel vertical rhythm to 8/16/24 spacing decisions and normalized uppercase micro-label typography via shared class constants.
+
 ---
 
 ## Current Architecture Snapshot
@@ -126,6 +134,8 @@
 - [x] Divider now renders in the inter-panel gap center (`.editorial-main::after`) with symmetric spacing on both columns.
 - [x] Recommendation and details-panel navigation actions now use inline action styling without padded pill geometry.
 - [x] Highlight tile hover lift restored with wrapper-based elevation and clipping-safe hover tuning.
+- [x] Backend build passes after streaming/TMDB/OMDb cache-layer additions.
+- [x] Frontend build passes after details-panel action-row and spacing/typography rhythm refinements.
 
 ---
 

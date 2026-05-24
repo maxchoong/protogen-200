@@ -5,6 +5,7 @@ import { validateConfig } from './config.js'
 import { PreferenceParser } from './engine/preferenceParser.js'
 import { recommendationEngine } from './engine/recommendationEngine.js'
 import { tmdbClient } from './clients/tmdb.js'
+import { streamingClient } from './clients/streaming.js'
 
 export const app: Express = express()
 const port = process.env.PORT || 3000
@@ -98,6 +99,11 @@ interface ApiResponse {
     usedTmdb: boolean
     usedOmdb: boolean
     omdbFallbackUsed: boolean
+    streaming?: {
+      enabled: boolean
+      country: string
+      status: 'ok' | 'rate_limited' | 'error' | 'disabled' | 'not_requested'
+    }
   }
   turnOperation?: {
     continuity: 'continue' | 'soft_pivot' | 'hard_pivot'
@@ -813,6 +819,36 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
   } catch (error) {
     console.error('Error in /recommendations:', error)
     res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    })
+  }
+})
+
+app.get('/availability/:imdbId', async (req: Request, res: Response) => {
+  try {
+    const rawImdbId = String(req.params.imdbId || '').trim()
+    if (!/^tt\d{5,}$/.test(rawImdbId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid IMDb ID.'
+      })
+    }
+
+    const rawRegion = String(req.query.region || 'US').trim().toLowerCase()
+    const country = rawRegion === 'uk' ? 'gb' : rawRegion
+
+    const availability = await streamingClient.getAvailability(rawImdbId, country)
+    const diagnostics = streamingClient.getLastBatchDiagnostics()
+
+    return res.json({
+      success: true,
+      availability,
+      diagnostics
+    })
+  } catch (error) {
+    console.error('Error in /availability/:imdbId:', error)
+    return res.status(500).json({
       success: false,
       message: 'Internal server error'
     })

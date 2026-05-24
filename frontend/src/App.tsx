@@ -33,6 +33,11 @@ interface RecommendationResponse {
     usedTmdb: boolean
     usedOmdb: boolean
     omdbFallbackUsed: boolean
+    streaming?: {
+      enabled: boolean
+      country: string
+      status: 'ok' | 'rate_limited' | 'error' | 'disabled' | 'not_requested'
+    }
   }
   requiresClarification?: {
     questions: Array<{
@@ -61,12 +66,21 @@ function App() {
   const conversation = useConversation()
   const [showResetConfirm, setShowResetConfirm] = useState(false)
 
-  const inferRegionFromLocale = (): string => {
-    const locale = navigator.language || 'en-US'
-    const parts = locale.split('-')
-    if (parts.length > 1 && parts[1].length === 2) {
-      return parts[1].toUpperCase()
+  const inferStreamingRegion = (): string => {
+    const configuredRegion = import.meta.env.VITE_STREAMING_REGION?.trim().toUpperCase()
+    if (configuredRegion) {
+      return configuredRegion === 'UK' ? 'GB' : configuredRegion
     }
+
+    const locale = navigator.language || 'en-US'
+    const normalizedLocale = locale.replace('_', '-')
+    const localeParts = normalizedLocale.split('-')
+    const localeRegion = localeParts.length > 1 ? localeParts[localeParts.length - 1] : ''
+    if (localeRegion.length === 2) {
+      const region = localeRegion.toUpperCase()
+      return region === 'UK' ? 'GB' : region
+    }
+
     return 'US'
   }
 
@@ -82,7 +96,7 @@ function App() {
   ): Promise<RecommendationResponse> => {
     const payload: RecommendationRequest = {
       description,
-      region: inferRegionFromLocale(),
+      region: inferStreamingRegion(),
       clarificationContext
     }
 

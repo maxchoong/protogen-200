@@ -1,5 +1,5 @@
-import { Fragment, useState, useEffect, useRef } from 'react'
-import { buttonClass, inlineActionClass, inlineLinkClass } from '../buttonStyles'
+import { useState, useEffect, useRef } from 'react'
+import { buttonClass, inlineActionClass } from '../buttonStyles'
 
 interface Recommendation {
   id: string
@@ -46,6 +46,11 @@ interface ResultsPageProps {
     usedTmdb: boolean
     usedOmdb: boolean
     omdbFallbackUsed: boolean
+    streaming?: {
+      enabled: boolean
+      country: string
+      status: 'ok' | 'rate_limited' | 'error' | 'disabled' | 'not_requested'
+    }
   }
   onPreviousPass: () => void
   onNextPass: () => void
@@ -69,6 +74,9 @@ interface HighlightTile {
 }
 
 const HIGHLIGHTS_STORAGE_KEY = 'lumera:session-highlights:v1'
+const HIGHLIGHT_DETAILS_CACHE_STORAGE_KEY = 'lumera:highlight-details-cache:v1'
+const AVAILABILITY_CACHE_STORAGE_KEY = 'lumera:availability-cache:v1'
+const AVAILABILITY_DIAGNOSTICS_STORAGE_KEY = 'lumera:availability-diagnostics:v1'
 const HIGHLIGHT_COUNT = 6
 const MIN_HIGHLIGHT_RATING = 6.5
 const MIN_HIGHLIGHT_VOTE_COUNT = 200
@@ -128,12 +136,75 @@ const formatLanguageName = (languageCode?: string): string | null => {
   return normalized.toUpperCase()
 }
 
+const regionDisplayNames =
+  typeof Intl !== 'undefined' && typeof Intl.DisplayNames !== 'undefined'
+    ? new Intl.DisplayNames(['en'], { type: 'region' })
+    : null
+
+const formatRegionName = (regionCode?: string): string => {
+  if (!regionCode) {
+    return 'your location'
+  }
+
+  const normalized = regionCode.toUpperCase()
+  const fullName = regionDisplayNames?.of(normalized)
+  if (fullName && fullName.toLowerCase() !== normalized.toLowerCase()) {
+    return fullName
+  }
+
+  return normalized
+}
+
+const streamingTypePriority: Record<string, number> = {
+  subscription: 0,
+  free: 1,
+  addon: 2,
+  rent: 3,
+  buy: 4
+}
+
+const normalizeWatchOptions = (
+  availability?: Recommendation['availability']
+): NonNullable<Recommendation['availability']> => {
+  if (!availability || availability.length === 0) {
+    return []
+  }
+
+  const sorted = [...availability].sort((a, b) => {
+    const typeDelta = (streamingTypePriority[a.type] ?? 99) - (streamingTypePriority[b.type] ?? 99)
+    if (typeDelta !== 0) {
+      return typeDelta
+    }
+
+    if (!!a.link !== !!b.link) {
+      return a.link ? -1 : 1
+    }
+
+    return a.platform.localeCompare(b.platform)
+  })
+
+  const dedupedByPlatform = new Map<string, NonNullable<Recommendation['availability']>[number]>()
+  for (const option of sorted) {
+    const key = option.platform.trim().toLowerCase()
+    if (!dedupedByPlatform.has(key)) {
+      dedupedByPlatform.set(key, option)
+    }
+  }
+
+  return Array.from(dedupedByPlatform.values()).slice(0, 6)
+}
+
 const clampLinesStyle = (lines: number) => ({
   display: '-webkit-box',
   WebkitLineClamp: lines,
   WebkitBoxOrient: 'vertical' as const,
   overflow: 'hidden'
 })
+
+const detailsLabelClass = 'text-[11px] uppercase tracking-[0.11em] text-text-muted'
+const detailsMetaLabelClass = 'text-[11px] uppercase tracking-[0.11em] text-text-muted/90'
+const detailsSubLabelClass = 'text-[10px] uppercase tracking-[0.11em] text-text-muted/90'
+const detailsCounterLabelClass = 'text-[10px] uppercase tracking-[0.11em] text-text-muted opacity-75'
 
 const getMetaLine = (rec: Recommendation): string => {
   const parts: string[] = []
@@ -200,6 +271,22 @@ const getBackendUrl = (): string => {
   )
 }
 
+const inferRegionFromLocale = (): string => {
+  const locale = navigator.language || 'en-US'
+  const normalizedLocale = locale.replace('_', '-')
+  const localeParts = normalizedLocale.split('-')
+  const localeRegion = localeParts.length > 1 ? localeParts[localeParts.length - 1] : ''
+
+  if (localeRegion.length === 2) {
+    const region = localeRegion.toUpperCase()
+    return region === 'UK' ? 'GB' : region
+  }
+
+  return 'US'
+}
+
+const isImdbId = (id: string): boolean => /^tt\d{5,}$/.test(id)
+
 export default function ResultsPage({
   results,
   query,
@@ -231,6 +318,11 @@ export default function ResultsPage({
   const [trailerLoading, setTrailerLoading] = useState(false)
   const [detailsPanelEntered, setDetailsPanelEntered] = useState(false)
   const [infoPopoverOpen, setInfoPopoverOpen] = useState(false)
+  const [availabilityByTitleId, setAvailabilityByTitleId] = useState<Record<string, NonNullable<Recommendation['availability']>>>({})
+  const [availabilityDiagnosticsByTitleId, setAvailabilityDiagnosticsByTitleId] = useState<
+    Record<string, { enabled: boolean; country: string; status: 'ok' | 'rate_limited' | 'error' | 'disabled' | 'not_requested' }>
+  >({})
+  const [availabilityLoadingByTitleId, setAvailabilityLoadingByTitleId] = useState<Record<string, boolean>>({})
   const closeDetailsTimerRef = useRef<number | null>(null)
   const headerControlsRef = useRef<HTMLDivElement | null>(null)
 
@@ -276,6 +368,21 @@ export default function ResultsPage({
     !!turnOperation
 
   const dataSourceSummary = getDataSourceSummary()
+  const activeAvailabilityDiagnostics = activeDetailsRec
+    ? availabilityDiagnosticsByTitleId[activeDetailsRec.id] || retrievalDiagnostics?.streaming
+    : undefined
+  const streamingRegionName = formatRegionName(activeAvailabilityDiagnostics?.country)
+  const streamingStatus = activeAvailabilityDiagnostics?.status
+  const watchOptions = normalizeWatchOptions(
+    activeDetailsRec ? (availabilityByTitleId[activeDetailsRec.id] || activeDetailsRec.availability) : undefined
+  )
+  const isAvailabilityLoading = !!(activeDetailsRec && availabilityLoadingByTitleId[activeDetailsRec.id])
+  const streamingEmptyMessage =
+    isAvailabilityLoading
+      ? `Checking streaming options in ${streamingRegionName}...`
+      : streamingStatus === 'rate_limited'
+      ? `Streaming lookup is currently rate limited for ${streamingRegionName}.`
+      : `No streaming options in ${streamingRegionName}.`
 
   const getTurnSummary = (): string => {
     if (!turnOperation) {
@@ -460,6 +567,59 @@ export default function ResultsPage({
   }, [roundMenuOpen])
 
   useEffect(() => {
+    const storedHighlightDetails = sessionStorage.getItem(HIGHLIGHT_DETAILS_CACHE_STORAGE_KEY)
+    if (storedHighlightDetails) {
+      try {
+        const parsed = JSON.parse(storedHighlightDetails) as Record<string, Recommendation>
+        if (parsed && typeof parsed === 'object') {
+          setHighlightDetailsCache(parsed)
+        }
+      } catch {
+        // Ignore malformed cache.
+      }
+    }
+
+    const storedAvailability = sessionStorage.getItem(AVAILABILITY_CACHE_STORAGE_KEY)
+    if (storedAvailability) {
+      try {
+        const parsed = JSON.parse(storedAvailability) as Record<string, NonNullable<Recommendation['availability']>>
+        if (parsed && typeof parsed === 'object') {
+          setAvailabilityByTitleId(parsed)
+        }
+      } catch {
+        // Ignore malformed cache.
+      }
+    }
+
+    const storedDiagnostics = sessionStorage.getItem(AVAILABILITY_DIAGNOSTICS_STORAGE_KEY)
+    if (storedDiagnostics) {
+      try {
+        const parsed = JSON.parse(storedDiagnostics) as Record<
+          string,
+          { enabled: boolean; country: string; status: 'ok' | 'rate_limited' | 'error' | 'disabled' | 'not_requested' }
+        >
+        if (parsed && typeof parsed === 'object') {
+          setAvailabilityDiagnosticsByTitleId(parsed)
+        }
+      } catch {
+        // Ignore malformed cache.
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    sessionStorage.setItem(HIGHLIGHT_DETAILS_CACHE_STORAGE_KEY, JSON.stringify(highlightDetailsCache))
+  }, [highlightDetailsCache])
+
+  useEffect(() => {
+    sessionStorage.setItem(AVAILABILITY_CACHE_STORAGE_KEY, JSON.stringify(availabilityByTitleId))
+  }, [availabilityByTitleId])
+
+  useEffect(() => {
+    sessionStorage.setItem(AVAILABILITY_DIAGNOSTICS_STORAGE_KEY, JSON.stringify(availabilityDiagnosticsByTitleId))
+  }, [availabilityDiagnosticsByTitleId])
+
+  useEffect(() => {
     setInfoPopoverOpen(false)
   }, [passIndex, query])
 
@@ -598,6 +758,94 @@ export default function ResultsPage({
       cancelled = true
     }
   }, [highlightDetails, highlightDetailsCache])
+
+  useEffect(() => {
+    if (!activeDetailsRec || !isImdbId(activeDetailsRec.id)) {
+      return
+    }
+
+    if (availabilityByTitleId[activeDetailsRec.id]) {
+      return
+    }
+
+    if (availabilityLoadingByTitleId[activeDetailsRec.id]) {
+      return
+    }
+
+    let cancelled = false
+
+    const loadAvailability = async () => {
+      setAvailabilityLoadingByTitleId(prev => ({ ...prev, [activeDetailsRec.id]: true }))
+
+      try {
+        const backendUrl = getBackendUrl()
+        const region = retrievalDiagnostics?.streaming?.country?.toUpperCase() || inferRegionFromLocale()
+        const response = await fetch(
+          `${backendUrl}/availability/${activeDetailsRec.id}?region=${encodeURIComponent(region)}`
+        )
+
+        if (!response.ok) {
+          throw new Error('Availability request failed')
+        }
+
+        const data = await response.json() as {
+          success: boolean
+          availability?: Recommendation['availability']
+          diagnostics?: { enabled: boolean; country: string; status: 'ok' | 'rate_limited' | 'error' | 'disabled' | 'not_requested' }
+        }
+
+        if (cancelled) {
+          return
+        }
+
+        setAvailabilityByTitleId(prev => ({
+          ...prev,
+          [activeDetailsRec.id]: (data.availability || []) as NonNullable<Recommendation['availability']>
+        }))
+
+        if (data.diagnostics) {
+          setAvailabilityDiagnosticsByTitleId(prev => ({
+            ...prev,
+            [activeDetailsRec.id]: data.diagnostics!
+          }))
+        }
+      } catch {
+        if (cancelled) {
+          return
+        }
+
+        setAvailabilityByTitleId(prev => ({
+          ...prev,
+          [activeDetailsRec.id]: []
+        }))
+
+        const fallbackCountry = retrievalDiagnostics?.streaming?.country || inferRegionFromLocale().toLowerCase()
+        setAvailabilityDiagnosticsByTitleId(prev => ({
+          ...prev,
+          [activeDetailsRec.id]: {
+            enabled: true,
+            country: fallbackCountry,
+            status: 'error'
+          }
+        }))
+      } finally {
+        if (!cancelled) {
+          setAvailabilityLoadingByTitleId(prev => ({ ...prev, [activeDetailsRec.id]: false }))
+        }
+      }
+    }
+
+    void loadAvailability()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    activeDetailsRec,
+    availabilityByTitleId,
+    availabilityLoadingByTitleId,
+    retrievalDiagnostics?.streaming?.country
+  ])
 
   useEffect(() => {
     if (!trailerModal.isOpen || !trailerModal.embedUrl || trailerLoadError || !trailerLoading) {
@@ -1020,7 +1268,7 @@ export default function ResultsPage({
                   <span>Previous</span>
                 </button>
 
-                <p className="text-[10px] uppercase tracking-[0.16em] text-text-muted opacity-75">
+                <p className={detailsCounterLabelClass}>
                   {activeDetailsIndex !== null ? `${activeDetailsIndex + 1} of ${activeDetailsCount}` : ''}
                 </p>
 
@@ -1046,14 +1294,14 @@ export default function ResultsPage({
               </button>
             </div>
 
-            <header className="mb-7">
+            <header className="mb-6">
               <h2 id="details-title" className="font-serif text-[2.2rem] font-medium leading-[1.06] tracking-[-0.024em] text-text sm:text-[2.5rem]">
                 {activeDetailsRec.title}
               </h2>
-              <p className="mt-2 text-[11px] uppercase tracking-[0.11em] text-text-muted/90">{getMetaLine(activeDetailsRec)}</p>
+              <p className={`mt-2 ${detailsMetaLabelClass}`}>{getMetaLine(activeDetailsRec)}</p>
             </header>
 
-            <section className="mb-9 grid gap-7 border-b border-border/30 pb-9 md:grid-cols-[168px_1fr]">
+            <section className="mb-6 grid gap-6 border-b border-border/30 pb-6 md:grid-cols-[168px_1fr]">
               {activeDetailsRec.posterUrl ? (
                 <img
                   src={activeDetailsRec.posterUrl}
@@ -1073,7 +1321,7 @@ export default function ResultsPage({
                 {activeDetailsRec.whyThis && (
                   <div className="mb-6">
                     <div className="mb-2 flex items-center gap-3">
-                      <p className="text-[11px] uppercase tracking-[0.11em] text-text-muted">
+                      <p className={detailsLabelClass}>
                         Lumera note
                       </p>
                       <span
@@ -1088,7 +1336,7 @@ export default function ResultsPage({
                   </div>
                 )}
 
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-text-muted">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
                   {activeDetailsRec.trailerUrl && (
                     <button
                       onClick={() => openTrailer(activeDetailsRec.trailerUrl!, activeDetailsRec.title)}
@@ -1099,57 +1347,51 @@ export default function ResultsPage({
                     </button>
                   )}
 
-                  <span className="hidden h-3 w-px bg-border/45 sm:inline-block" aria-hidden="true" />
-
-                  <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                    <span className="text-[11px] uppercase tracking-[0.11em] text-text-muted">Streaming:</span>
-                    {activeDetailsRec.availability && activeDetailsRec.availability.length > 0 ? (
-                      <>
-                        {activeDetailsRec.availability.slice(0, 3).map((avail, idx) => (
-                          <Fragment key={`${avail.platform}-${avail.type}-${idx}`}>
-                            {avail.link ? (
-                              <a
-                                href={avail.link}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className={inlineLinkClass()}
-                              >
-                                {avail.platform}
-                              </a>
-                            ) : (
-                              <span className="text-text">{avail.platform}</span>
-                            )}
-                            {idx < Math.min(activeDetailsRec.availability?.length ?? 0, 3) - 1 && (
-                              <span aria-hidden="true">,</span>
-                            )}
-                          </Fragment>
-                        ))}
-                      </>
-                    ) : (
-                      <span>Not currently listed</span>
-                    )}
-                  </div>
+                  {watchOptions.length > 0 ? (
+                    watchOptions.map((option) => (
+                      option.link ? (
+                        <a
+                          key={`${option.platform}-${option.type}`}
+                          href={option.link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={buttonClass({ variant: 'chip', size: 'xs', className: 'no-underline' })}
+                        >
+                          {option.platform}
+                        </a>
+                      ) : (
+                        <span
+                          key={`${option.platform}-${option.type}`}
+                          className={buttonClass({ variant: 'chip', size: 'xs', className: 'pointer-events-none' })}
+                        >
+                          {option.platform}
+                        </span>
+                      )
+                    ))
+                  ) : (
+                    <span>{streamingEmptyMessage}</span>
+                  )}
                 </div>
               </div>
             </section>
 
             {(activeDetailsRec.synopsis || activeDetailsRec.mainCast?.length || activeDetailsRec.directors?.length || activeDetailsRec.genres?.length || activeDetailsRec.originalLanguage) && (
-              <section className="mb-2 pb-9 md:grid md:grid-cols-[minmax(0,1fr)_220px] md:gap-10">
+              <section className="pb-6 md:grid md:grid-cols-[minmax(0,1fr)_220px] md:gap-10">
                 <div>
                   {activeDetailsRec.synopsis && (
                     <>
-                      <p className="mb-3 text-[11px] uppercase tracking-[0.11em] text-text-muted">Synopsis</p>
+                      <p className={`mb-2 ${detailsLabelClass}`}>Synopsis</p>
                       <p className="max-w-[62ch] text-[15px] leading-[1.9] text-text/92">{activeDetailsRec.synopsis}</p>
                     </>
                   )}
                 </div>
 
                 {(activeDetailsRec.mainCast?.length || activeDetailsRec.directors?.length || activeDetailsRec.genres?.length || activeDetailsRec.originalLanguage) && (
-                  <aside className="mt-7 border-t border-border/25 pt-5 md:mt-0 md:border-t-0 md:pt-0">
-                    <div className="grid gap-y-5">
+                  <aside className="mt-6 border-t border-border/25 pt-6 md:mt-0 md:border-t-0 md:pt-0">
+                    <div className="grid gap-y-4">
                       {activeDetailsRec.mainCast && activeDetailsRec.mainCast.length > 0 && (
                         <div>
-                          <p className="mb-1 text-[10px] uppercase tracking-[0.12em] text-text-muted/90">Cast</p>
+                          <p className={`mb-2 ${detailsSubLabelClass}`}>Cast</p>
                           <ul className="space-y-0.5 text-[12px] leading-[1.75] text-text/80">
                             {activeDetailsRec.mainCast.slice(0, 4).map((name) => (
                               <li key={name}>{name}</li>
@@ -1159,7 +1401,7 @@ export default function ResultsPage({
                       )}
                       {activeDetailsRec.directors && activeDetailsRec.directors.length > 0 && (
                         <div>
-                          <p className="mb-1 text-[10px] uppercase tracking-[0.12em] text-text-muted/90">Director</p>
+                          <p className={`mb-2 ${detailsSubLabelClass}`}>Director</p>
                           <ul className="space-y-0.5 text-[12px] leading-[1.75] text-text/80">
                             {activeDetailsRec.directors.slice(0, 3).map((name) => (
                               <li key={name}>{name}</li>
@@ -1169,13 +1411,13 @@ export default function ResultsPage({
                       )}
                       {activeDetailsRec.genres && activeDetailsRec.genres.length > 0 && (
                         <div>
-                          <p className="mb-1 text-[10px] uppercase tracking-[0.12em] text-text-muted/90">Genres</p>
+                          <p className={`mb-2 ${detailsSubLabelClass}`}>Genres</p>
                           <p className="text-[12px] leading-[1.75] text-text/80">{activeDetailsRec.genres.join(', ')}</p>
                         </div>
                       )}
                       {formatLanguageName(activeDetailsRec.originalLanguage) && (
                         <div>
-                          <p className="mb-1 text-[10px] uppercase tracking-[0.12em] text-text-muted/90">Language</p>
+                          <p className={`mb-2 ${detailsSubLabelClass}`}>Language</p>
                           <p className="text-[12px] leading-[1.75] text-text/80">{formatLanguageName(activeDetailsRec.originalLanguage)}</p>
                         </div>
                       )}
