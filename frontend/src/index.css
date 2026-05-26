@@ -106,6 +106,9 @@
   --shadow-card: rgba(4, 4, 7, 0.11) 0px 1px 6px 0px;
   --shadow-soft: rgba(4, 4, 7, 0.16) 0px 4px 12px 0px;
 
+  /* Skeleton loading placeholder — white tint works reliably over all dark surfaces */
+  --color-skeleton: rgba(255, 255, 255, 0.12);
+
   --editorial-rhythm-1: 8px;
   --editorial-rhythm-2: 16px;
   --editorial-rhythm-3: 24px;
@@ -157,6 +160,9 @@
   --color-alert-bg: #fff1f0;
   --color-alert-border: #f2c2be;
   --color-alert-text: #7f2420;
+
+  /* Skeleton loading placeholder — dark tint works reliably over all light surfaces */
+  --color-skeleton: rgba(0, 0, 0, 0.09);
 }
 
 html,

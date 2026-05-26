@@ -2,6 +2,13 @@
   min-height: 100vh;
 }
 
+/* Skeleton loading blocks — uses a theme-aware tint that reliably renders
+   in both dark and light themes regardless of Tailwind's CSS-variable opacity
+   modifier limitations. */
+.skeleton-block {
+  background-color: var(--color-skeleton);
+}
+
 .app-topbar {
   position: sticky;
   top: 0;

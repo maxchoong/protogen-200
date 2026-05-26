@@ -1117,7 +1117,7 @@ export default function ResultsPage({
                       <div className="relative overflow-hidden rounded-lg">
                         {!highlightPosterReady[item.id] && (
                           <div
-                            className="absolute inset-0 rounded-lg animate-pulse bg-surface-2/70"
+                            className="absolute inset-0 rounded-lg animate-pulse skeleton-block"
                             aria-hidden="true"
                           />
                         )}
@@ -1157,9 +1157,9 @@ export default function ResultsPage({
               >
                 {Array.from({ length: HIGHLIGHT_COUNT }).map((_, idx) => (
                   <div key={idx} className="space-y-3">
-                    <div className="aspect-[2/3] w-full animate-pulse rounded-lg bg-surface-2/70" />
-                    <div className="h-3 w-3/4 animate-pulse rounded bg-surface-2/70" />
-                    <div className="h-2 w-1/2 animate-pulse rounded bg-surface-2/60" />
+                    <div className="aspect-[2/3] w-full animate-pulse rounded-lg skeleton-block" />
+                    <div className="h-3 w-3/4 animate-pulse rounded skeleton-block" />
+                    <div className="h-2 w-1/2 animate-pulse rounded skeleton-block" style={{ opacity: 0.75 }} />
                   </div>
                 ))}
               </div>
