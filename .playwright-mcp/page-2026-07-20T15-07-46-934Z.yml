@@ -1,0 +1,158 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - heading "Lumera" [level=1] [ref=e7]
+        - paragraph [ref=e8]: One conversation, evolving curation
+      - generic [ref=e9]:
+        - button "Start a new conversation" [ref=e10] [cursor=pointer]: New chat
+        - button "Switch to light mode" [ref=e11] [cursor=pointer]
+  - main [ref=e18]:
+    - generic [ref=e20]:
+      - generic [ref=e22]:
+        - paragraph [ref=e105]: Something funny with Ryan Gosling
+        - generic [ref=e113]:
+          - paragraph [ref=e114]: Here are 7 recommendations you might like.
+          - generic [ref=e115]:
+            - generic [ref=e116]: "Intent: talent"
+            - generic [ref=e117]: Confidence 90%
+      - generic [ref=e32]:
+        - generic [ref=e33]:
+          - textbox "Write your viewing brief..." [ref=e34]
+          - button "Submit" [disabled] [ref=e118]
+        - paragraph [ref=e36]: Press Enter to submit, Shift+Enter for a new line.
+    - generic [ref=e38]:
+      - generic [ref=e39]:
+        - generic [ref=e120]:
+          - heading "Recommendations" [level=2] [ref=e121]
+          - generic [ref=e122]:
+            - button "Why these picks" [ref=e123] [cursor=pointer]
+            - button "Round selection menu" [ref=e127] [cursor=pointer]
+        - list "Movie and TV show recommendations" [ref=e132]:
+          - button "Open more details for The Fall Guy" [ref=e133] [cursor=pointer]:
+            - generic [ref=e135]:
+              - img "The Fall Guy poster" [ref=e136]
+              - generic [ref=e137]:
+                - generic [ref=e138]:
+                  - heading "The Fall Guy" [level=3] [ref=e139]
+                  - paragraph [ref=e140]: 2024 • Film • 2h 7m • 7.0/10 (3,872 votes)
+                - paragraph [ref=e141]: Fresh off an almost career-ending accident, stuntman Colt Seavers has to track down a missing movie star, solve a conspiracy and try to win back the love of his life while still doing his day job.
+                - generic [ref=e142]:
+                  - button "Open more details for The Fall Guy" [ref=e143]: More details
+                  - button "Watch trailer for The Fall Guy" [ref=e144]: View trailer
+          - button "Open more details for La La Land" [ref=e145] [cursor=pointer]:
+            - generic [ref=e147]:
+              - img "La La Land poster" [ref=e148]
+              - generic [ref=e149]:
+                - generic [ref=e150]:
+                  - heading "La La Land" [level=3] [ref=e151]
+                  - paragraph [ref=e152]: 2016 • Film • 2h 9m • 7.9/10 (18,228 votes)
+                - paragraph [ref=e153]: Mia, an aspiring actress, serves lattes to movie stars in between auditions and Sebastian, a jazz musician, scrapes by playing cocktail party gigs in dingy bars, but as success mounts they are faced with decisions that begin to fray the fragile fabric of their love affair, and the dreams they worked so hard to maintain in each other threaten to rip them apart.
+                - generic [ref=e154]:
+                  - button "Open more details for La La Land" [ref=e155]: More details
+                  - button "Watch trailer for La La Land" [ref=e156]: View trailer
+          - button "Open more details for Barbie" [ref=e157] [cursor=pointer]:
+            - generic [ref=e159]:
+              - img "Barbie poster" [ref=e160]
+              - generic [ref=e161]:
+                - generic [ref=e162]:
+                  - heading "Barbie" [level=3] [ref=e163]
+                  - paragraph [ref=e164]: 2023 • Film • 1h 54m • 6.9/10 (11,253 votes)
+                - paragraph [ref=e165]: Barbie and Ken are having the time of their lives in the colorful and seemingly perfect world of Barbie Land. However, when they get a chance to go to the real world, they soon discover the joys and perils of living among humans.
+                - generic [ref=e166]:
+                  - button "Open more details for Barbie" [ref=e167]: More details
+                  - button "Watch trailer for Barbie" [ref=e168]: View trailer
+          - button "Open more details for The Nice Guys" [ref=e169] [cursor=pointer]:
+            - generic [ref=e171]:
+              - img "The Nice Guys poster" [ref=e172]
+              - generic [ref=e173]:
+                - generic [ref=e174]:
+                  - heading "The Nice Guys" [level=3] [ref=e175]
+                  - paragraph [ref=e176]: 2016 • Film • 1h 56m • 7.1/10 (8,747 votes)
+                - paragraph [ref=e177]: A private eye investigates the apparent suicide of a fading porn star in 1970s Los Angeles and uncovers a conspiracy.
+                - generic [ref=e178]:
+                  - button "Open more details for The Nice Guys" [ref=e179]: More details
+                  - button "Watch trailer for The Nice Guys" [ref=e180]: View trailer
+          - button "Open more details for The Big Short" [ref=e181] [cursor=pointer]:
+            - generic [ref=e183]:
+              - img "The Big Short poster" [ref=e184]
+              - generic [ref=e185]:
+                - generic [ref=e186]:
+                  - heading "The Big Short" [level=3] [ref=e187]
+                  - paragraph [ref=e188]: 2015 • Film • 2h 11m • 7.4/10 (9,918 votes)
+                - paragraph [ref=e189]: The men who made millions from a global economic meltdown.
+                - generic [ref=e190]:
+                  - button "Open more details for The Big Short" [ref=e191]: More details
+                  - button "Watch trailer for The Big Short" [ref=e192]: View trailer
+          - button "Open more details for Crazy, Stupid, Love." [ref=e193] [cursor=pointer]:
+            - generic [ref=e195]:
+              - img "Crazy, Stupid, Love. poster" [ref=e196]
+              - generic [ref=e197]:
+                - generic [ref=e198]:
+                  - heading "Crazy, Stupid, Love." [level=3] [ref=e199]
+                  - paragraph [ref=e200]: 2011 • Film • 1h 58m • 7.3/10 (9,365 votes)
+                - paragraph [ref=e201]: Cal Weaver is living the American dream. He has a good job, a beautiful house, great children and a beautiful wife, named Emily. Cal's seemingly perfect life unravels, however, when he learns that Emily has been unfaithful and wants a divorce. Over 40 and suddenly single, Cal is adrift in the fickle world of dating. Enter, Jacob Palmer, a self-styled player who takes Cal under his wing and teaches him how to be a hit with the ladies.
+                - generic [ref=e202]:
+                  - button "Open more details for Crazy, Stupid, Love." [ref=e203]: More details
+                  - button "Watch trailer for Crazy, Stupid, Love." [ref=e204]: View trailer
+          - button "Open more details for Lars and the Real Girl" [ref=e205] [cursor=pointer]:
+            - generic [ref=e207]:
+              - img "Lars and the Real Girl poster" [ref=e208]
+              - generic [ref=e209]:
+                - generic [ref=e210]:
+                  - heading "Lars and the Real Girl" [level=3] [ref=e211]
+                  - paragraph [ref=e212]: 2007 • Film • 1h 47m • 7.2/10 (2,098 votes)
+                - paragraph [ref=e213]: Extremely shy Lars finds it impossible to make friends or socialize. His brother and sister-in-law worry about him, so when he announces that he has a girlfriend he met on the Internet, they are overjoyed. But Lars' new lady is a life-size plastic woman. On the advice of a doctor, his family and the rest of the community go along with his delusion.
+                - generic [ref=e214]:
+                  - button "Open more details for Lars and the Real Girl" [ref=e215]: More details
+                  - button "Watch trailer for Lars and the Real Girl" [ref=e216]: View trailer
+      - dialog [ref=e272]:
+        - complementary [ref=e218]:
+          - generic [ref=e219]:
+            - generic [ref=e220]:
+              - button "Previous title" [ref=e221] [cursor=pointer]:
+                - generic [ref=e224]: Previous
+              - paragraph [ref=e225]: 2 of 7
+              - button "Next title" [active] [ref=e226] [cursor=pointer]:
+                - generic [ref=e227]: Next
+            - button "Close details panel" [ref=e230] [cursor=pointer]: ×
+          - generic [ref=e231]:
+            - heading "La La Land" [level=2] [ref=e273]
+            - paragraph [ref=e233]: 2016 • Film • 2h 9m • 7.9/10 (18,228 votes)
+          - generic [ref=e234]:
+            - img "La La Land poster" [ref=e274]
+            - generic [ref=e236]:
+              - generic [ref=e237]:
+                - paragraph [ref=e239]: Lumera note
+                - paragraph [ref=e241]: "\"La La Land\" features Gosling in a charming and whimsical story about aspiring artists in Los Angeles, where the comedic moments shine alongside its romantic elements."
+              - generic [ref=e242]:
+                - button "Watch trailer for La La Land" [ref=e275] [cursor=pointer]:
+                  - generic [ref=e244]: Watch trailer
+                - link "Netflix" [ref=e276] [cursor=pointer]:
+                  - /url: https://www.netflix.com/title/80095365
+                - link "Prime Video" [ref=e277] [cursor=pointer]:
+                  - /url: https://www.amazon.co.uk/gp/video/detail/0OSDA6M1SRH8ZN9ZJ1PPP1K1AP/ref=atv_dp
+          - generic [ref=e248]:
+            - generic [ref=e249]:
+              - paragraph [ref=e250]: Synopsis
+              - paragraph [ref=e251]: Mia, an aspiring actress, serves lattes to movie stars in between auditions and Sebastian, a jazz musician, scrapes by playing cocktail party gigs in dingy bars, but as success mounts they are faced with decisions that begin to fray the fragile fabric of their love affair, and the dreams they worked so hard to maintain in each other threaten to rip them apart.
+            - complementary [ref=e252]:
+              - generic [ref=e253]:
+                - generic [ref=e254]:
+                  - paragraph [ref=e255]: Cast
+                  - list [ref=e256]:
+                    - listitem [ref=e257]: Ryan Gosling
+                    - listitem [ref=e278]: Emma Stone
+                    - listitem [ref=e279]: John Legend
+                    - listitem [ref=e280]: Rosemarie DeWitt
+                - generic [ref=e261]:
+                  - paragraph [ref=e262]: Director
+                  - list [ref=e263]:
+                    - listitem [ref=e281]: Paula Case
+                    - listitem [ref=e282]: Peter Kohn
+                - generic [ref=e266]:
+                  - paragraph [ref=e267]: Genres
+                  - paragraph [ref=e268]: Comedy, Drama, Romance
+                - generic [ref=e269]:
+                  - paragraph [ref=e270]: Language
+                  - paragraph [ref=e271]: English

@@ -1,0 +1,46 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - heading "Lumera" [level=1] [ref=e7]
+        - paragraph [ref=e8]: One conversation, evolving curation
+      - generic [ref=e9]:
+        - button "Start a new conversation" [ref=e10] [cursor=pointer]: New chat
+        - button "Switch to light mode" [ref=e11] [cursor=pointer]
+  - main [ref=e18]:
+    - generic [ref=e20]:
+      - generic [ref=e22]:
+        - paragraph [ref=e105]: Something funny with Ryan Gosling
+        - status [ref=e107]:
+          - paragraph [ref=e108]: Refining your selections.
+      - generic [ref=e32]:
+        - generic [ref=e33]:
+          - textbox "Write your viewing brief..." [disabled] [ref=e34]
+          - button "Curating..." [disabled] [ref=e111]
+        - paragraph [ref=e36]: Press Enter to submit, Shift+Enter for a new line.
+    - status [ref=e40]:
+      - list "Session highlight titles" [ref=e66]:
+        - button "Open highlight details for Obsession" [ref=e67] [cursor=pointer]:
+          - img "Obsession poster" [ref=e70]
+          - paragraph [ref=e71]: Obsession
+          - paragraph [ref=e72]: 2026 • Film • 8.3
+        - button "Open highlight details for Backrooms" [ref=e73] [cursor=pointer]:
+          - img "Backrooms poster" [ref=e76]
+          - paragraph [ref=e77]: Backrooms
+          - paragraph [ref=e78]: 2026 • Film • 7.0
+        - button "Open highlight details for Silo" [ref=e79] [cursor=pointer]:
+          - img "Silo poster" [ref=e82]
+          - paragraph [ref=e83]: Silo
+          - paragraph [ref=e84]: 2023 • Series • 8.2
+        - button "Open highlight details for Rick and Morty" [ref=e85] [cursor=pointer]:
+          - img "Rick and Morty poster" [ref=e88]
+          - paragraph [ref=e89]: Rick and Morty
+          - paragraph [ref=e90]: 2013 • Series • 8.7
+        - 'button "Open highlight details for Mushoku Tensei: Jobless Reincarnation" [ref=e91] [cursor=pointer]':
+          - 'img "Mushoku Tensei: Jobless Reincarnation poster" [ref=e94]'
+          - paragraph [ref=e95]: "Mushoku Tensei: Jobless Reincarnation"
+          - paragraph [ref=e96]: 2021 • Series • 8.5
+        - button "Open highlight details for The Furious" [ref=e97] [cursor=pointer]:
+          - img "The Furious poster" [ref=e100]
+          - paragraph [ref=e101]: The Furious
+          - paragraph [ref=e102]: 2026 • Film • 7.4

@@ -1,0 +1,25 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - heading "Lumera" [level=1] [ref=e7]
+        - paragraph [ref=e8]: One conversation, evolving curation
+      - generic [ref=e9]:
+        - button "Start a new conversation" [ref=e10] [cursor=pointer]: New chat
+        - button "Switch to light mode" [ref=e11] [cursor=pointer]
+  - main [ref=e18]:
+    - generic [ref=e20]:
+      - generic [ref=e23]:
+        - paragraph [ref=e24]: What are you in the mood for?
+        - paragraph [ref=e25]: "Try a prompt:"
+        - generic [ref=e26]:
+          - button "Something funny with Ryan Gosling" [ref=e27] [cursor=pointer]
+          - button "Like Inception but more relaxing" [ref=e28] [cursor=pointer]
+          - button "A cozy weekend movie" [ref=e29] [cursor=pointer]
+          - button "Surprising indie gems" [ref=e30] [cursor=pointer]
+      - generic [ref=e32]:
+        - generic [ref=e33]:
+          - textbox "Write your viewing brief..." [ref=e34]
+          - button "Submit" [disabled] [ref=e35]
+        - paragraph [ref=e36]: Press Enter to submit, Shift+Enter for a new line.
+    - status [ref=e40]
