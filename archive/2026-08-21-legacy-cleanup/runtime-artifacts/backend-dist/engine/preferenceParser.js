@@ -1,0 +1,988 @@
+/**
+ * Parses user preferences and input into structured query parameters
+ * Phase 1 Enhancement: Reference titles, excluded genres, mood confidence scoring
+ * Phase 5: Intent classification and ambiguity detection
+ */
+/**
+ * Rule-based preference parser with LLM enhancement
+ * Extracts: genres, moods, reference titles, excluded preferences, constraints
+ */
+export class PreferenceParser {
+    /**
+     * Extract reference title(s) from description
+     * E.g., "like Parks and Rec" → ["Parks and Rec"]
+     */
+    static extractReferenceTitle(description) {
+        const references = [];
+        for (const pattern of this.REFERENCE_PATTERNS) {
+            let match;
+            while ((match = pattern.exec(description)) !== null) {
+                const title = match[1].trim();
+                // Filter out very short matches (likely false positives)
+                if (title.length > 2) {
+                    references.push(title);
+                }
+            }
+        }
+        // Deduplicate and normalize (title case)
+        const unique = Array.from(new Set(references.map(t => t.trim())));
+        return unique;
+    }
+    /**
+     * Extract excluded genres/constraints from description
+     * E.g., "no horror" → ["Horror"]
+     * E.g., "avoid action-heavy" → ["Action", "action-heavy"]
+     */
+    static extractExcludedPreferences(description) {
+        const excludedGenres = [];
+        const constraints = [];
+        // Look for genre exclusions
+        for (const pattern of this.EXCLUSION_PATTERNS) {
+            let match;
+            while ((match = pattern.exec(description)) !== null) {
+                const term = match[1]?.toLowerCase() || '';
+                if (!term)
+                    continue;
+                const matchedGenres = this.detectGenres(term);
+                if (matchedGenres.length > 0) {
+                    excludedGenres.push(...matchedGenres);
+                }
+                else if (term.length > 2) {
+                    // Store as constraint for secondary filtering
+                    constraints.push(term);
+                }
+            }
+        }
+        return {
+            excludedGenres: Array.from(new Set(excludedGenres)),
+            constraints: Array.from(new Set(constraints))
+        };
+    }
+    static detectGenres(text) {
+        const lower = text.toLowerCase();
+        const normalized = lower
+            .replace(/[_/]/g, ' ')
+            .replace(/[^a-z0-9\s-]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const detected = new Set();
+        for (const [genre, keywords] of Object.entries(this.GENRE_KEYWORDS)) {
+            if (keywords.some(keyword => normalized.includes(keyword))) {
+                detected.add(genre);
+            }
+        }
+        for (const alias of this.GENRE_ALIAS_PATTERNS) {
+            if (alias.pattern.test(normalized)) {
+                detected.add(alias.genre);
+            }
+        }
+        return Array.from(detected);
+    }
+    /**
+     * Score mood confidence based on keywords and intensity modifiers
+     * Returns: Map<mood, confidence 0-1>
+     * E.g., "very funny" → Funny: 0.95
+     * E.g., "kinda dark" → Dark: 0.5
+     */
+    static scoreMoodConfidence(description) {
+        const moodStrength = new Map();
+        const descLower = description.toLowerCase();
+        for (const [mood, keywords] of Object.entries(this.MOOD_KEYWORDS)) {
+            // Check if any mood keyword matches
+            const matchedKeyword = keywords.find(keyword => descLower.includes(keyword));
+            if (!matchedKeyword)
+                continue;
+            // Base confidence from exact keyword match
+            let baseConfidence = descLower.includes(mood.toLowerCase()) ? 0.9 : // Direct mood name match
+                keywords.some(kw => descLower.includes(kw)) ? 0.8 : // Keyword match
+                    0.7; // Fallback
+            // Look for intensity modifiers around the keyword
+            const keywordIndex = descLower.indexOf(matchedKeyword);
+            const contextWindow = descLower.substring(Math.max(0, keywordIndex - 30), Math.min(descLower.length, keywordIndex + 30));
+            let confidence = baseConfidence;
+            for (const [modifier, modifierStrength] of Object.entries(this.INTENSITY_MODIFIERS)) {
+                if (contextWindow.includes(modifier)) {
+                    confidence = modifierStrength * baseConfidence;
+                    break;
+                }
+            }
+            // Normalize to 0.3-1.0 range (minimum confidence for detected mood)
+            confidence = Math.max(0.3, Math.min(1.0, confidence));
+            // Only store if not already stored with higher confidence
+            if (!moodStrength.has(mood) || moodStrength.get(mood) < confidence) {
+                moodStrength.set(mood, confidence);
+            }
+        }
+        return moodStrength;
+    }
+    /**
+     * Parse user request into structured preferences
+     * Combines rule-based extraction with optional LLM enhancement
+     */
+    static parse(request) {
+        const analysisText = this.buildAnalysisText(request);
+        const description = analysisText.toLowerCase();
+        // Start with defaults
+        const preferences = {
+            genres: [],
+            mood: [],
+            contentType: this.inferContentType(analysisText, request.preferences?.contentType),
+            maxRating: request.preferences?.maxRating || 'R',
+            referenceTitle: [],
+            excludedGenres: [],
+            constraints: [],
+            moodStrength: new Map(),
+            boostedMoods: [],
+            reducedMoods: [],
+            popularityPreference: undefined
+        };
+        // === PHASE 1 STEP 1.2: Extract reference titles ===
+        preferences.referenceTitle = this.extractReferenceTitle(description);
+        // === PHASE 1 STEP 1.4: Extract excluded preferences ===
+        const { excludedGenres, constraints } = this.extractExcludedPreferences(description);
+        preferences.excludedGenres = excludedGenres;
+        preferences.constraints = constraints;
+        // === PHASE 1 STEP 1.3: Score mood confidence ===
+        preferences.moodStrength = this.scoreMoodConfidence(description);
+        preferences.mood = Array.from(preferences.moodStrength.keys());
+        // === PHASE 1 STEP 1.1: Extract genres (existing logic) ===
+        preferences.genres = this.detectGenres(description);
+        // Remove excluded genres from detected genres
+        if (preferences.excludedGenres.length > 0) {
+            preferences.genres = preferences.genres.filter(g => !preferences.excludedGenres.includes(g));
+        }
+        // === Override with explicit preferences ===
+        if (request.preferences?.genres && request.preferences.genres.length > 0) {
+            preferences.genres = request.preferences.genres;
+        }
+        if (request.preferences?.mood && request.preferences.mood.length > 0) {
+            preferences.mood = request.preferences.mood;
+            // Rebuild moodStrength map from explicit preferences (all 1.0)
+            preferences.moodStrength = new Map(request.preferences.mood.map(m => [m, 1.0]));
+        }
+        if (request.preferences?.referenceTitle && request.preferences.referenceTitle.length > 0) {
+            preferences.referenceTitle = request.preferences.referenceTitle;
+        }
+        if (request.preferences?.excludedGenres && request.preferences.excludedGenres.length > 0) {
+            preferences.excludedGenres = request.preferences.excludedGenres;
+            // Re-filter genres
+            preferences.genres = preferences.genres.filter(g => !preferences.excludedGenres.includes(g));
+        }
+        // Track comparative/contrastive constraints for reference-style prompts.
+        const comparative = this.extractComparativeMoodShifts(description);
+        preferences.boostedMoods = comparative.boostedMoods;
+        preferences.reducedMoods = comparative.reducedMoods;
+        preferences.isContrastiveReference = comparative.isContrastive;
+        // Detect novelty-oriented discovery intent (e.g., "surprising indie gems").
+        preferences.noveltyIntent = this.hasNoveltyIntent(description);
+        // Parse refinement-specific ranking preferences (e.g. blockbusters, 80s).
+        const refinementSignals = this.extractRefinementSignals(description);
+        if (refinementSignals.popularityPreference) {
+            preferences.popularityPreference = refinementSignals.popularityPreference;
+        }
+        if (refinementSignals.yearRange) {
+            preferences.yearRange = refinementSignals.yearRange;
+        }
+        if (refinementSignals.rankingStrategyPreference) {
+            preferences.rankingStrategyPreference = refinementSignals.rankingStrategyPreference;
+        }
+        if (refinementSignals.resultLimit) {
+            preferences.resultLimit = refinementSignals.resultLimit;
+        }
+        if (refinementSignals.preferTopRated) {
+            preferences.preferTopRated = refinementSignals.preferTopRated;
+        }
+        if (refinementSignals.criticsIntent) {
+            preferences.criticsIntent = true;
+        }
+        if (refinementSignals.constraints.length > 0) {
+            preferences.constraints = Array.from(new Set([...(preferences.constraints || []), ...refinementSignals.constraints]));
+        }
+        const latestClarification = request.clarificationContext?.userClarification?.trim() || '';
+        preferences.wantsMoreResults = this.isMoreResultsRequest(latestClarification);
+        const currentBlockbusterPage = this.extractBlockbusterPageFromConstraints(request.clarificationContext?.cumulativeConstraints || []);
+        if (preferences.popularityPreference === 'mainstream' &&
+            preferences.yearRange?.min !== undefined &&
+            preferences.yearRange?.max !== undefined &&
+            preferences.yearRange.min === preferences.yearRange.max) {
+            preferences.blockbusterPage = preferences.wantsMoreResults
+                ? currentBlockbusterPage + 1
+                : Math.max(1, currentBlockbusterPage);
+        }
+        // Blockbuster-style requests should default to movies unless user explicitly asked for TV.
+        if (preferences.popularityPreference === 'mainstream' &&
+            preferences.contentType === 'both' &&
+            !this.TV_HINT_KEYWORDS.some(keyword => description.includes(keyword))) {
+            preferences.contentType = 'movie';
+        }
+        // Critics-oriented requests should default to movies unless TV is explicit.
+        if (preferences.criticsIntent &&
+            preferences.contentType === 'both' &&
+            !this.TV_HINT_KEYWORDS.some(keyword => description.includes(keyword))) {
+            preferences.contentType = 'movie';
+        }
+        // If novelty intent is explicit, enrich retrieval hints without hardcoding a single prompt.
+        if (preferences.noveltyIntent) {
+            if (!preferences.genres.includes('Indie')) {
+                preferences.genres.push('Indie');
+            }
+            if (preferences.constraints) {
+                preferences.constraints = Array.from(new Set([...preferences.constraints, 'novelty', 'discovery']));
+            }
+        }
+        // === PHASE 5: Extract actors and classify intent ===
+        preferences.detectedActors = this.extractActors(analysisText);
+        const intentClassification = this.classifyIntent(preferences.referenceTitle || [], preferences.detectedActors || [], Array.from(preferences.moodStrength?.keys() || []), this.hasSituationKeywords(description), preferences.isContrastiveReference || false, preferences.noveltyIntent || false);
+        preferences.discoveryMode = intentClassification.mode;
+        preferences.intentConfidence = intentClassification.confidence;
+        preferences.intentSignals = intentClassification.signals;
+        preferences.turnOperation = this.inferTurnOperation(request, preferences);
+        // Store original description for later use
+        preferences.description = analysisText;
+        // If no genres found, infer genre hints from mood/novelty for non-reference discovery.
+        if (preferences.genres.length === 0 &&
+            !request.preferences?.genres &&
+            (preferences.referenceTitle?.length || 0) === 0 &&
+            !this.isClearRefinementRequest(preferences)) {
+            preferences.genres = this.inferFallbackGenresFromMood(preferences);
+        }
+        return preferences;
+    }
+    static inferTurnOperation(request, preferences) {
+        const clarificationRound = request.clarificationContext?.clarificationRound ?? 0;
+        const latestTurn = request.clarificationContext?.userClarification?.trim().toLowerCase();
+        if (clarificationRound === 0 || !latestTurn) {
+            return undefined;
+        }
+        const rationaleTags = [];
+        let continuity = 'continue';
+        let operation = 'narrow';
+        let confidence = 0.55;
+        const hasHardPivotCue = this.HARD_PIVOT_CUES.some(cue => latestTurn.includes(cue));
+        const hasSoftPivotCue = this.SOFT_PIVOT_CUES.some(cue => latestTurn.includes(cue));
+        const hasReplaceCue = this.REPLACE_CUES.some(cue => latestTurn.includes(cue));
+        const hasWidenCue = this.WIDEN_CUES.some(cue => latestTurn.includes(cue));
+        const hasNarrowCue = this.NARROW_CUES.some(cue => latestTurn.includes(cue));
+        const hasNewAnchorSignals = /(like|similar to|in the style of|vibes of)\s+/.test(latestTurn) ||
+            /(?:with|starring|featuring|cast:)\s+[a-z]/.test(latestTurn);
+        if (hasHardPivotCue) {
+            continuity = 'hard_pivot';
+            confidence += 0.3;
+            rationaleTags.push('hard_pivot_cue');
+        }
+        else if (hasSoftPivotCue || hasNewAnchorSignals) {
+            continuity = 'soft_pivot';
+            confidence += hasNewAnchorSignals ? 0.2 : 0.15;
+            if (hasSoftPivotCue) {
+                rationaleTags.push('soft_pivot_cue');
+            }
+            if (hasNewAnchorSignals) {
+                rationaleTags.push('anchor_shift');
+            }
+        }
+        if (hasReplaceCue) {
+            operation = 'replace';
+            confidence += 0.2;
+            rationaleTags.push('replace_cue');
+        }
+        else if (hasWidenCue && !hasNarrowCue) {
+            operation = 'widen';
+            confidence += 0.15;
+            rationaleTags.push('widen_cue');
+        }
+        else if (hasNarrowCue) {
+            operation = 'narrow';
+            confidence += 0.1;
+            rationaleTags.push('narrow_cue');
+        }
+        if (continuity === 'soft_pivot' && operation === 'replace') {
+            continuity = 'hard_pivot';
+            rationaleTags.push('pivot_promoted_by_replace');
+            confidence += 0.05;
+        }
+        // Explicit structured constraints usually indicate an intentional refinement,
+        // so avoid over-triggering extra "quick check" prompts.
+        if ((preferences.genres?.length || 0) > 0) {
+            confidence += 0.12;
+            rationaleTags.push('explicit_genre_constraint');
+        }
+        if (preferences.contentType !== 'both') {
+            confidence += 0.06;
+            rationaleTags.push('explicit_content_type');
+        }
+        if (preferences.yearRange?.min !== undefined &&
+            preferences.yearRange?.max !== undefined) {
+            confidence += 0.06;
+            rationaleTags.push('explicit_year_constraint');
+        }
+        return {
+            continuity,
+            operation,
+            confidence: Math.max(0.4, Math.min(0.95, confidence)),
+            rationaleTags: Array.from(new Set(rationaleTags))
+        };
+    }
+    static buildAnalysisText(request) {
+        const base = request.description || '';
+        const clarification = request.clarificationContext?.userClarification?.trim();
+        const cumulativeConstraints = request.clarificationContext?.cumulativeConstraints || [];
+        const cumulative = cumulativeConstraints
+            .map(value => value.trim())
+            .filter(Boolean)
+            .join(' ');
+        if (!clarification && !cumulative) {
+            return base;
+        }
+        // Use explicit separators so cross-turn text does not merge into accidental entities.
+        return [base, cumulative, clarification || '']
+            .map(value => value.trim())
+            .filter(Boolean)
+            .join(' | ');
+    }
+    static extractRefinementSignals(description) {
+        const constraints = [];
+        let popularityPreference;
+        let rankingStrategyPreference;
+        let resultLimit;
+        let preferTopRated = false;
+        let criticsIntent = false;
+        const hasMainstream = this.MAINSTREAM_KEYWORDS.some(keyword => description.includes(keyword));
+        const hasNiche = this.NOVELTY_KEYWORDS.some(keyword => description.includes(keyword));
+        if (/(not|less)\s+mainstream/.test(description) || hasNiche) {
+            popularityPreference = 'niche';
+        }
+        else if (hasMainstream) {
+            popularityPreference = 'mainstream';
+        }
+        if (popularityPreference) {
+            constraints.push(`popularity:${popularityPreference}`);
+        }
+        const explicitDecades = Array.from(description.matchAll(/\b(19\d0|20\d0)s\b/g))
+            .map(match => parseInt(match[1], 10));
+        const shorthandDecades = Array.from(description.matchAll(/\b([6-9]0|00|10|20)s\b/g))
+            .map(match => {
+            const shortValue = parseInt(match[1], 10);
+            if (shortValue <= 30) {
+                return 2000 + shortValue;
+            }
+            return 1900 + shortValue;
+        });
+        const decades = Array.from(new Set([...explicitDecades, ...shorthandDecades]))
+            .filter(year => Number.isFinite(year) && year >= 1960 && year <= 2030);
+        const explicitYears = Array.from(description.matchAll(/\b(19\d{2}|20\d{2})\b/g))
+            .map(match => parseInt(match[1], 10))
+            .filter(year => Number.isFinite(year) && year >= 1960 && year <= 2035);
+        const uniqueExplicitYears = Array.from(new Set(explicitYears));
+        const yearRange = uniqueExplicitYears.length > 0
+            ? {
+                min: Math.min(...uniqueExplicitYears),
+                max: Math.max(...uniqueExplicitYears)
+            }
+            : decades.length > 0
+                ? {
+                    min: Math.min(...decades),
+                    max: Math.max(...decades) + 9
+                }
+                : undefined;
+        if (yearRange?.min !== undefined) {
+            if (yearRange.max !== undefined && yearRange.min === yearRange.max) {
+                constraints.push(`year:${yearRange.min}`);
+            }
+            else {
+                constraints.push(`decade:${yearRange.min}s`);
+            }
+        }
+        if (/\bgo\s+mood[-\s]?first\b/.test(description) ||
+            /\bprioriti[sz]e\s+mood\b/.test(description) ||
+            /\bmood\/tone\s+first\b/.test(description)) {
+            rankingStrategyPreference = 'mood_first';
+            constraints.push('strategy:mood_first');
+        }
+        else if (/\bgo\s+title[-\s]?similarity\s+first\b/.test(description) ||
+            /\bprioriti[sz]e\s+title\s+similarity\b/.test(description) ||
+            /\bprioriti[sz]e\s+genre\s+first\b/.test(description)) {
+            rankingStrategyPreference = 'reference_first';
+            constraints.push('strategy:reference_first');
+        }
+        else if (/\bgo\s+cast\/?director\s+first\b/.test(description) ||
+            /\bprioriti[sz]e\s+cast\/?director\b/.test(description) ||
+            /\bprioriti[sz]e\s+cast\b/.test(description)) {
+            rankingStrategyPreference = 'talent_first';
+            constraints.push('strategy:talent_first');
+        }
+        const topCountMatch = description.match(/\b(?:top|best|highest)\s+(\d{1,2})\b/);
+        if (topCountMatch?.[1]) {
+            const parsed = parseInt(topCountMatch[1], 10);
+            if (Number.isFinite(parsed) && parsed > 0) {
+                resultLimit = Math.min(10, parsed);
+                constraints.push(`top:${resultLimit}`);
+            }
+        }
+        const hasRatingOrderCue = /\b(top|best|highest)\s+\d{1,2}\s+(rated|rating|reviewed)\b/.test(description) ||
+            /\b(top|best|highest)\s+(rated|rating|reviewed)\b/.test(description) ||
+            /\b(rated|rating)\s+(highest|best)\b/.test(description);
+        const hasCriticsCue = this.CRITICS_KEYWORDS.some(keyword => description.includes(keyword));
+        if (hasCriticsCue) {
+            criticsIntent = true;
+            preferTopRated = true;
+            constraints.push('ranking:critic_proxy');
+        }
+        if (hasRatingOrderCue) {
+            preferTopRated = true;
+            constraints.push('sort:rating_desc');
+        }
+        return {
+            popularityPreference,
+            yearRange,
+            rankingStrategyPreference,
+            resultLimit,
+            preferTopRated,
+            criticsIntent,
+            constraints
+        };
+    }
+    static inferContentType(description, explicitType) {
+        if (explicitType) {
+            return explicitType;
+        }
+        const lower = description.toLowerCase();
+        const hasMovieHint = this.MOVIE_HINT_KEYWORDS.some(keyword => lower.includes(keyword));
+        const hasTVHint = this.TV_HINT_KEYWORDS.some(keyword => lower.includes(keyword));
+        if (hasMovieHint && !hasTVHint) {
+            return 'movie';
+        }
+        if (hasTVHint && !hasMovieHint) {
+            return 'tv';
+        }
+        return 'both';
+    }
+    static inferFallbackGenresFromMood(preferences) {
+        const moodToGenres = {
+            'Relaxing': ['Drama', 'Romance', 'Documentary', 'Indie'],
+            'Funny': ['Comedy'],
+            'Thoughtful': ['Drama', 'Documentary', 'Indie'],
+            'Intense': ['Action', 'Thriller'],
+            'Suspenseful': ['Thriller', 'Mystery', 'Crime'],
+            'Dark': ['Thriller', 'Crime', 'Horror'],
+            'Romantic': ['Romance', 'Drama'],
+            'Happy': ['Comedy', 'Family'],
+            'Sad': ['Drama'],
+            'Surprising': ['Indie', 'Mystery', 'Thriller']
+        };
+        const inferred = new Set();
+        for (const mood of preferences.mood || []) {
+            const mappedGenres = moodToGenres[mood] || [];
+            mappedGenres.forEach(genre => inferred.add(genre));
+        }
+        if (preferences.noveltyIntent) {
+            inferred.add('Indie');
+        }
+        if (inferred.size === 0) {
+            return ['Drama', 'Comedy'];
+        }
+        return Array.from(inferred).slice(0, 4);
+    }
+    static hasNoveltyIntent(description) {
+        const lower = description.toLowerCase();
+        return this.NOVELTY_KEYWORDS.some(keyword => lower.includes(keyword));
+    }
+    static isMoreResultsRequest(latestClarification) {
+        if (!latestClarification) {
+            return false;
+        }
+        return this.MORE_RESULTS_PATTERNS.some(pattern => pattern.test(latestClarification));
+    }
+    static extractBlockbusterPageFromConstraints(constraints) {
+        if (!constraints || constraints.length === 0) {
+            return 1;
+        }
+        const pageEntry = [...constraints]
+            .reverse()
+            .find(constraint => /^blockbuster_page:\d+$/i.test(constraint.trim()));
+        if (!pageEntry) {
+            return 1;
+        }
+        const parsed = Number(pageEntry.split(':')[1]);
+        if (!Number.isFinite(parsed) || parsed < 1) {
+            return 1;
+        }
+        return parsed;
+    }
+    static isClearRefinementRequest(preferences) {
+        return Boolean(preferences.resultLimit ||
+            preferences.preferTopRated ||
+            preferences.popularityPreference ||
+            (preferences.yearRange?.min !== undefined && preferences.yearRange?.max !== undefined));
+    }
+    static extractComparativeMoodShifts(description) {
+        const lower = description.toLowerCase();
+        const boostedMoods = [];
+        const reducedMoods = [];
+        const isContrastive = this.CONTRASTIVE_CONNECTORS.some(connector => lower.includes(connector));
+        // Generalized directional rules for common tone comparisons.
+        if (/(more|extra|bit more)\s+(relaxing|calm|chill|cozy|peaceful)/i.test(lower)) {
+            boostedMoods.push('Relaxing');
+            reducedMoods.push('Intense');
+            reducedMoods.push('Funny');
+            reducedMoods.push('Happy');
+        }
+        if (/(slower|slower pace|slow pace|more measured|gentler)/i.test(lower)) {
+            boostedMoods.push('Relaxing');
+            reducedMoods.push('Intense');
+        }
+        if (/(faster|faster pace|more kinetic|more adrenaline)/i.test(lower)) {
+            boostedMoods.push('Intense');
+            reducedMoods.push('Relaxing');
+        }
+        if (/(less|not as)\s+(intense|dark|suspenseful|gritty)/i.test(lower)) {
+            reducedMoods.push('Intense');
+            reducedMoods.push('Dark');
+            reducedMoods.push('Suspenseful');
+        }
+        if (/(more|extra|bit more)\s+(funny|light|lighthearted|uplifting)/i.test(lower)) {
+            boostedMoods.push('Funny');
+            boostedMoods.push('Happy');
+        }
+        if (/(less|not as)\s+(funny|light|lighthearted)/i.test(lower)) {
+            reducedMoods.push('Funny');
+            reducedMoods.push('Happy');
+        }
+        return {
+            isContrastive,
+            boostedMoods: Array.from(new Set(boostedMoods)),
+            reducedMoods: Array.from(new Set(reducedMoods))
+        };
+    }
+    /**
+     * Get explanation of parsed preferences for logging
+     */
+    static explain(preferences) {
+        const parts = [];
+        if (preferences.genres && preferences.genres.length > 0) {
+            parts.push(`Genres: ${preferences.genres.join(', ')}`);
+        }
+        if (preferences.excludedGenres && preferences.excludedGenres.length > 0) {
+            parts.push(`Excluded: ${preferences.excludedGenres.join(', ')}`);
+        }
+        if (preferences.referenceTitle && preferences.referenceTitle.length > 0) {
+            parts.push(`References: ${preferences.referenceTitle.join(', ')}`);
+        }
+        if (preferences.mood && preferences.mood.length > 0) {
+            const moodStr = preferences.mood.map(m => {
+                const strength = preferences.moodStrength?.get(m) ?? 0;
+                return `${m} (${(strength * 100).toFixed(0)}%)`;
+            }).join(', ');
+            parts.push(`Mood: ${moodStr}`);
+        }
+        if (preferences.constraints && preferences.constraints.length > 0) {
+            parts.push(`Constraints: ${preferences.constraints.join(', ')}`);
+        }
+        parts.push(`Type: ${preferences.contentType}`);
+        parts.push(`Max Rating: ${preferences.maxRating}`);
+        return parts.join(' | ');
+    }
+    /**
+     * Phase 5: Extract actor/talent names from description
+     * Patterns: "with Tom Cruise", "starring Ryan Gosling", "cast: Tom Hanks"
+     */
+    static extractActors(description) {
+        const actors = [];
+        for (const pattern of this.ACTOR_PATTERNS) {
+            let match;
+            while ((match = pattern.exec(description)) !== null) {
+                const names = match[1]
+                    .split(/\s+and\s+|\s*,\s*/)
+                    .map(n => n.trim())
+                    .filter(n => n.length > 2);
+                actors.push(...names);
+            }
+        }
+        return [...new Set(actors)]; // Deduplicate
+    }
+    /**
+     * Phase 5: Detect if description contains situation keywords
+     * E.g., "lazy Sunday", "date night", "stuck at home"
+     */
+    static hasSituationKeywords(description) {
+        const lower = description.toLowerCase();
+        return Object.values(this.SITUATION_KEYWORDS)
+            .some(keywords => keywords.some(kw => lower.includes(kw)));
+    }
+    /**
+     * Phase 5: Classify the primary intent mode and confidence
+     * Returns: mood | reference | talent | mixed
+     */
+    static classifyIntent(referenceTitle, actors, moods, hasSituation, isContrastiveReference, noveltyIntent) {
+        const signals = {
+            foundReferenceTitle: referenceTitle.length > 0,
+            foundActorNames: actors.length > 0,
+            hasMoodDescriptors: moods.length > 0,
+            hasSituationDescriptors: hasSituation,
+            conflictingSignals: false
+        };
+        let mode = 'mixed';
+        let confidence = 0.5;
+        // Priority order: talent > reference > mood > mixed
+        if (actors.length > 0) {
+            mode = 'talent';
+            confidence = Math.min(1.0, 0.85 + actors.length * 0.05); // Higher with more actors
+        }
+        else if (referenceTitle.length > 0) {
+            mode = 'reference';
+            confidence = Math.min(1.0, 0.85 + referenceTitle.length * 0.05);
+        }
+        else if (moods.length > 0 || hasSituation) {
+            mode = 'mood';
+            confidence = 0.75 + (hasSituation ? 0.15 : 0);
+        }
+        else if (noveltyIntent) {
+            // Novelty discovery queries should not default to low-confidence mixed.
+            mode = 'mood';
+            confidence = 0.7;
+        }
+        else {
+            mode = 'mixed';
+            confidence = 0.3; // Low confidence for empty/vague queries
+        }
+        // Detect conflicts (multiple strong signals)
+        const strongSignals = [
+            actors.length > 0,
+            referenceTitle.length > 0,
+            moods.length > 0 && moods.length <= 1
+        ];
+        const signalCount = strongSignals.filter(s => s).length;
+        const isActorMoodCompatible = actors.length > 0 && moods.length === 1 && referenceTitle.length === 0;
+        const isReferenceContrastCompatible = referenceTitle.length > 0 && moods.length === 1 && isContrastiveReference && actors.length === 0;
+        signals.conflictingSignals =
+            signalCount > 1 && !isActorMoodCompatible && !isReferenceContrastCompatible;
+        // If conflicting signals, lower confidence and mark as ambiguous
+        if (signals.conflictingSignals) {
+            confidence = Math.max(0.4, confidence - 0.2);
+            mode = 'mixed';
+        }
+        else if (isActorMoodCompatible) {
+            // Compatible dual-signal queries should stay talent-primary.
+            mode = 'talent';
+            confidence = Math.max(0.78, confidence - 0.05);
+        }
+        else if (isReferenceContrastCompatible) {
+            // Contrastive reference requests are explicit enough to keep reference mode.
+            mode = 'reference';
+            confidence = Math.max(0.76, confidence - 0.08);
+        }
+        // Multiple mood targets without an anchor are often ambiguous and should clarify.
+        if (actors.length === 0 && referenceTitle.length === 0 && moods.length > 1) {
+            mode = 'mixed';
+            confidence = Math.min(confidence, 0.58);
+            signals.conflictingSignals = true;
+        }
+        return {
+            mode,
+            confidence,
+            signals,
+            ambiguities: signals.conflictingSignals ? ["Multiple intent signals detected; could you clarify?"] : undefined
+        };
+    }
+    /**
+     * Phase 5: Determine if clarification is needed
+     * Returns null if confidence is high, otherwise returns clarification questions
+     * Confidence threshold: 0.65 (return results if >= 0.65, ask if < 0.65)
+     */
+    static needsClarification(preferences, clarificationRound = 0, latestUserClarification) {
+        const CONFIDENCE_THRESHOLD = 0.65;
+        const MIXED_SAFE_THRESHOLD = 0.72;
+        const confidence = preferences.intentConfidence ?? 0.5;
+        // On follow-up rounds, always return recommendations
+        if (clarificationRound > 0) {
+            return null;
+        }
+        // Clear refinement instructions should execute directly.
+        if (this.isClearRefinementRequest(preferences)) {
+            return null;
+        }
+        // Contrastive reference requests need a directional target to rank properly.
+        if (preferences.isContrastiveReference &&
+            preferences.referenceTitle &&
+            preferences.referenceTitle.length > 0 &&
+            (preferences.boostedMoods?.length || 0) === 0 &&
+            (preferences.reducedMoods?.length || 0) === 0) {
+            return [
+                {
+                    id: 'contrastive_target',
+                    question: `You asked for something like "${preferences.referenceTitle[0]}" with a different vibe. Which direction should I prioritise?`,
+                    type: 'select',
+                    options: ['More relaxing', 'More intense', 'Funnier', 'Darker']
+                }
+            ];
+        }
+        // Mixed intent near threshold is fragile; ask one disambiguation question.
+        if (preferences.discoveryMode === 'mixed' && confidence < MIXED_SAFE_THRESHOLD) {
+            const lowerClarification = latestUserClarification?.toLowerCase() || '';
+            const noveltyPrompt = lowerClarification.includes('surprise me') || preferences.noveltyIntent;
+            return [
+                {
+                    id: 'mixed_disambiguation',
+                    question: noveltyPrompt
+                        ? 'What do you mean by "surprise me"?'
+                        : 'I can tune this a few ways. Which should I prioritise?',
+                    type: 'select',
+                    options: ['Go mood-first', 'Go title-similarity first', 'Go cast/director first']
+                }
+            ];
+        }
+        // On first round, ask only if confidence is low after specialized checks.
+        if (clarificationRound === 0 && confidence >= CONFIDENCE_THRESHOLD) {
+            return null;
+        }
+        // Generate clarification questions based on detected signals and mode
+        const questions = [];
+        const signals = preferences.intentSignals;
+        // Case: Conflicting signals (multiple intent types detected)
+        if (signals?.conflictingSignals && preferences.discoveryMode === 'mixed') {
+            if (signals.foundActorNames &&
+                signals.foundReferenceTitle &&
+                signals.hasMoodDescriptors) {
+                // All three types detected - ask which is primary
+                questions.push({
+                    id: 'primary_intent',
+                    question: 'You mentioned actor(s), a reference title, and a mood. Which matters most to you?',
+                    type: 'select',
+                    options: ['Finding movies with specific actors', 'Similar to a movie I like', 'A specific mood or vibe']
+                });
+            }
+            else if (signals.foundActorNames && signals.foundReferenceTitle) {
+                // Both actor and reference detected
+                questions.push({
+                    id: 'actor_vs_reference',
+                    question: 'Should I prioritise movies with those actors, or movies similar to the reference you mentioned?',
+                    type: 'select',
+                    options: ['Actors are key', 'Reference title matters more', 'Both equally']
+                });
+            }
+            else if (signals.foundReferenceTitle &&
+                signals.hasMoodDescriptors &&
+                (preferences.mood && preferences.mood.length > 1)) {
+                // Reference + multiple conflicting moods
+                questions.push({
+                    id: 'mood_priority',
+                    question: `You want something like "${preferences.referenceTitle?.[0]}" but also with moods: ${preferences.mood.join(', ')}. Do you want similar vibes to the reference, or the moods you mentioned?`,
+                    type: 'select',
+                    options: ['Similar to reference title', 'The moods you mentioned', 'Both']
+                });
+            }
+        }
+        // If we generated any questions, return them
+        if (questions.length > 0) {
+            return questions;
+        }
+        // Default: No clarification needed (confidence is good or on follow-up round)
+        return null;
+    }
+}
+PreferenceParser.HARD_PIVOT_CUES = [
+    'instead',
+    'actually',
+    'forget that',
+    'forget this',
+    'different direction',
+    'switch gears',
+    'new direction',
+    'not that',
+    'start over'
+];
+PreferenceParser.SOFT_PIVOT_CUES = [
+    'same vibe but',
+    'but with',
+    'shift toward',
+    'lean toward',
+    'more like',
+    'less like'
+];
+PreferenceParser.NARROW_CUES = [
+    'only',
+    'just',
+    'specifically',
+    'strictly',
+    'prioritize',
+    'focus on',
+    'more',
+    'less',
+    'without',
+    'exclude'
+];
+PreferenceParser.WIDEN_CUES = [
+    'broader',
+    'broaden',
+    'wider',
+    'more options',
+    'open to',
+    'either',
+    'any',
+    'no preference',
+    'anything'
+];
+PreferenceParser.REPLACE_CUES = [
+    'replace',
+    'swap',
+    'switch to',
+    'instead',
+    'rather than',
+    'instead of',
+    'not x',
+    'not this'
+];
+PreferenceParser.MOVIE_HINT_KEYWORDS = [
+    'movie', 'movies', 'film', 'films', 'cinema', 'feature'
+];
+PreferenceParser.TV_HINT_KEYWORDS = [
+    'tv', 'series', 'season', 'seasons', 'episode', 'episodes'
+];
+PreferenceParser.GENRE_KEYWORDS = {
+    'Action': ['action', 'fight', 'explosion', 'adventure', 'heroic', 'thrilling', 'combat'],
+    'Comedy': ['funny', 'laugh', 'comedy', 'comedies', 'comedic', 'humorous', 'hilarious', 'comic'],
+    'Drama': ['emotional', 'serious', 'dramatic', 'deep', 'character', 'intense'],
+    'Horror': ['scary', 'horror', 'spooky', 'creepy', 'terrifying', 'frightening'],
+    'Romance': ['romance', 'romantic', 'love', 'couple', 'relationship'],
+    'Sci-Fi': ['sci-fi', 'science fiction', 'future', 'space', 'alien', 'technology', 'dystopian'],
+    'Thriller': ['thriller', 'suspense', 'mystery', 'detective', 'crime', 'dark'],
+    'Animation': ['animated', 'animation', 'cartoon'],
+    'Fantasy': ['fantasy', 'magic', 'magical', 'legend', 'adventure'],
+    'Documentary': ['documentary', 'real', 'true', 'educational'],
+    'Indie': ['indie', 'independent', 'arthouse', 'art house', 'festival', 'hidden gem', 'cult']
+};
+PreferenceParser.GENRE_ALIAS_PATTERNS = [
+    { genre: 'Action', pattern: /\b(action|actions|action-packed|adventure|adventures|combat|heroic)\b/i },
+    { genre: 'Comedy', pattern: /\b(comedy|comedies|comedic|funny|hilarious|humorous|laugh|laughing|comic|romcom|romcoms|rom-com|rom-coms)\b/i },
+    { genre: 'Drama', pattern: /\b(drama|dramas|dramatic|character-driven|emotional)\b/i },
+    { genre: 'Horror', pattern: /\b(horror|horrors|scary|spooky|creepy|terrifying|frightening)\b/i },
+    { genre: 'Romance', pattern: /\b(romance|romances|romantic|love\s+story|love\s+stories|relationship|relationships|romcom|romcoms|rom-com|rom-coms)\b/i },
+    { genre: 'Sci-Fi', pattern: /\b(sci-fi|sci fi|scifi|scifis|science\s+fiction|science-fiction|cyberpunk|dystopian)\b/i },
+    { genre: 'Thriller', pattern: /\b(thriller|thrillers|suspense|suspenseful|mystery|mysteries|detective|crime)\b/i },
+    { genre: 'Animation', pattern: /\b(animation|animated|anime|cartoon|cartoons)\b/i },
+    { genre: 'Fantasy', pattern: /\b(fantasy|fantasies|magic|magical|mythic|legend)\b/i },
+    { genre: 'Documentary', pattern: /\b(documentary|documentaries|docuseries|non-fiction|nonfiction|true\s+story|true\s+stories)\b/i },
+    { genre: 'Indie', pattern: /\b(indie|indies|independent|arthouse|art\s+house|festival|hidden\s+gem|hidden\s+gems|cult)\b/i }
+];
+PreferenceParser.MOOD_KEYWORDS = {
+    'Happy': ['happy', 'uplifting', 'feel-good', 'cheerful', 'light', 'fun'],
+    'Sad': ['sad', 'emotional', 'crying', 'melancholic', 'depressing'],
+    'Intense': ['intense', 'adrenaline', 'fast-paced', 'fast paced', 'suspenseful', 'gripping', 'faster pace'],
+    'Relaxing': ['relaxing', 'chill', 'cozy', 'calm', 'peaceful', 'easy-going', 'slower pace', 'slow pace', 'slower', 'gentle'],
+    'Funny': ['funny', 'hilarious', 'laugh', 'comedy', 'witty'],
+    'Thoughtful': ['thoughtful', 'philosophical', 'intelligent', 'educational', 'inspiring'],
+    'Dark': ['dark', 'gritty', 'bleak', 'moody', 'brooding'],
+    'Romantic': ['romantic', 'love', 'tender', 'passionate'],
+    'Suspenseful': ['suspenseful', 'tension', 'thrilling', 'edge-of-seat'],
+    'Surprising': ['surprising', 'unexpected', 'offbeat', 'unusual', 'different', 'left-field']
+};
+// Patterns for extracting reference titles
+PreferenceParser.REFERENCE_PATTERNS = [
+    /like\s+(?:['""])?([a-zA-Z0-9\s&:'"-]+?)(?:['""])?(?:\s|$)/gi,
+    /similar\s+to\s+(?:['""])?([a-zA-Z0-9\s&:'"-]+?)(?:['""])?(?:\s|$)/gi,
+    /reminds?\s+me\s+of\s+(?:['""])?([a-zA-Z0-9\s&:'"-]+?)(?:['""])?(?:\s|$)/gi,
+    /in\s+the\s+style\s+of\s+(?:['""])?([a-zA-Z0-9\s&:'"-]+?)(?:['""])?(?:\s|$)/gi,
+    /vibes\s+of\s+(?:['""])?([a-zA-Z0-9\s&:'"-]+?)(?:['""])?(?:\s|$)/gi
+];
+// Patterns for extracting exclusions
+PreferenceParser.EXCLUSION_PATTERNS = [
+    /no\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
+    /avoid\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
+    /not\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
+    /without\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
+    /hate\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
+    /(?:^|[\s,])(?:don't|do\s+not)\s+want\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi
+];
+// Strength modifiers for moods
+PreferenceParser.INTENSITY_MODIFIERS = {
+    // High confidence
+    'very': 1.0,
+    'extremely': 1.0,
+    'super': 1.0,
+    'really': 0.9,
+    'quite': 0.85,
+    // Medium-high
+    'pretty': 0.75,
+    'rather': 0.7,
+    'somewhat': 0.65,
+    // Medium
+    'kind of': 0.5,
+    'kinda': 0.5,
+    'a bit': 0.5,
+    'slightly': 0.6,
+    // Low
+    'maybe': 0.4,
+    'sorta': 0.4
+};
+// Phase 5: Actor/talent extraction patterns
+PreferenceParser.ACTOR_PATTERNS = [
+    /with\s+(?:['"])?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)*)/g,
+    /(?:starring|featuring)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)*)/g,
+    /cast:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)*)/g
+];
+// Phase 5: Situation/context keywords for mood detection
+PreferenceParser.SITUATION_KEYWORDS = {
+    'Lazy': ['lazy', 'cozy', 'relax', 'chill', 'wind down', 'unwind'],
+    'Stuck': ['stuck', 'trapped', 'can\'t go out', 'lockdown', 'snowed in'],
+    'Date': ['date night', 'with someone', 'with my', 'together', 'couples'],
+    'Sick': ['sick', 'ill', 'not feeling', 'bed', 'recovery'],
+    'Late': ['late night', '3am', 'can\'t sleep', 'insomnia', 'night owl'],
+    'Weekend': ['weekend', 'saturday', 'sunday', 'friday night']
+};
+PreferenceParser.NOVELTY_KEYWORDS = [
+    'indie',
+    'independent',
+    'hidden gem',
+    'hidden gems',
+    'underrated',
+    'offbeat',
+    'cult',
+    'arthouse',
+    'art house',
+    'festival',
+    'surprising',
+    'unexpected',
+    'unusual'
+];
+PreferenceParser.MAINSTREAM_KEYWORDS = [
+    'blockbuster',
+    'blockbusters',
+    'mainstream',
+    'popular hits',
+    'big hits',
+    'widely known',
+    'crowd-pleaser',
+    'crowd pleaser'
+];
+PreferenceParser.CRITICS_KEYWORDS = [
+    'critic',
+    'critics',
+    'critically acclaimed',
+    'acclaimed',
+    'award-winning',
+    'award winning',
+    'festival favourite',
+    'festival favorite',
+    'best reviewed',
+    'best-reviewed',
+    'highest rated',
+    'top rated',
+    'favourite',
+    'favorite'
+];
+PreferenceParser.MORE_RESULTS_PATTERNS = [
+    /^show\s+me\s+more\b/i,
+    /^more\b/i,
+    /^more\s+please\b/i,
+    /^another\b/i,
+    /^next(?:\s+page)?\b/i,
+    /^keep\s+going\b/i,
+    /^give\s+me\s+more\b/i
+];
+PreferenceParser.CONTRASTIVE_CONNECTORS = [
+    ' but ',
+    ' instead ',
+    ' rather than ',
+    ' not as ',
+    ' less ',
+    ' more '
+];

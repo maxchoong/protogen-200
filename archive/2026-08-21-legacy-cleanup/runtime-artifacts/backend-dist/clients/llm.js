@@ -1,0 +1,411 @@
+import OpenAI from 'openai';
+// GitHub Models configuration
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
+const GITHUB_MODEL = process.env.GITHUB_MODEL || 'gpt-4o-mini';
+const GITHUB_API_BASE = 'https://models.inference.ai.azure.com';
+const LLM_TIMEOUT_MS = 15000;
+const MAX_RETRIES = 2;
+/**
+ * GitHub Models LLM Client for Film Advisor
+ * Handles preference parsing, explanation generation, and synopsis creation
+ * Uses free GitHub Models tier (150 requests/day)
+ */
+export class LLMClient {
+    constructor() {
+        this.client = null;
+        this.cache = {};
+        this.enabled = false;
+        if (GITHUB_TOKEN && GITHUB_TOKEN !== '') {
+            try {
+                this.client = new OpenAI({
+                    apiKey: GITHUB_TOKEN,
+                    baseURL: GITHUB_API_BASE,
+                    timeout: LLM_TIMEOUT_MS,
+                    maxRetries: MAX_RETRIES
+                });
+                this.enabled = true;
+                console.log(`✅ GitHub Models LLM Client initialized (${GITHUB_MODEL})`);
+                console.log(`📊 Free tier: 150 requests/day`);
+            }
+            catch (error) {
+                console.error('❌ Failed to initialize GitHub Models client:', error);
+                this.enabled = false;
+            }
+        }
+        else {
+            console.log('⚠️  GITHUB_TOKEN not set. LLM features will use fallbacks.');
+            console.log('💡 Get a token at: https://github.com/settings/tokens?type=beta');
+            this.enabled = false;
+        }
+    }
+    /**
+     * Check if LLM is available
+     */
+    isEnabled() {
+        return this.enabled;
+    }
+    /**
+     * Parse user's natural language description into structured preferences
+     * Enhances rule-based parsing with LLM understanding
+     */
+    async parsePreferences(description) {
+        if (!this.enabled || !description.trim()) {
+            return null;
+        }
+        const cacheKey = `parse:${description.substring(0, 100)}`;
+        const cached = this.getCache(cacheKey);
+        if (cached) {
+            console.log('[LLM] Using cached preference parsing');
+            return cached;
+        }
+        try {
+            console.log('[LLM] Parsing preferences with GPT-4o-mini...');
+            const messages = [
+                {
+                    role: 'system',
+                    content: `You are a film recommendation assistant. Parse the user's request into structured preferences.
+Return ONLY valid JSON with this exact structure:
+{
+  "genres": ["Action", "Comedy", etc.],
+  "mood": ["happy", "intense", "thoughtful", etc.],
+  "contentType": "movie" | "tv" | "both",
+  "maxRating": "G" | "PG" | "PG-13" | "R",
+  "keywords": ["word1", "word2"],
+  "tone": "lighthearted" | "dark" | "realistic" | etc
+}
+
+Common genres: Action, Adventure, Comedy, Drama, Horror, Romance, Sci-Fi, Thriller, Fantasy, Mystery
+Common moods: happy, sad, intense, relaxing, funny, thoughtful, scary, uplifting`
+                },
+                {
+                    role: 'user',
+                    content: description
+                }
+            ];
+            const response = await this.client.chat.completions.create({
+                model: GITHUB_MODEL,
+                messages,
+                temperature: 0.3,
+                max_tokens: 300,
+                response_format: { type: 'json_object' }
+            });
+            const content = response.choices[0]?.message?.content;
+            if (!content) {
+                console.warn('[LLM] No content in response');
+                return null;
+            }
+            const parsed = JSON.parse(content);
+            // Validate and set defaults
+            const result = {
+                genres: Array.isArray(parsed.genres) ? parsed.genres : [],
+                mood: Array.isArray(parsed.mood) ? parsed.mood : [],
+                contentType: ['movie', 'tv', 'both'].includes(parsed.contentType) ? parsed.contentType : 'both',
+                maxRating: parsed.maxRating || 'R',
+                keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [],
+                tone: parsed.tone
+            };
+            this.setCache(cacheKey, result, 3600000); // Cache 1 hour
+            console.log(`[LLM] Parsed: ${result.genres.length} genres, ${result.keywords.length} keywords`);
+            return result;
+        }
+        catch (error) {
+            console.error('[LLM] Preference parsing error:', error.message);
+            return null;
+        }
+    }
+    /**
+     * Generate "Why this?" explanation for a recommendation
+     */
+    async generateWhyThis(userDescription, title, genre, plot, rating) {
+        if (!this.enabled) {
+            return null;
+        }
+        const cacheKey = `why:${title}:${userDescription.substring(0, 50)}`;
+        const cached = this.getCache(cacheKey);
+        if (cached) {
+            return cached;
+        }
+        try {
+            const messages = [
+                {
+                    role: 'system',
+                    content: `You are a film recommendation assistant. Write a brief "why this" explanation in the voice of a knowledgeable friend.
+Rules:
+- Use British English spelling and phrasing.
+- Prefer one sentence; use two only if needed.
+- Keep it natural, plain, and specific to the user's request.
+- Base claims only on supplied genre, mood, theme, or rating cues.
+- No spoilers.`
+                },
+                {
+                    role: 'user',
+                    content: `User wants: "${userDescription}"
+
+Title: ${title}
+Genre: ${genre}
+Plot: ${plot}
+${rating ? `Rating: ${rating}/10` : ''}
+
+Why recommend this?`
+                }
+            ];
+            const response = await this.client.chat.completions.create({
+                model: GITHUB_MODEL,
+                messages,
+                temperature: 0.7,
+                max_tokens: 100
+            });
+            const explanation = response.choices[0]?.message?.content?.trim();
+            if (explanation) {
+                this.setCache(cacheKey, explanation, 7200000); // Cache 2 hours
+                return explanation;
+            }
+            return null;
+        }
+        catch (error) {
+            console.error('[LLM] Why-this generation error:', error.message);
+            return null;
+        }
+    }
+    /**
+     * Generate multiple "Why this?" explanations in a single batch call
+     * Enhanced with context about matches, reference titles, and excluded preferences
+     */
+    async generateWhyThisBatch(userDescription, titles) {
+        if (!this.enabled || titles.length === 0) {
+            return new Map();
+        }
+        try {
+            console.log(`[LLM] Generating ${titles.length} explanations in batch...`);
+            const titlesText = titles
+                .map((t, i) => {
+                let desc = `${i + 1}. "${t.title}" (${t.genre})`;
+                if (t.talentMatchScore && t.talentMatchScore > 0.5) {
+                    desc += ` [Talent Match: ${(t.talentMatchScore * 100).toFixed(0)}%]`;
+                }
+                if (typeof t.genreScore === 'number') {
+                    desc += ` [Genre: ${t.genreScore.toFixed(2)}]`;
+                }
+                if (typeof t.moodScore === 'number') {
+                    desc += ` [Mood: ${t.moodScore.toFixed(2)}]`;
+                }
+                if (typeof t.talentScore === 'number') {
+                    desc += ` [Talent: ${t.talentScore.toFixed(2)}]`;
+                }
+                if (typeof t.compositeScore === 'number') {
+                    desc += ` [Composite: ${t.compositeScore.toFixed(2)}]`;
+                }
+                desc += ` - ${t.plot.substring(0, 100)}`;
+                return desc;
+            })
+                .join('\n');
+            const referenceContext = titles[0]?.referenceTitles?.length
+                ? `Reference titles mentioned: ${titles[0].referenceTitles.join(', ')}`
+                : '';
+            const excludedContext = titles[0]?.excludedGenres?.length
+                ? `Avoid genres: ${titles[0].excludedGenres.join(', ')}`
+                : '';
+            const messages = [
+                {
+                    role: 'system',
+                    content: `You are a film recommendation assistant. For each title, write a brief explanation in the voice of a knowledgeable friend only if the provided match signals support the recommendation.
+Rules:
+- Use British English spelling and phrasing.
+- Prefer one sentence; use two only when needed.
+- Keep the tone natural, specific, and conversational (not list-like).
+- Do not claim similarity unless there is evidence in the supplied scores or plot cues.
+- If a title appears weakly matched (for example, all scores low), return null for that item.
+- Do not mention cast/director similarity unless talent score is clearly meaningful.
+- For excluded genres, only mention avoidance when applicable.
+- No spoilers.
+Return valid JSON: {"1": "explanation or null", "2": "explanation or null", ...}`
+                },
+                {
+                    role: 'user',
+                    content: `User wants: "${userDescription}"
+${referenceContext}
+${excludedContext}
+
+Titles with matching signals:
+${titlesText}
+
+Generate explanations as JSON object with numbered keys. Reference the matching signals in your explanations.`
+                }
+            ];
+            const response = await this.client.chat.completions.create({
+                model: GITHUB_MODEL,
+                messages,
+                temperature: 0.7,
+                max_tokens: 500,
+                response_format: { type: 'json_object' }
+            });
+            const content = response.choices[0]?.message?.content;
+            if (!content)
+                return new Map();
+            const parsed = JSON.parse(content);
+            const result = new Map();
+            titles.forEach((title, i) => {
+                const key = (i + 1).toString();
+                const candidate = parsed[key];
+                if (typeof candidate === 'string' && candidate.trim().length > 0) {
+                    result.set(title.title, candidate);
+                    // Cache individual explanations
+                    const cacheKey = `why:${title.title}:${userDescription.substring(0, 50)}`;
+                    this.setCache(cacheKey, candidate, 7200000);
+                }
+            });
+            return result;
+        }
+        catch (error) {
+            console.error('[LLM] Batch explanation error:', error.message);
+            return new Map();
+        }
+    }
+    /**
+     * Generate a spoiler-free synopsis from the catalog synopsis
+     */
+    async generateSpoilerFreeSynopsis(title, originalPlot) {
+        if (!this.enabled || !originalPlot) {
+            return null;
+        }
+        const cacheKey = `synopsis:${title}`;
+        const cached = this.getCache(cacheKey);
+        if (cached) {
+            return cached;
+        }
+        try {
+            const messages = [
+                {
+                    role: 'system',
+                    content: `You are a film synopsis writer. Rewrite the given plot summary to be engaging but completely spoiler-free.
+- Keep it 2-3 sentences
+- Focus on premise and tone, not plot twists or outcomes
+- Be enticing but vague about specifics
+- Remove character names unless they're the protagonist`
+                },
+                {
+                    role: 'user',
+                    content: `Title: ${title}\n\nOriginal plot:\n${originalPlot}\n\nSpoiler-free synopsis:`
+                }
+            ];
+            const response = await this.client.chat.completions.create({
+                model: GITHUB_MODEL,
+                messages,
+                temperature: 0.6,
+                max_tokens: 150
+            });
+            const synopsis = response.choices[0]?.message?.content?.trim();
+            if (synopsis) {
+                this.setCache(cacheKey, synopsis, 86400000); // Cache 24 hours
+                return synopsis;
+            }
+            return null;
+        }
+        catch (error) {
+            console.error('[LLM] Synopsis generation error:', error.message);
+            return null;
+        }
+    }
+    /**
+     * Suggest likely title seeds for actor-focused talent queries.
+     * Used as a recovery path when catalog search cannot map actor names directly to filmography.
+     */
+    async suggestActorTitleSeeds(actors, description, limit = 8) {
+        if (!this.enabled || actors.length === 0) {
+            return [];
+        }
+        const normalizedActors = actors
+            .map(actor => actor.trim())
+            .filter(actor => actor.length > 0);
+        if (normalizedActors.length === 0) {
+            return [];
+        }
+        const cacheKey = `actor-seeds:${normalizedActors.join('|')}:${description.substring(0, 80)}`;
+        const cached = this.getCache(cacheKey);
+        if (cached && Array.isArray(cached)) {
+            return cached.slice(0, limit);
+        }
+        try {
+            const messages = [
+                {
+                    role: 'system',
+                    content: `You recommend movies and TV titles. Return only JSON with this shape:
+{
+  "titles": ["Title 1", "Title 2", "..."]
+}
+Rules:
+- Include only real titles that likely feature the requested actor(s).
+- Prioritize titles that fit the user's tone/genre request.
+- No commentary, no markdown, no extra keys.`
+                },
+                {
+                    role: 'user',
+                    content: `Actors: ${normalizedActors.join(', ')}\nUser request: ${description}\nReturn up to ${limit} titles.`
+                }
+            ];
+            const response = await this.client.chat.completions.create({
+                model: GITHUB_MODEL,
+                messages,
+                temperature: 0.2,
+                max_tokens: 220,
+                response_format: { type: 'json_object' }
+            });
+            const content = response.choices[0]?.message?.content;
+            if (!content) {
+                return [];
+            }
+            const parsed = JSON.parse(content);
+            const titles = Array.isArray(parsed.titles)
+                ? parsed.titles.filter((value) => typeof value === 'string').map(t => t.trim()).filter(Boolean)
+                : [];
+            const deduped = Array.from(new Set(titles)).slice(0, limit);
+            this.setCache(cacheKey, deduped, 6 * 60 * 60 * 1000);
+            return deduped;
+        }
+        catch (error) {
+            console.error('[LLM] Actor title seed generation error:', error.message);
+            return [];
+        }
+    }
+    /**
+     * Get cached value if still valid
+     */
+    getCache(key) {
+        const cached = this.cache[key];
+        if (!cached)
+            return null;
+        const now = Date.now();
+        if (now - cached.timestamp > cached.ttl) {
+            delete this.cache[key];
+            return null;
+        }
+        return cached.value;
+    }
+    /**
+     * Set cached value with TTL
+     */
+    setCache(key, value, ttl) {
+        this.cache[key] = {
+            value,
+            timestamp: Date.now(),
+            ttl
+        };
+    }
+    /**
+     * Clear all cached data
+     */
+    clearCache() {
+        this.cache = {};
+        console.log('[LLM] Cache cleared');
+    }
+    /**
+     * Get cache statistics
+     */
+    getCacheStats() {
+        return {
+            size: Object.keys(this.cache).length,
+            keys: Object.keys(this.cache)
+        };
+    }
+}
+export const llmClient = new LLMClient();

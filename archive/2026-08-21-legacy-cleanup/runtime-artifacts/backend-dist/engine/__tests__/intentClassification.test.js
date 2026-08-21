@@ -1,0 +1,321 @@
+import { PreferenceParser } from '../preferenceParser';
+describe('Phase 5: Intent Classification & Clarification', () => {
+    describe('Intent Classification', () => {
+        it('should detect mood intent from mood keywords', () => {
+            const request = {
+                description: 'something cozy and relaxing'
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.discoveryMode).toBe('mood');
+            expect(preferences.intentConfidence).toBeGreaterThanOrEqual(0.65);
+            expect(preferences.mood.length).toBeGreaterThan(0);
+        });
+        it('should detect talent intent from actor references', () => {
+            const request = {
+                description: 'with Tom Hanks'
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.discoveryMode).toBe('talent');
+            expect(preferences.intentConfidence).toBeGreaterThanOrEqual(0.65);
+            expect(preferences.detectedActors?.length).toBeGreaterThan(0);
+        });
+        it('should detect reference intent from title references', () => {
+            const request = {
+                description: 'like Inception'
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.discoveryMode).toBe('reference');
+            expect(preferences.intentConfidence).toBeGreaterThanOrEqual(0.65);
+        });
+        it('should output mixed mode for conflicting signals', () => {
+            const request = {
+                description: 'I want comedies like Inception with Ryan Gosling'
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.discoveryMode).toBe('mixed');
+            expect((preferences.intentConfidence || 0) < 0.75).toBe(true);
+        });
+    });
+    describe('Clarification Gating', () => {
+        it('should not require clarification for high-confidence queries', () => {
+            const request = {
+                description: 'I want a thriller'
+            };
+            const preferences = PreferenceParser.parse(request);
+            const needsClar = PreferenceParser.needsClarification(preferences, 0);
+            expect(needsClar).toBeNull();
+        });
+        it('should generate clarification for low-confidence queries', () => {
+            const request = {
+                description: 'funny but dark with action and great acting'
+            };
+            const preferences = PreferenceParser.parse(request);
+            const clarification = PreferenceParser.needsClarification(preferences, 0);
+            expect(clarification).not.toBeNull();
+            if (clarification) {
+                expect(clarification.length).toBeGreaterThan(0);
+            }
+        });
+        it('should not require clarification on round > 0', () => {
+            const request = {
+                description: 'I want something fun'
+            };
+            const preferences = PreferenceParser.parse(request);
+            // Round 0: might need clarification
+            const shouldSkip = PreferenceParser.needsClarification(preferences, 1);
+            expect(shouldSkip).toBeNull();
+        });
+        it('should generate questions with proper types', () => {
+            const request = {
+                description: 'dark but funny with Tom Cruise'
+            };
+            const preferences = PreferenceParser.parse(request);
+            const clarification = PreferenceParser.needsClarification(preferences, 0);
+            if (clarification) {
+                expect(clarification.length).toBeGreaterThan(0);
+                clarification.forEach((q) => {
+                    expect(['select', 'text', 'boolean']).toContain(q.type);
+                    if (q.type === 'select') {
+                        expect(q.options).toBeDefined();
+                        expect(Array.isArray(q.options)).toBe(true);
+                    }
+                });
+            }
+        });
+    });
+    describe('Actor Extraction', () => {
+        it('should extract actors from "with X" format', () => {
+            const request = {
+                description: 'with Tom Hanks and Leonardo DiCaprio'
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.detectedActors?.length).toBeGreaterThan(0);
+            expect(preferences.detectedActors?.some((a) => a.toLowerCase().includes('tom'))).toBe(true);
+        });
+        it('should extract actors from "starring X" format', () => {
+            const request = {
+                description: 'starring Ryan Gosling in an action movie'
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.detectedActors?.length).toBeGreaterThan(0);
+        });
+        it('should handle multiple actors in query', () => {
+            const request = {
+                description: 'with Christopher Nolan directing and Tom Hardy starring'
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.detectedActors).toBeDefined();
+        });
+    });
+    describe('Confidence Scoring', () => {
+        it('should score intent confidence for single-signal queries', () => {
+            const request1 = {
+                description: 'cozy movies'
+            };
+            const preferences1 = PreferenceParser.parse(request1);
+            const request2 = {
+                description: 'with Brad Pitt'
+            };
+            const preferences2 = PreferenceParser.parse(request2);
+            expect(preferences1.intentConfidence).toBeLessThanOrEqual(1);
+            expect(preferences1.intentConfidence).toBeGreaterThanOrEqual(0);
+            expect(preferences2.intentConfidence).toBeLessThanOrEqual(1);
+            expect(preferences2.intentConfidence).toBeGreaterThanOrEqual(0);
+        });
+        it('should score lower for conflicting signals', () => {
+            const request = {
+                description: 'funny dark dramas with action and romance'
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect((preferences.intentConfidence || 0) < 0.75).toBe(true);
+        });
+    });
+    describe('Golden Prompt Guardrails', () => {
+        it('should keep actor plus mood queries talent-compatible', () => {
+            const request = {
+                description: 'Something funny with Ryan Gosling'
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.discoveryMode).toBe('talent');
+            expect((preferences.intentConfidence || 0)).toBeGreaterThanOrEqual(0.75);
+            expect(preferences.detectedActors?.length).toBeGreaterThan(0);
+            expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull();
+        });
+        it('should preserve reference intent for contrastive mood queries', () => {
+            const request = {
+                description: 'Like Inception but more relaxing'
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.discoveryMode).toBe('reference');
+            expect(preferences.isContrastiveReference).toBe(true);
+            expect(preferences.boostedMoods).toContain('Relaxing');
+            expect(preferences.reducedMoods).toContain('Intense');
+            expect((preferences.intentConfidence || 0)).toBeGreaterThanOrEqual(0.75);
+            expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull();
+        });
+        it('should classify cozy weekend requests as confident mood intent', () => {
+            const request = {
+                description: 'A cozy weekend movie'
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.discoveryMode).toBe('mood');
+            expect(preferences.contentType).toBe('movie');
+            expect(preferences.genres).not.toContain('Action');
+            expect(preferences.genres).toEqual(expect.arrayContaining(['Drama', 'Romance']));
+            expect((preferences.intentConfidence || 0)).toBeGreaterThanOrEqual(0.85);
+            expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull();
+        });
+        it('should treat indie novelty queries as recognized discovery intent', () => {
+            const request = {
+                description: 'Surprising indie gems'
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.noveltyIntent).toBe(true);
+            expect(preferences.genres).toContain('Indie');
+            expect((preferences.intentConfidence || 0)).toBeGreaterThanOrEqual(0.65);
+            expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull();
+        });
+        it('should infer tv content type from show-oriented wording', () => {
+            const request = {
+                description: 'A cozy weekend series'
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.contentType).toBe('tv');
+        });
+        it('should parse blockbuster refinement as mainstream popularity preference', () => {
+            const request = {
+                description: 'Like Inception but more relaxing',
+                clarificationContext: {
+                    clarificationRound: 1,
+                    userClarification: 'please prioritize blockbusters'
+                }
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.popularityPreference).toBe('mainstream');
+            expect(preferences.constraints).toContain('popularity:mainstream');
+        });
+        it('should parse decade refinement from cumulative constraints', () => {
+            const request = {
+                description: 'Like Blade Runner but warmer',
+                clarificationContext: {
+                    clarificationRound: 1,
+                    userClarification: 'show me movies from the 80s',
+                    cumulativeConstraints: ['prioritize blockbusters']
+                }
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.yearRange).toBeDefined();
+            expect(preferences.yearRange?.min).toBe(1980);
+            expect(preferences.yearRange?.max).toBe(1989);
+            expect(preferences.constraints).toContain('decade:1980s');
+            expect(preferences.constraints).toContain('popularity:mainstream');
+        });
+        it('should parse top-rated top-N refinement signals from follow-up context', () => {
+            const request = {
+                description: 'Something funny with Ryan Gosling',
+                clarificationContext: {
+                    clarificationRound: 1,
+                    userClarification: 'Show me the top 3 rated titles'
+                }
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.discoveryMode).toBe('talent');
+            expect(preferences.resultLimit).toBe(3);
+            expect(preferences.preferTopRated).toBe(true);
+            expect(preferences.constraints).toEqual(expect.arrayContaining(['top:3', 'sort:rating_desc']));
+        });
+        it('should avoid mixed disambiguation for clear refinement follow-ups', () => {
+            const request = {
+                description: 'Something funny with Ryan Gosling',
+                clarificationContext: {
+                    clarificationRound: 1,
+                    userClarification: 'Show me the top 3 rated titles'
+                }
+            };
+            const preferences = PreferenceParser.parse(request);
+            const clarification = PreferenceParser.needsClarification(preferences, 0, request.clarificationContext?.userClarification);
+            expect(clarification).toBeNull();
+        });
+        it('should use generic mixed disambiguation copy when novelty cue is absent', () => {
+            const request = {
+                description: 'funny but dark with action and great acting'
+            };
+            const preferences = PreferenceParser.parse(request);
+            const clarification = PreferenceParser.needsClarification(preferences, 0, request.description);
+            if (!clarification || clarification.length === 0) {
+                throw new Error('Expected a clarification question for low-confidence mixed intent');
+            }
+            expect(clarification[0].id).toBe('mixed_disambiguation');
+            expect(clarification[0].question).toBe('I can tune this a few ways. Which should I prioritise?');
+        });
+        it('should parse strategy selection as ranking preference without dropping talent anchor', () => {
+            const request = {
+                description: 'Something funny with Ryan Gosling',
+                clarificationContext: {
+                    clarificationRound: 1,
+                    userClarification: 'Go mood-first'
+                }
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.discoveryMode).toBe('talent');
+            expect(preferences.detectedActors).toEqual(expect.arrayContaining(['Ryan Gosling']));
+            expect(preferences.rankingStrategyPreference).toBe('mood_first');
+            expect(preferences.constraints).toContain('strategy:mood_first');
+        });
+        it('should parse cast-director strategy preference from clarification option text', () => {
+            const request = {
+                description: 'Something funny with Ryan Gosling',
+                clarificationContext: {
+                    clarificationRound: 1,
+                    userClarification: 'Go cast/director first'
+                }
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.rankingStrategyPreference).toBe('talent_first');
+            expect(preferences.constraints).toContain('strategy:talent_first');
+        });
+    });
+    describe('Turn Operation Classification', () => {
+        it('should classify tightening follow-ups as continue + narrow', () => {
+            const request = {
+                description: 'Like Inception but more relaxing',
+                clarificationContext: {
+                    clarificationRound: 1,
+                    userClarification: 'only movies from the 80s'
+                }
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.turnOperation).toBeDefined();
+            expect(preferences.turnOperation?.continuity).toBe('continue');
+            expect(preferences.turnOperation?.operation).toBe('narrow');
+            expect((preferences.turnOperation?.confidence || 0)).toBeGreaterThan(0.5);
+        });
+        it('should classify broadening follow-ups as continue + widen', () => {
+            const request = {
+                description: 'Like Inception but more relaxing',
+                clarificationContext: {
+                    clarificationRound: 1,
+                    userClarification: 'I am open to either movies or series and no preference on era'
+                }
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.turnOperation).toBeDefined();
+            expect(preferences.turnOperation?.continuity).toBe('continue');
+            expect(preferences.turnOperation?.operation).toBe('widen');
+        });
+        it('should classify explicit replacement follow-ups as hard pivot + replace', () => {
+            const request = {
+                description: 'Like Inception but more relaxing',
+                clarificationContext: {
+                    clarificationRound: 1,
+                    userClarification: 'actually forget that, switch to horror instead'
+                }
+            };
+            const preferences = PreferenceParser.parse(request);
+            expect(preferences.turnOperation).toBeDefined();
+            expect(preferences.turnOperation?.continuity).toBe('hard_pivot');
+            expect(preferences.turnOperation?.operation).toBe('replace');
+            expect(preferences.turnOperation?.rationaleTags).toEqual(expect.arrayContaining(['hard_pivot_cue', 'replace_cue']));
+        });
+    });
+});
