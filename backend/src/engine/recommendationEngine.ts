@@ -2,7 +2,6 @@ import { fmdbClient } from '../clients/fmdb.js'
 import { llmClient } from '../clients/llm.js'
 import { streamingClient } from '../clients/streaming.js'
 import { tmdbClient } from '../clients/tmdb.js'
-import { ContentSafetyFilter } from '../filters/contentSafety.js'
 import { PreferenceParser, ParsedPreferences, RecommendationRequest, DiscoveryMode } from './preferenceParser.js'
 import { TalentMatcher } from './talentMatcher.js'
 import { RankingScorer, ScoringFactors } from './rankingScorer.js'
@@ -81,7 +80,10 @@ export class RecommendationEngine {
     searchTerms: string[],
     typeFilter?: 'movie' | 'series',
     discoveryMode?: DiscoveryMode,
-    preferredGenres: string[] = []
+    preferredGenres: string[] = [],
+    keywords: string[] = [],
+    excludedGenres: string[] = [],
+    yearRange?: ParsedPreferences['yearRange']
   ): Promise<any[]> {
     if (!tmdbClient.isEnabled()) {
       return []
@@ -92,7 +94,7 @@ export class RecommendationEngine {
 
     const shouldUseGenreDiscover =
       preferredGenres.length > 0 &&
-      (discoveryMode === 'mood' || discoveryMode === 'reference' || discoveryMode === 'mixed')
+      (discoveryMode === 'mood' || discoveryMode === 'reference' || discoveryMode === 'mixed' || discoveryMode === 'talent')
 
     const tmdbResultSets: any[][] = []
 
@@ -102,11 +104,25 @@ export class RecommendationEngine {
         {
           includeMovies,
           includeTV,
-          excludeAdult: true
+          excludeAdult: true,
+          excludedGenres,
+          yearRange
         }
       )
       tmdbResultSets.push(discoverResults)
       console.log(`[Engine] TMDB genre discovery yielded ${discoverResults.length} titles`)
+    }
+
+    if (keywords.length > 0) {
+      const keywordResults = await tmdbClient.discoverByKeywords(keywords, {
+        includeMovies,
+        includeTV,
+        excludeAdult: true,
+        excludedGenres,
+        yearRange
+      })
+      tmdbResultSets.push(keywordResults)
+      console.log(`[Engine] TMDB keyword discovery yielded ${keywordResults.length} titles`)
     }
 
     if (searchTerms.length > 0) {
@@ -201,7 +217,7 @@ export class RecommendationEngine {
       poster: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : undefined,
       rating: item.vote_average || undefined,
       plot: item.overview || undefined,
-      genres: tmdbClient.mapGenreIdsToNames(item.genre_ids || []),
+      genres: tmdbClient.mapGenreIdsToNames(item.genre_ids || [], mediaType),
       originalLanguage: item.original_language || undefined,
       runtimeMinutes: item.runtime || undefined,
       rated: undefined,
@@ -231,18 +247,31 @@ export class RecommendationEngine {
     searchTerms: string[],
     typeFilter?: 'movie' | 'series',
     discoveryMode?: DiscoveryMode,
-    preferredGenres: string[] = []
+    preferredGenres: string[] = [],
+    keywords: string[] = [],
+    excludedGenres: string[] = [],
+    yearRange?: ParsedPreferences['yearRange']
   ): Promise<{ results: any[]; source: 'tmdb' | 'omdb' }> {
-    if (searchTerms.length === 0) {
+    if (searchTerms.length === 0 && preferredGenres.length === 0 && keywords.length === 0) {
       return { results: [], source: tmdbClient.isEnabled() ? 'tmdb' : 'omdb' }
     }
+
+    const fallbackTerms = this.normalizeSearchTerms(
+      searchTerms.length > 0
+        ? [...searchTerms, ...keywords]
+        : [...keywords, ...preferredGenres],
+      RecommendationEngine.BACKFILL_SEARCH_TERM_LIMIT
+    )
 
     if (tmdbClient.isEnabled()) {
       const results = await this.searchWithTmdbPrimary(
         searchTerms,
         typeFilter,
         discoveryMode,
-        preferredGenres
+        preferredGenres,
+        keywords,
+        excludedGenres,
+        yearRange
       )
       if (results.length > 0) {
         console.log(`[Engine] Found ${results.length} raw results from TMDB`)
@@ -250,12 +279,12 @@ export class RecommendationEngine {
       }
 
       console.log('[Engine] TMDB returned no results; falling back to FM-DB')
-      const omdbFallbackResults = await this.searchWithOmdbFallback(searchTerms, typeFilter)
+      const omdbFallbackResults = await this.searchWithOmdbFallback(fallbackTerms, typeFilter)
       console.log(`[Engine] Found ${omdbFallbackResults.length} raw results from FM-DB`)
       return { results: omdbFallbackResults, source: 'omdb' }
     }
 
-    const results = await this.searchWithOmdbFallback(searchTerms, typeFilter)
+    const results = await this.searchWithOmdbFallback(fallbackTerms, typeFilter)
     console.log(`[Engine] Found ${results.length} raw results from FM-DB`)
     return { results, source: 'omdb' }
   }
@@ -272,15 +301,7 @@ export class RecommendationEngine {
       extras.add(actor)
     }
 
-    for (const genre of preferences.genres || []) {
-      extras.add(genre)
-    }
-
-    for (const mood of preferences.mood || []) {
-      extras.add(mood)
-    }
-
-    for (const term of this.extractSearchTerms(query, preferences.genres, RecommendationEngine.SEARCH_TERM_LIMIT * 2)) {
+    for (const term of this.extractSearchTerms(query, [], RecommendationEngine.SEARCH_TERM_LIMIT * 2)) {
       extras.add(term)
     }
 
@@ -416,7 +437,7 @@ export class RecommendationEngine {
           const originalLanguage = title.originalLanguage || details?.original_language
           const genres = (title.genres && title.genres.length > 0)
             ? title.genres
-            : tmdbClient.mapGenreIdsToNames(details?.genre_ids || [])
+            : tmdbClient.mapGenreIdsToNames(details?.genre_ids || [], title.tmdbMediaType === 'tv' ? 'tv' : 'movie')
           const mainCast = (title.mainCast && title.mainCast.length > 0)
             ? title.mainCast
             : credits.mainCast
@@ -453,7 +474,7 @@ export class RecommendationEngine {
         const originalLanguage = title.originalLanguage || details?.original_language
         const genres = (title.genres && title.genres.length > 0)
           ? title.genres
-          : tmdbClient.mapGenreIdsToNames(details?.genre_ids || [])
+          : tmdbClient.mapGenreIdsToNames(details?.genre_ids || [], mediaType)
         const mainCast = (title.mainCast && title.mainCast.length > 0)
           ? title.mainCast
           : credits.mainCast
@@ -497,9 +518,18 @@ export class RecommendationEngine {
       console.log(`[Engine] Clarification round ${request.clarificationContext.clarificationRound}`)
     }
 
-    // Parse preferences with rule-based parser
-    const preferences = PreferenceParser.parse(request)
-    console.log(`[Engine] Rule-based parsing: ${PreferenceParser.explain(preferences)}`)
+    let llmPreferences
+    const analysisText = PreferenceParser.buildAnalysisText(request)
+    if (llmClient.isEnabled() && analysisText.trim()) {
+      try {
+        llmPreferences = await llmClient.parsePreferences(analysisText)
+      } catch {
+        console.warn('[Engine] LLM parsing failed, using rule-based fallback')
+      }
+    }
+
+    const preferences = PreferenceParser.parse(request, llmPreferences || undefined)
+    console.log(`[Engine] Parsed preferences: ${PreferenceParser.explain(preferences)}`)
     
     // Phase 5: Log intent classification
     if (preferences.discoveryMode && preferences.intentConfidence !== undefined) {
@@ -526,79 +556,56 @@ export class RecommendationEngine {
       console.log(`[Engine] Resolved ${referenceTitles.length} reference titles`)
     }
 
-    // Enhance with LLM if available
-    if (llmClient.isEnabled() && request.description) {
-      try {
-        const llmPrefs = await llmClient.parsePreferences(request.description)
-        if (llmPrefs) {
-          // Merge LLM preferences with rule-based ones
-          if (llmPrefs.genres.length > 0) {
-            preferences.genres = [...new Set([...preferences.genres, ...llmPrefs.genres])]
-          }
-          if (llmPrefs.mood.length > 0) {
-            preferences.mood = [...new Set([...preferences.mood, ...llmPrefs.mood])]
-          }
-          if (llmPrefs.keywords.length > 0) {
-            // Use LLM keywords for search
-            console.log(`[Engine] LLM enhanced: +${llmPrefs.keywords.length} keywords`)
-          }
-          console.log(`[Engine] Enhanced preferences: ${PreferenceParser.explain(preferences)}`)
-        }
-      } catch (error) {
-        console.warn('[Engine] LLM parsing failed, using rule-based only')
-      }
-    }
-
     // Keep parser-combined description (base query + clarification context) for downstream ranking.
 
     // === PHASE 5: Mode-aware search strategy ===
     let searchTerms: string[] = []
     
     if (preferences.discoveryMode === 'talent' && preferences.detectedActors && preferences.detectedActors.length > 0) {
-      // Talent mode: search by actor names + broader genre/mood terms
       searchTerms = [...preferences.detectedActors]
-      // Also add genre/mood keywords for additional results
-      if (preferences.genres && preferences.genres.length > 0) {
-        searchTerms.push(...preferences.genres.slice(0, 2))
-      }
-      if (preferences.mood && preferences.mood.length > 0) {
-        searchTerms.push(...preferences.mood.slice(0, 1))
-      }
-      console.log(`[Engine] Talent mode: searching for actors + genres`)
+      console.log(`[Engine] Talent mode: searching for actor anchors`)
     } else if (preferences.discoveryMode === 'reference' && preferences.referenceTitle && preferences.referenceTitle.length > 0) {
       // Reference mode: fetches anchor metadata separately; search alternatives by genres/mood.
       searchTerms = []
-      const referenceGenres = this.deriveReferenceGenres(referenceTitles)
-      if (referenceGenres.length > 0) {
-        searchTerms.push(...referenceGenres.slice(0, 2))
-      }
-      if (preferences.genres && preferences.genres.length > 0) {
-        searchTerms.push(...preferences.genres.filter(genre => !searchTerms.includes(genre)).slice(0, 2))
-      }
-      if (preferences.mood && preferences.mood.length > 0) {
-        searchTerms.push(...preferences.mood.slice(0, 2))
-      }
-      if (searchTerms.length === 0) {
-        searchTerms = ['Drama', 'Thriller']
-      }
-      console.log(`[Engine] Reference mode: searching alternatives by genres/mood`)
+      console.log(`[Engine] Reference mode: discovering alternatives by genres and keywords`)
     } else if (preferences.discoveryMode === 'mood') {
-      // Mood mode: broaden genre search, include all detected genres
-      searchTerms = preferences.genres && preferences.genres.length > 0
-        ? [...preferences.genres]
-        : ['Drama', 'Comedy']  // Safe defaults
-      // Also search by mood keywords
-      if (preferences.mood && preferences.mood.length > 0) {
-        searchTerms.push(...preferences.mood.slice(0, 2))
-      }
-      console.log(`[Engine] Mood mode: broad genre + mood search`)
+      searchTerms = []
+      console.log(`[Engine] Mood mode: discovering by genre and keyword signals`)
     } else {
       // Mixed or default: extract from description + use explicit genres
-      searchTerms = this.extractSearchTerms(request.description, preferences.genres)
+      searchTerms = this.extractSearchTerms(request.description, [])
       console.log(`[Engine] Mixed/default mode: extracted search terms`)
     }
 
     searchTerms = this.normalizeSearchTerms(searchTerms)
+
+    const moodKeywordHints: Record<string, string[]> = {
+      Relaxing: ['cozy', 'feel-good', 'comfort'],
+      Happy: ['feel-good', 'uplifting'],
+      Funny: ['comedy', 'humor', 'witty'],
+      Thoughtful: ['thought-provoking', 'philosophical'],
+      Intense: ['suspense', 'high stakes'],
+      Dark: ['dark', 'gritty'],
+      Romantic: ['romance', 'love'],
+      Suspenseful: ['suspense', 'mystery'],
+      Surprising: ['unexpected', 'unusual']
+    }
+    const discoveryKeywords = Array.from(new Set([
+      ...(preferences.keywords || []),
+      ...(preferences.mood || []).flatMap(mood => moodKeywordHints[mood] || []),
+      ...(preferences.noveltyIntent ? ['independent', 'indie film', 'hidden gem', 'offbeat'] : [])
+    ]))
+
+    if (!tmdbClient.isEnabled() && searchTerms.length === 0) {
+      const fallbackTerms = [
+        ...discoveryKeywords.slice(0, 2),
+        ...this.deriveReferenceGenres(referenceTitles).slice(0, 2)
+      ]
+      searchTerms = this.normalizeSearchTerms(
+        fallbackTerms.length > 0 ? fallbackTerms : this.extractSearchTerms(request.description, []),
+        RecommendationEngine.SEARCH_TERM_LIMIT
+      )
+    }
 
     console.log(`[Engine] Search terms: ${searchTerms.join(', ')}`)
 
@@ -710,7 +717,14 @@ export class RecommendationEngine {
     }
 
     // On refinement turns, prefer re-ranking prior results before broad retrieval.
-    if (!useBlockbusterPaging && !useCriticsYearProxy && shouldReusePreviousCandidates && previousCandidates.length >= limit) {
+    const hasActorAnchor = (preferences.detectedActors?.length || 0) > 0
+    if (
+      !useBlockbusterPaging &&
+      !useCriticsYearProxy &&
+      shouldReusePreviousCandidates &&
+      previousCandidates.length >= limit &&
+      !hasActorAnchor
+    ) {
       candidates = [...previousCandidates]
       console.log('[Engine] Reuse mode: skipping broad retrieval (sufficient prior candidates)')
     } else if (!useBlockbusterPaging && !useCriticsYearProxy) {
@@ -718,7 +732,10 @@ export class RecommendationEngine {
         searchTerms,
         typeFilter,
         preferences.discoveryMode,
-        preferences.genres || []
+        preferences.genres || [],
+        discoveryKeywords,
+        preferences.excludedGenres || [],
+        preferences.yearRange
       )
       if (searched.source === 'tmdb') {
         diagnostics.usedTmdb = true
@@ -747,7 +764,10 @@ export class RecommendationEngine {
           backfillTerms,
           typeFilter,
           preferences.discoveryMode,
-          preferences.genres || []
+          preferences.genres || [],
+          discoveryKeywords,
+          preferences.excludedGenres || [],
+          preferences.yearRange
         )
         if (backfill.source === 'tmdb') {
           diagnostics.usedTmdb = true
@@ -806,7 +826,7 @@ export class RecommendationEngine {
             `[Engine] Mainstream fallback: added ${convertedMainstream.length} trending TMDB candidates`
           )
         }
-      } catch (error) {
+      } catch {
         console.warn('[Engine] Mainstream fallback fetch failed')
       }
     }
@@ -930,7 +950,7 @@ export class RecommendationEngine {
         if (llmExplanations.size > 0) {
           console.log(`[Engine] Generated ${llmExplanations.size} LLM explanations with enhanced context`)
         }
-      } catch (error) {
+      } catch {
         console.warn('[Engine] LLM explanation generation failed, using fallback')
       }
     }
@@ -974,7 +994,7 @@ export class RecommendationEngine {
             trailerData.set(item.id, `https://www.youtube.com/watch?v=${videos[0].key}`)
           }
         }
-      } catch (error) {
+      } catch {
         console.warn('[Engine] Trailer fetch failed')
       }
     }
@@ -987,8 +1007,7 @@ export class RecommendationEngine {
         request.description, 
         llmExplanations,
         availabilityData,
-        trailerData,
-        referenceTitles
+        trailerData
       )
     )
   }
@@ -1098,7 +1117,16 @@ export class RecommendationEngine {
    * Infer core genres from query to enforce as hard filters
    * E.g., if query contains "heist", REQUIRE Crime/Thriller (not optional)
    */
-  private inferCoreGenres(query: string, parsedGenres: string[], referenceTitles: any[] = []): string[] {
+  private inferCoreGenres(
+    query: string,
+    parsedGenres: string[],
+    referenceTitles: any[] = [],
+    inferredGenresFromMood = false,
+    excludedGenres: string[] = []
+  ): string[] {
+    const removeExcludedGenres = (genres: string[]) => genres.filter(genre =>
+      !excludedGenres.some(excluded => excluded.toLowerCase() === genre.toLowerCase())
+    )
     // Check query for specific genre keywords
     const queryLower = query.toLowerCase()
 
@@ -1130,16 +1158,15 @@ export class RecommendationEngine {
 
     // If we found required genres from keywords, use those (strict enforcement)
     if (requiredGenres.length > 0) {
-      return Array.from(new Set(requiredGenres))
+      return removeExcludedGenres(Array.from(new Set(requiredGenres)))
     }
 
     const referenceGenres = this.deriveReferenceGenres(referenceTitles)
     if (referenceGenres.length > 0) {
-      return referenceGenres
+      return removeExcludedGenres(referenceGenres)
     }
 
-    // Otherwise, fall back to parsed genres as soft preferences
-    return parsedGenres
+    return removeExcludedGenres(inferredGenresFromMood ? [] : parsedGenres)
   }
 
   /**
@@ -1153,7 +1180,9 @@ export class RecommendationEngine {
     const coreGenres = this.inferCoreGenres(
       preferences.description || '',
       preferences.genres,
-      referenceTitles
+      referenceTitles,
+      preferences.inferredGenresFromMood,
+      preferences.excludedGenres || []
     )
 
     // Check if query is heist-specific to enable semantic filtering
@@ -1212,20 +1241,30 @@ export class RecommendationEngine {
       }
     }
 
-    // Apply strict year filtering for explicit single-year intents (e.g., "from 2025").
-    if (
-      preferences.yearRange?.min !== undefined &&
-      preferences.yearRange?.max !== undefined &&
-      preferences.yearRange.min === preferences.yearRange.max
-    ) {
-      const targetYear = preferences.yearRange.min
+    if (preferences.excludedGenres?.length) {
       const beforeCount = filtered.length
-      filtered = filtered.filter(t => Number(t.year) === targetYear)
+      filtered = filtered.filter(title => {
+        const titleGenres = (title.genres || []).map((genre: string) => genre.toLowerCase())
+        return !preferences.excludedGenres!.some(excluded =>
+          titleGenres.includes(excluded.toLowerCase())
+        )
+      })
+      if (filtered.length < beforeCount) {
+        console.log(`[Engine.Rank] Excluded ${beforeCount - filtered.length} titles by genre`)
+      }
+    }
+
+    if (preferences.yearRange?.min !== undefined || preferences.yearRange?.max !== undefined) {
+      const beforeCount = filtered.length
+      filtered = filtered.filter(title => {
+        const year = Number(title.year)
+        if (!Number.isFinite(year)) return false
+        return (preferences.yearRange?.min === undefined || year >= preferences.yearRange.min) &&
+          (preferences.yearRange?.max === undefined || year <= preferences.yearRange.max)
+      })
 
       if (beforeCount !== filtered.length) {
-        console.log(
-          `[Engine.Rank] Strict year filter (${targetYear}) removed ${beforeCount - filtered.length} titles`
-        )
+        console.log(`[Engine.Rank] Year-range filter removed ${beforeCount - filtered.length} titles`)
       }
     }
 
@@ -1268,31 +1307,6 @@ export class RecommendationEngine {
         }
       }
     }
-
-    // === PHASE 3.2: Exclusion Genre Penalty ===
-    // Track exclusion penalties before scoring
-    const exclusionPenalties = new Map<string, number>()
-
-    filtered.forEach(t => {
-      let penalty = 1.0 // No penalty by default
-
-      if (preferences.excludedGenres && preferences.excludedGenres.length > 0) {
-        const titleGenres = (t.genres || []).map((g: string) => g.toLowerCase())
-        const hasExcluded = titleGenres.some((tg: string) =>
-          preferences.excludedGenres!.some(eg => eg.toLowerCase() === tg.toLowerCase())
-        )
-
-        if (hasExcluded) {
-          // Heavy penalty: reduce composite score to 30% of original
-          penalty = 0.3
-          console.log(
-            `[Engine.Rank] Exclusion penalty 0.3x: "${t.title}" has excluded genres [${(t.genres || []).join(', ')}]`
-          )
-        }
-      }
-
-      exclusionPenalties.set(t.id, penalty)
-    })
 
     // === PHASE 3.3: Multi-Factor Scoring ===
     // Use multi-factor ranking scorer on hard-filtered list
@@ -1353,16 +1367,16 @@ export class RecommendationEngine {
 
     if (preferences.preferTopRated) {
       const baseWeights = scoringConfig?.weights || RankingScorer.getWeightsForMode('mixed').weights
-      scoringConfig
-        ? Object.assign(scoringConfig.weights, {
-            genre: Math.max(0.1, baseWeights.genre * 0.6),
-            mood: Math.max(0.08, baseWeights.mood * 0.6),
-            talent: Math.max(preferences.discoveryMode === 'talent' ? 0.2 : 0.08, baseWeights.talent * 0.6),
-            rating: 0.5,
-            popularity: Math.max(0.05, baseWeights.popularity * 0.6),
-            recency: Math.max(0.03, baseWeights.recency * 0.6)
-          })
-        : undefined
+      if (scoringConfig) {
+        Object.assign(scoringConfig.weights, {
+          genre: Math.max(0.1, baseWeights.genre * 0.6),
+          mood: Math.max(0.08, baseWeights.mood * 0.6),
+          talent: Math.max(preferences.discoveryMode === 'talent' ? 0.2 : 0.08, baseWeights.talent * 0.6),
+          rating: 0.5,
+          popularity: Math.max(0.05, baseWeights.popularity * 0.6),
+          recency: Math.max(0.03, baseWeights.recency * 0.6)
+        })
+      }
     }
 
     if (preferences.criticsIntent) {
@@ -1414,10 +1428,7 @@ export class RecommendationEngine {
 
     const ranked = RankingScorer.rankTitles(filtered, preferences, scoringConfig)
 
-    // === PHASE 3.4: Apply Exclusion Penalties to Composite Scores ===
-    // Reduce composite score for titles with excluded genres
-    const penalizedRanked = ranked.map(r => {
-      const penalty = exclusionPenalties.get(r.id) || 1.0
+    const adjustedRanked = ranked.map(r => {
       const moodShiftMultiplier = this.calculateMoodShiftMultiplier(r, preferences)
       const refinementMultiplier = this.calculateRefinementMultiplier(r, preferences)
       return {
@@ -1426,14 +1437,13 @@ export class RecommendationEngine {
           ...r.scoringFactors,
           composite: Math.max(
             0,
-            r.scoringFactors.composite * penalty * moodShiftMultiplier * refinementMultiplier
+            r.scoringFactors.composite * moodShiftMultiplier * refinementMultiplier
           )
         }
       }
     })
 
-    // Re-sort after applying penalties
-    const resorted = penalizedRanked.sort(
+    const resorted = adjustedRanked.sort(
       (a, b) => b.scoringFactors.composite - a.scoringFactors.composite
     )
 
@@ -1553,8 +1563,7 @@ export class RecommendationEngine {
     userDescription: string,
     llmExplanations?: Map<string, string>,
     availabilityData?: Map<string, StreamingAvailability[]>,
-    trailerData?: Map<string, string>,
-    referenceTitles?: any[]
+    trailerData?: Map<string, string>
   ): Recommendation {
     const type = item.type === 'series' ? 'tv' : 'movie'
     const year = item.year?.toString() || 'N/A'

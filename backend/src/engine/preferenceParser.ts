@@ -36,9 +36,23 @@ export interface IntentClassification {
   }>
 }
 
+export interface LLMPreferenceHints {
+  genres?: string[]
+  mood?: string[]
+  contentType?: 'movie' | 'tv' | 'both'
+  maxRating?: string
+  keywords?: string[]
+  referenceTitles?: string[]
+  actors?: string[]
+  excludedGenres?: string[]
+  yearRange?: { min?: number; max?: number }
+}
+
 export interface ParsedPreferences {
   genres: string[]
+  inferredGenresFromMood?: boolean
   mood: string[]
+  keywords?: string[]
   contentType: 'movie' | 'tv' | 'both'
   maxRating: string
   yearRange?: {
@@ -198,20 +212,20 @@ export class PreferenceParser {
 
   // Patterns for extracting reference titles
   private static readonly REFERENCE_PATTERNS = [
-    /like\s+(?:['""])?([a-zA-Z0-9\s&:'"-]+?)(?:['""])?(?:\s|$)/gi,
-    /similar\s+to\s+(?:['""])?([a-zA-Z0-9\s&:'"-]+?)(?:['""])?(?:\s|$)/gi,
-    /reminds?\s+me\s+of\s+(?:['""])?([a-zA-Z0-9\s&:'"-]+?)(?:['""])?(?:\s|$)/gi,
-    /in\s+the\s+style\s+of\s+(?:['""])?([a-zA-Z0-9\s&:'"-]+?)(?:['""])?(?:\s|$)/gi,
-    /vibes\s+of\s+(?:['""])?([a-zA-Z0-9\s&:'"-]+?)(?:['""])?(?:\s|$)/gi
+    /like\s+['"]?([a-zA-Z0-9][a-zA-Z0-9\s&:'"-]*?)(?:['"])?(?=\s+(?:but|with|without|instead|rather\s+than|not\s+as)\b|[,.;!?]|$)/gi,
+    /similar\s+to\s+['"]?([a-zA-Z0-9][a-zA-Z0-9\s&:'"-]*?)(?:['"])?(?=\s+(?:but|with|without|instead|rather\s+than|not\s+as)\b|[,.;!?]|$)/gi,
+    /reminds?\s+me\s+of\s+['"]?([a-zA-Z0-9][a-zA-Z0-9\s&:'"-]*?)(?:['"])?(?=\s+(?:but|with|without|instead|rather\s+than|not\s+as)\b|[,.;!?]|$)/gi,
+    /in\s+the\s+style\s+of\s+['"]?([a-zA-Z0-9][a-zA-Z0-9\s&:'"-]*?)(?:['"])?(?=\s+(?:but|with|without|instead|rather\s+than|not\s+as)\b|[,.;!?]|$)/gi,
+    /vibes\s+of\s+['"]?([a-zA-Z0-9][a-zA-Z0-9\s&:'"-]*?)(?:['"])?(?=\s+(?:but|with|without|instead|rather\s+than|not\s+as)\b|[,.;!?]|$)/gi
   ]
 
   // Patterns for extracting exclusions
   private static readonly EXCLUSION_PATTERNS = [
-    /no\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
-    /avoid\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
-    /not\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
-    /without\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
-    /hate\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
+    /\bno\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
+    /\bavoid\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
+    /\bnot\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
+    /\bwithout\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
+    /\bhate\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi,
     /(?:^|[\s,])(?:don't|do\s+not)\s+want\s+([a-zA-Z][\w-]*(?:\s+[a-zA-Z][\w-]*)?)/gi
   ]
 
@@ -323,13 +337,18 @@ export class PreferenceParser {
    */
   private static extractReferenceTitle(description: string): string[] {
     const references: string[] = []
+    const nonTitlePhrases = new Set(['something', 'anything', 'a movie', 'a show', 'a film'])
 
     for (const pattern of this.REFERENCE_PATTERNS) {
       let match
       while ((match = pattern.exec(description)) !== null) {
         const title = match[1].trim()
         // Filter out very short matches (likely false positives)
-        if (title.length > 2) {
+        if (
+          title.length > 2 &&
+          !nonTitlePhrases.has(title.toLowerCase()) &&
+          !/^(something|anything|a movie|a show|a film)\b/i.test(title)
+        ) {
           references.push(title)
         }
       }
@@ -386,7 +405,7 @@ export class PreferenceParser {
     const detected = new Set<string>()
 
     for (const [genre, keywords] of Object.entries(this.GENRE_KEYWORDS)) {
-      if (keywords.some(keyword => normalized.includes(keyword))) {
+      if (keywords.some(keyword => this.containsPhrase(normalized, keyword))) {
         detected.add(genre)
       }
     }
@@ -398,6 +417,48 @@ export class PreferenceParser {
     }
 
     return Array.from(detected)
+  }
+
+  private static containsPhrase(text: string, phrase: string): boolean {
+    const escapedPhrase = phrase
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/\s+/g, '\\s+')
+
+    return new RegExp(`\\b${escapedPhrase}\\b`, 'i').test(text)
+  }
+
+  private static normalizeGenres(genres: string[]): string[] {
+    const canonicalGenres = new Map([
+      ['action', 'Action'], ['adventure', 'Adventure'], ['animation', 'Animation'],
+      ['comedy', 'Comedy'], ['crime', 'Crime'], ['documentary', 'Documentary'],
+      ['drama', 'Drama'], ['family', 'Family'], ['fantasy', 'Fantasy'],
+      ['history', 'History'], ['horror', 'Horror'], ['indie', 'Indie'],
+      ['music', 'Music'], ['mystery', 'Mystery'], ['romance', 'Romance'],
+      ['sci-fi', 'Sci-Fi'], ['science fiction', 'Sci-Fi'], ['science-fiction', 'Sci-Fi'],
+      ['thriller', 'Thriller'], ['war', 'War'], ['western', 'Western']
+    ])
+
+    return Array.from(new Set(
+      genres
+        .map(genre => canonicalGenres.get(genre.trim().toLowerCase()))
+        .filter((genre): genre is string => Boolean(genre))
+    ))
+  }
+
+  private static normalizeMoods(moods: string[]): string[] {
+    const canonicalMoods = new Map([
+      ['happy', 'Happy'], ['uplifting', 'Happy'], ['feel-good', 'Happy'],
+      ['sad', 'Sad'], ['intense', 'Intense'], ['relaxing', 'Relaxing'], ['cozy', 'Relaxing'],
+      ['funny', 'Funny'], ['comedy', 'Funny'], ['thoughtful', 'Thoughtful'],
+      ['dark', 'Dark'], ['romantic', 'Romantic'], ['suspenseful', 'Suspenseful'],
+      ['scary', 'Suspenseful'], ['surprising', 'Surprising']
+    ])
+
+    return Array.from(new Set(
+      moods
+        .map(mood => canonicalMoods.get(mood.trim().toLowerCase()))
+        .filter((mood): mood is string => Boolean(mood))
+    ))
   }
 
   /**
@@ -412,13 +473,13 @@ export class PreferenceParser {
 
     for (const [mood, keywords] of Object.entries(this.MOOD_KEYWORDS)) {
       // Check if any mood keyword matches
-      const matchedKeyword = keywords.find(keyword => descLower.includes(keyword))
+      const matchedKeyword = keywords.find(keyword => this.containsPhrase(descLower, keyword))
       if (!matchedKeyword) continue
 
       // Base confidence from exact keyword match
-      let baseConfidence =
-        descLower.includes(mood.toLowerCase()) ? 0.9 : // Direct mood name match
-        keywords.some(kw => descLower.includes(kw)) ? 0.8 : // Keyword match
+      const baseConfidence =
+        this.containsPhrase(descLower, mood.toLowerCase()) ? 0.9 : // Direct mood name match
+        keywords.some(kw => this.containsPhrase(descLower, kw)) ? 0.8 : // Keyword match
         0.7 // Fallback
 
       // Look for intensity modifiers around the keyword
@@ -452,7 +513,7 @@ export class PreferenceParser {
    * Parse user request into structured preferences
    * Combines rule-based extraction with optional LLM enhancement
    */
-  static parse(request: RecommendationRequest): ParsedPreferences {
+  static parse(request: RecommendationRequest, llmHints?: LLMPreferenceHints): ParsedPreferences {
     const analysisText = this.buildAnalysisText(request)
     const description = analysisText.toLowerCase()
 
@@ -472,7 +533,7 @@ export class PreferenceParser {
     }
 
     // === PHASE 1 STEP 1.2: Extract reference titles ===
-    preferences.referenceTitle = this.extractReferenceTitle(description)
+    preferences.referenceTitle = this.extractReferenceTitle(analysisText)
 
     // === PHASE 1 STEP 1.4: Extract excluded preferences ===
     const { excludedGenres, constraints } = this.extractExcludedPreferences(description)
@@ -496,6 +557,7 @@ export class PreferenceParser {
     // === Override with explicit preferences ===
     if (request.preferences?.genres && request.preferences.genres.length > 0) {
       preferences.genres = request.preferences.genres
+      preferences.inferredGenresFromMood = false
     }
 
     if (request.preferences?.mood && request.preferences.mood.length > 0) {
@@ -516,6 +578,59 @@ export class PreferenceParser {
       preferences.genres = preferences.genres.filter(
         g => !preferences.excludedGenres!.includes(g)
       )
+    }
+
+    if (llmHints) {
+      const llmGenres = this.normalizeGenres(llmHints.genres || [])
+      const explicitGenres = this.normalizeGenres(request.preferences?.genres || [])
+      if (llmGenres.length > 0) {
+        preferences.genres = llmGenres
+        preferences.inferredGenresFromMood = false
+      }
+      preferences.genres = Array.from(new Set([...preferences.genres, ...explicitGenres]))
+
+      const llmMoods = this.normalizeMoods(llmHints.mood || [])
+      const explicitMoods = this.normalizeMoods(request.preferences?.mood || [])
+      if (llmMoods.length > 0) {
+        preferences.mood = llmMoods
+        preferences.moodStrength = new Map(llmMoods.map(mood => [mood, 1.0]))
+      }
+      if (explicitMoods.length > 0) {
+        preferences.mood = Array.from(new Set([...preferences.mood, ...explicitMoods]))
+        preferences.moodStrength = new Map(preferences.mood.map(mood => [mood, 1.0]))
+      }
+
+      if (llmHints.contentType && llmHints.contentType !== 'both' && !request.preferences?.contentType) {
+        preferences.contentType = llmHints.contentType
+      }
+      if (llmHints.maxRating && !request.preferences?.maxRating) {
+        preferences.maxRating = llmHints.maxRating
+      }
+
+      const llmReferences = (llmHints.referenceTitles || []).map(title => title.trim()).filter(Boolean)
+      if (llmReferences.length > 0 && !(request.preferences?.referenceTitle?.length)) {
+        preferences.referenceTitle = Array.from(new Set([...(preferences.referenceTitle || []), ...llmReferences]))
+      }
+
+      const llmExcludedGenres = this.normalizeGenres(llmHints.excludedGenres || [])
+      preferences.excludedGenres = Array.from(new Set([
+        ...(preferences.excludedGenres || []),
+        ...llmExcludedGenres
+      ]))
+      preferences.genres = preferences.genres.filter(
+        genre => !preferences.excludedGenres?.some(excluded => excluded.toLowerCase() === genre.toLowerCase())
+      )
+
+      const keywords = (llmHints.keywords || []).map(keyword => keyword.trim()).filter(Boolean)
+      preferences.keywords = Array.from(new Set(keywords))
+
+      if (
+        llmHints.yearRange &&
+        (llmHints.yearRange.min !== undefined || llmHints.yearRange.max !== undefined) &&
+        !preferences.yearRange
+      ) {
+        preferences.yearRange = llmHints.yearRange
+      }
     }
 
     // Track comparative/contrastive constraints for reference-style prompts.
@@ -600,7 +715,11 @@ export class PreferenceParser {
     }
 
     // === PHASE 5: Extract actors and classify intent ===
-    preferences.detectedActors = this.extractActors(analysisText)
+    const llmActors = (llmHints?.actors || []).map(actor => actor.trim()).filter(Boolean)
+    preferences.detectedActors = Array.from(new Set([
+      ...this.extractActors(analysisText),
+      ...llmActors
+    ]))
     const intentClassification = this.classifyIntent(
       preferences.referenceTitle || [],
       preferences.detectedActors || [],
@@ -625,6 +744,7 @@ export class PreferenceParser {
       !this.isClearRefinementRequest(preferences)
     ) {
       preferences.genres = this.inferFallbackGenresFromMood(preferences)
+      preferences.inferredGenresFromMood = true
     }
 
     return preferences
@@ -718,7 +838,7 @@ export class PreferenceParser {
     }
   }
 
-  private static buildAnalysisText(request: RecommendationRequest): string {
+  static buildAnalysisText(request: RecommendationRequest): string {
     const base = request.description || ''
     const clarification = request.clarificationContext?.userClarification?.trim()
     const cumulativeConstraints = request.clarificationContext?.cumulativeConstraints || []

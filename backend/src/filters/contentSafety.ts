@@ -22,7 +22,7 @@ export class ContentSafetyFilter {
    */
   static isContentSafe(
     title: TMDBTitle,
-    maxRating: ContentRating = ContentRating.R
+    _maxRating: ContentRating = ContentRating.R
   ): boolean {
     // CRITICAL: Always block adult content
     if (title.adult) {

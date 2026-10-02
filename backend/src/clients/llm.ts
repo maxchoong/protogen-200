@@ -1,5 +1,6 @@
 import OpenAI from 'openai'
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions'
+import type { LLMPreferenceHints } from '../engine/preferenceParser.js'
 
 // GitHub Models configuration
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || ''
@@ -7,15 +8,6 @@ const GITHUB_MODEL = process.env.GITHUB_MODEL || 'gpt-4o-mini'
 const GITHUB_API_BASE = 'https://models.inference.ai.azure.com'
 const LLM_TIMEOUT_MS = 15000
 const MAX_RETRIES = 2
-
-interface ParsedPreferences {
-  genres: string[]
-  mood: string[]
-  contentType: 'movie' | 'tv' | 'both'
-  maxRating: string
-  keywords: string[]
-  tone?: string
-}
 
 interface LLMCache {
   [key: string]: {
@@ -69,12 +61,12 @@ export class LLMClient {
    * Parse user's natural language description into structured preferences
    * Enhances rule-based parsing with LLM understanding
    */
-  async parsePreferences(description: string): Promise<ParsedPreferences | null> {
+  async parsePreferences(description: string): Promise<LLMPreferenceHints | null> {
     if (!this.enabled || !description.trim()) {
       return null
     }
 
-    const cacheKey = `parse:${description.substring(0, 100)}`
+    const cacheKey = `parse:${description.trim().toLowerCase()}`
     const cached = this.getCache(cacheKey)
     if (cached) {
       console.log('[LLM] Using cached preference parsing')
@@ -87,19 +79,24 @@ export class LLMClient {
       const messages: ChatCompletionMessageParam[] = [
         {
           role: 'system',
-          content: `You are a film recommendation assistant. Parse the user's request into structured preferences.
+          content: `You are a film recommendation assistant. Extract only preferences clearly expressed by the user. Do not invent actors, titles, genres, exclusions, or constraints.
 Return ONLY valid JSON with this exact structure:
 {
-  "genres": ["Action", "Comedy", etc.],
-  "mood": ["happy", "intense", "thoughtful", etc.],
-  "contentType": "movie" | "tv" | "both",
-  "maxRating": "G" | "PG" | "PG-13" | "R",
-  "keywords": ["word1", "word2"],
-  "tone": "lighthearted" | "dark" | "realistic" | etc
+  "genres": [],
+  "mood": [],
+  "contentType": "both",
+  "maxRating": "R",
+  "keywords": [],
+  "referenceTitles": [],
+  "actors": [],
+  "excludedGenres": [],
+  "yearRange": {"min": null, "max": null}
 }
 
-Common genres: Action, Adventure, Comedy, Drama, Horror, Romance, Sci-Fi, Thriller, Fantasy, Mystery
-Common moods: happy, sad, intense, relaxing, funny, thoughtful, scary, uplifting`
+Use canonical genres: Action, Adventure, Animation, Comedy, Crime, Documentary, Drama, Family, Fantasy, History, Horror, Music, Mystery, Romance, Sci-Fi, Thriller, War, Western.
+Use canonical moods: Happy, Sad, Intense, Relaxing, Funny, Thoughtful, Dark, Romantic, Suspenseful, Surprising.
+Put title similarity anchors in referenceTitles, named performers in actors, and descriptive concepts useful for catalog search in keywords.
+Use null for unknown year bounds. Preserve all relevant details from the full conversation.`
         },
         {
           role: 'user',
@@ -111,7 +108,7 @@ Common moods: happy, sad, intense, relaxing, funny, thoughtful, scary, uplifting
         model: GITHUB_MODEL,
         messages,
         temperature: 0.3,
-        max_tokens: 300,
+        max_tokens: 450,
         response_format: { type: 'json_object' }
       })
 
@@ -121,20 +118,37 @@ Common moods: happy, sad, intense, relaxing, funny, thoughtful, scary, uplifting
         return null
       }
 
-      const parsed = JSON.parse(content) as ParsedPreferences
+      const parsed = JSON.parse(content) as Record<string, unknown>
       
       // Validate and set defaults
-      const result: ParsedPreferences = {
-        genres: Array.isArray(parsed.genres) ? parsed.genres : [],
-        mood: Array.isArray(parsed.mood) ? parsed.mood : [],
-        contentType: ['movie', 'tv', 'both'].includes(parsed.contentType) ? parsed.contentType : 'both',
-        maxRating: parsed.maxRating || 'R',
-        keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [],
-        tone: parsed.tone
+      const toStringArray = (value: unknown): string[] =>
+        Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
+      const yearRange = parsed.yearRange && typeof parsed.yearRange === 'object'
+        ? parsed.yearRange as Record<string, unknown>
+        : undefined
+      const result: LLMPreferenceHints = {
+        genres: toStringArray(parsed.genres),
+        mood: toStringArray(parsed.mood),
+        contentType: ['movie', 'tv', 'both'].includes(String(parsed.contentType))
+          ? parsed.contentType as 'movie' | 'tv' | 'both'
+          : 'both',
+        maxRating: ['G', 'PG', 'PG-13', 'R'].includes(String(parsed.maxRating))
+          ? String(parsed.maxRating)
+          : 'R',
+        keywords: toStringArray(parsed.keywords),
+        referenceTitles: toStringArray(parsed.referenceTitles),
+        actors: toStringArray(parsed.actors),
+        excludedGenres: toStringArray(parsed.excludedGenres),
+        yearRange: yearRange
+          ? {
+              min: typeof yearRange.min === 'number' && Number.isFinite(yearRange.min) ? yearRange.min : undefined,
+              max: typeof yearRange.max === 'number' && Number.isFinite(yearRange.max) ? yearRange.max : undefined
+            }
+          : undefined
       }
 
       this.setCache(cacheKey, result, 3600000) // Cache 1 hour
-      console.log(`[LLM] Parsed: ${result.genres.length} genres, ${result.keywords.length} keywords`)
+      console.log(`[LLM] Parsed: ${result.genres?.length || 0} genres, ${result.keywords?.length || 0} keywords`)
       
       return result
     } catch (error: any) {

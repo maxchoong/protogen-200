@@ -1,6 +1,8 @@
 # MovieFlix Style Reference
 > Movie discovery and conversational recommendation UI. Clean, cinematic, and task-focused.
 
+**Status:** Historical design exploration, superseded by `design2.md` and the shipped tokens in `frontend/src/index.css`. Its palette, preference-panel, and chip patterns are not current implementation requirements.
+
 **Theme Strategy:** dual theme (dark + light), default to dark
 
 This design system supports both browsing and conversational query flows in the same product. The visual language stays restrained and cinematic, while the interaction model prioritizes clarity, quick refinement, and readable multi-turn exchanges.

@@ -1,5 +1,47 @@
 import { PreferenceParser, RecommendationRequest } from '../preferenceParser'
 
+describe('LLM preference hint merging', () => {
+  it('does not replace rule-based media type with the LLM default', () => {
+    const preferences = PreferenceParser.parse(
+      { description: 'A cozy weekend movie' },
+      { contentType: 'both', yearRange: {} }
+    )
+
+    expect(preferences.contentType).toBe('movie')
+    expect(preferences.yearRange).toBeUndefined()
+  })
+
+  it('normalizes hints before intent classification and preserves full conversation text', () => {
+    const request: RecommendationRequest = {
+      description: 'A cozy weekend movie',
+      clarificationContext: {
+        clarificationRound: 1,
+        userClarification: 'Something with Jude Law'
+      }
+    }
+    const analysisText = PreferenceParser.buildAnalysisText(request)
+    const preferences = PreferenceParser.parse(request, {
+      genres: ['romance'],
+      mood: ['relaxing'],
+      contentType: 'movie',
+      keywords: ['cozy', 'feel-good'],
+      actors: ['Jude Law'],
+      excludedGenres: ['horror']
+    })
+
+    expect(analysisText).toContain('A cozy weekend movie')
+    expect(analysisText).toContain('Something with Jude Law')
+    expect(preferences.discoveryMode).toBe('talent')
+    expect(preferences.detectedActors).toContain('Jude Law')
+    expect(preferences.mood).toContain('Relaxing')
+    expect(preferences.moodStrength?.get('Relaxing')).toBe(1)
+    expect(preferences.genres).toContain('Romance')
+    expect(preferences.genres).not.toContain('Horror')
+    expect(preferences.excludedGenres).toContain('Horror')
+    expect(preferences.keywords).toEqual(['cozy', 'feel-good'])
+  })
+})
+
 describe('Phase 5: Intent Classification & Clarification', () => {
   describe('Intent Classification', () => {
     it('should detect mood intent from mood keywords', () => {

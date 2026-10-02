@@ -99,7 +99,7 @@ Backend API (Express + TypeScript)
 9. Engine filters unsafe content and ranks candidates with mode-specific, reference-aware, and critics-proxy heuristics.
 10. Engine enriches results with availability and trailers in batch-like workflows.
 11. Backend returns applied constraints and interpretation note metadata for UI transparency.
-10. Frontend renders cards with graceful fallback for missing enrichments.
+12. Frontend renders recommendations with graceful fallback for missing enrichments.
 
 ---
 
@@ -121,7 +121,7 @@ This pattern keeps the app functional under missing config, rate limits, or upst
 
 - Reject completely empty recommendation requests.
 - Reject descriptions under 3 characters when present.
-- Filter unsafe titles after OMDb normalization.
+- Block titles marked `adult` by TMDB in the backend pipeline; detailed certification checks are not implemented.
 - Keep adult-content blocking as a backend concern, not a frontend-only rule.
 - Prefer clarification over returning weak recommendation sets.
 - Never fabricate unavailable data-source support; disclose proxy behavior explicitly.

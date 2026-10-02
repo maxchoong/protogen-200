@@ -10,32 +10,20 @@ This file includes:
 
 ## Current Status
 
-- Last updated: March 13, 2026
-- v1 implementation status: Core flow is complete and operational.
-- End-to-end working path: Home input -> backend recommendations -> results cards -> availability links -> optional trailer modal.
+**Last updated: October 2, 2026.** The current product is a conversation-first film and TV advisor. Users refine requests in free text; meta-steering and refinement suggestion chips are not part of the UI.
 
-### What Works Now
+- Retrieval uses TMDB discovery when enabled, with OMDb/FMDb fallback and metadata compatibility.
+- Responses can include applied constraints, intent metadata, retrieval diagnostics, and interpretation notes for proxy assumptions.
+- Content safety currently blocks TMDB titles marked `adult`; detailed certification enforcement is not implemented.
+- LLM features, streaming availability, and trailer enrichment remain optional and degrade gracefully.
+- Frontend/backend lint and builds pass; backend Jest passes 128/128 tests.
+- GitHub Actions runs frontend lint/build and backend lint/build/test on pushes and pull requests.
+- Frontend Browserslist data is current; the production build has no stale-data warning.
+- Development tokens referenced in historical notes have been rotated (confirmed October 2, 2026).
 
-- Description-only and preferences-only recommendation flows.
-- Validation contract:
-  - Empty description plus empty preferences is rejected.
-  - Description is optional but must be at least 3 characters if provided.
-- Region is inferred in frontend from browser locale and sent to backend.
-- OMDb-backed recommendation search and metadata enrichment.
-- Content safety filtering for adult and blocked ratings.
-- GitHub Models (`gpt-4o-mini`) enhancement with fallback behavior.
-- RapidAPI Streaming Availability integration via `GET /shows/{imdbId}`.
-- Availability deep links and explicit fallback text when unavailable.
-- Frontend and backend builds pass.
-- Frontend lint script is configured and runs.
+The PRD and design/task sections below retain the original MVP baseline and dated implementation history. For current behavior, use this status with `activeContext.md`, `progress.md`, and `techContext.md`.
 
-### Known Gaps / Follow-Ups
-
-- Trailer coverage depends on `TMDB_API_KEY`; trailer enrichment is optional.
-- Consolidated docs in older files may still contain legacy terms and should be refreshed over time.
-- Development secrets referenced in local history should be rotated.
-
-### Update – May 23, 2026
+### Historical Update – May 23, 2026
 
 Recent as-built changes since the March baseline:
 
@@ -50,7 +38,7 @@ Recent as-built changes since the March baseline:
 
 ---
 
-## 1. Product Requirements Document (PRD)
+## 1. Product Requirements Document (PRD; Historical MVP Baseline)
 
 ### 1.1 Product Overview
 
@@ -145,7 +133,7 @@ Acceptance status:
 
 Required behavior: no adult, unrated, X/NC-17 style unsafe recommendations.
 
-Current status: Implemented in backend filtering logic; additional automated coverage is still a good follow-up.
+Current status: Partially implemented. TMDB `adult=true` is blocked; detailed certification enforcement is not implemented.
 
 ### Out of Scope for v1
 
@@ -156,16 +144,16 @@ Current status: Implemented in backend filtering logic; additional automated cov
 
 ---
 
-## 2. Design Document
+## 2. Design Document (Historical MVP Baseline)
 
 ### 2.1 Architecture Overview (As Implemented)
 
 Platform: Responsive web app (desktop + mobile).
 
-Frontend:
+Frontend (current flow):
 
 - React 18 + TypeScript + Vite 5 + Tailwind CSS.
-- Single-page flow: Home page for input, Results page for output.
+- Conversation-first home flow with freeform follow-ups and recommendation results/details views.
 - Region inferred from `navigator.language`.
 
 Backend:
@@ -176,7 +164,7 @@ Backend:
 
 External Integrations:
 
-- Catalog: OMDb API.
+- Catalog: TMDB discovery with OMDb/FMDb search fallback and metadata compatibility.
 - LLM: GitHub Models (`gpt-4o-mini`) via a compatible SDK client interface.
 - Availability: Streaming Availability API via RapidAPI (`GET /shows/{imdbId}`).
 - Trailers: TMDB lookup by IMDb ID (optional and key-gated).
@@ -245,7 +233,7 @@ Response shape (simplified):
 1. Validate request body and normalize description/region.
 2. Parse preferences with rule-based parser.
 3. Optionally merge LLM-derived preference signals.
-4. Build search terms and query OMDb.
+4. Retrieve candidates from TMDB discovery/search, falling back to OMDb/FMDb when needed.
 5. Normalize and deduplicate candidates by IMDb ID.
 6. Apply content safety filtering.
 7. Rank by relevance heuristics.
@@ -273,7 +261,7 @@ Results page:
 
 ### 2.5 Reliability and Degradation Strategy
 
-- OMDb is effectively required for meaningful dynamic recommendations.
+- TMDB is the primary discovery source when enabled; OMDb/FMDb provides search fallback and metadata compatibility.
 - LLM, availability, and trailers are optional enrichments.
 - If optional integrations fail or are unconfigured:
   - Recommendations still return.
@@ -288,11 +276,11 @@ Results page:
 - Input validation is server-enforced.
 - Content safety filtering runs in backend pipeline.
 
-Operational note: Rotate any leaked development credentials.
+Operational note: Development tokens referenced in historical notes were rotated (confirmed October 2, 2026); rotate any future exposures.
 
 ---
 
-## 3. Granular Task List (Mapped to Stories)
+## 3. Granular Task List (Historical MVP Baseline)
 
 Status legend:
 
@@ -338,7 +326,7 @@ Deferred:
 
 Done:
 
-- Dynamic recommendation generation from OMDb candidates.
+- Dynamic recommendation generation from TMDB candidates with OMDb/FMDb fallback.
 - Deduplication, safety filtering, ranking.
 - Why-this generation via LLM + fallback template.
 - Results rendering and empty state.
@@ -406,14 +394,15 @@ Deferred:
 Done:
 
 - Frontend and backend builds passing.
-- Frontend lint config added and lint script running.
+- Frontend/backend ESLint configs and scripts are active; GitHub Actions enforces lint/build/test checks.
 - Core accessibility improvements for key interactive controls.
+- Development tokens referenced in historical notes were rotated (confirmed October 2, 2026).
 
 Remaining:
 
 - Refresh older legacy docs incrementally to remove outdated provider assumptions.
 - Add/expand automated tests for content safety and critical validation paths.
-- Rotate exposed development secrets and validate secret hygiene.
+- Validate secret hygiene.
 
 Deferred:
 

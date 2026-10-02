@@ -152,5 +152,6 @@
 - No persistent user storage in v1.
 - Availability and trailer data are optional enrichments, not hard dependencies.
 - Spoiler-safe synopsis generation exists in code but is not part of the active v1 response contract.
-- Frontend linting is currently not configured even though build succeeds.
+- Frontend and backend ESLint checks are configured in their respective packages and pass with TypeScript-ESLint 8.
+- GitHub Actions runs frontend lint/build and backend lint/build/test on pushes and pull requests.
 - Content safety relies on metadata filtering and may still need broader test coverage.

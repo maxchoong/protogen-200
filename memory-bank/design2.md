@@ -1,6 +1,8 @@
 # Lazy Movie Advisor Style Reference
 > Subdued command center for cinematic discovery and conversation.
 
+**Status:** Current visual-token reference; its palette and typography match `frontend/src/index.css`. Component patterns are design references, not claims that every control is shipped. Intent/option-chip examples are historical; active follow-up refinement is freeform and has no suggestion chips.
+
 **Theme strategy:** dark-first with light-theme parity
 
 This document keeps the Lazy visual language as the base system while describing the app-specific conversation and recommendation patterns that already exist in the product. The result should feel quiet, disciplined, and content-first, not flashy or highly saturated.
@@ -348,6 +350,6 @@ export default {
 ## Version
 
 **Version:** 2.0
-**Last Updated:** May 22, 2026
+**Last Updated:** October 2, 2026
 **Platform:** Web
 **Color Modes:** Dark (default), Light

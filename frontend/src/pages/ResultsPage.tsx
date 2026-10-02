@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { buttonClass, inlineActionClass } from '../buttonStyles'
 
 interface Recommendation {
@@ -295,7 +295,6 @@ export default function ResultsPage({
   passCount,
   triggerText,
   turnOperation,
-  activeConstraints: _activeConstraints = [],
   interpretationNote,
   retrievalDiagnostics,
   onPreviousPass,
@@ -324,6 +323,16 @@ export default function ResultsPage({
     Record<string, { enabled: boolean; country: string; status: 'ok' | 'rate_limited' | 'error' | 'disabled' | 'not_requested' }>
   >({})
   const [availabilityLoadingByTitleId, setAvailabilityLoadingByTitleId] = useState<Record<string, boolean>>({})
+  const availabilityByTitleIdRef = useRef(availabilityByTitleId)
+  const availabilityLoadingByTitleIdRef = useRef(availabilityLoadingByTitleId)
+
+  useEffect(() => {
+    availabilityByTitleIdRef.current = availabilityByTitleId
+  }, [availabilityByTitleId])
+
+  useEffect(() => {
+    availabilityLoadingByTitleIdRef.current = availabilityLoadingByTitleId
+  }, [availabilityLoadingByTitleId])
   const closeDetailsTimerRef = useRef<number | null>(null)
   const headerControlsRef = useRef<HTMLDivElement | null>(null)
 
@@ -439,7 +448,7 @@ export default function ResultsPage({
     })
   }
 
-  const closeDetailsPanel = () => {
+  const closeDetailsPanel = useCallback(() => {
     if (!activeDetailsRec) {
       return
     }
@@ -455,7 +464,7 @@ export default function ResultsPage({
       setHighlightDetailsIndex(null)
       closeDetailsTimerRef.current = null
     }, 300)
-  }
+  }, [activeDetailsRec])
 
   const openRecommendationDetails = (index: number) => {
     if (closeDetailsTimerRef.current !== null) {
@@ -528,7 +537,7 @@ export default function ResultsPage({
 
     document.addEventListener('keydown', handleEscape)
     return () => document.removeEventListener('keydown', handleEscape)
-  }, [trailerModal.isOpen, detailsRec, highlightDetails, infoPopoverOpen, roundMenuOpen])
+  }, [trailerModal.isOpen, detailsRec, highlightDetails, infoPopoverOpen, roundMenuOpen, closeDetailsPanel])
 
   useEffect(() => {
     if (!infoPopoverOpen) {
@@ -774,11 +783,11 @@ export default function ResultsPage({
       return
     }
 
-    if (availabilityByTitleId[availabilityId]) {
+    if (availabilityByTitleIdRef.current[availabilityId]) {
       return
     }
 
-    if (availabilityLoadingByTitleId[availabilityId]) {
+    if (availabilityLoadingByTitleIdRef.current[availabilityId]) {
       return
     }
 

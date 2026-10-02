@@ -2,9 +2,9 @@
 
 ## Project Status
 
-**Date:** May 24, 2026  
+**Date:** October 2, 2026
 **Phase:** Post-Phase-6 quality hardening and transparency updates
-**Overall Progress:** Conversational recommendation engine is operational end-to-end with stronger follow-up behavior, TMDB enrichment, explicit transparency messaging, and simplified UX (freeform-only next turns).
+**Overall Progress:** Conversational recommendations, TMDB enrichment, transparency safeguards, and freeform follow-ups are implemented. Frontend/backend lint and builds pass; backend Jest passes 128/128 tests and CI enforces these gates.
 
 ---
 
@@ -15,6 +15,14 @@
 - **Backend:** Intent-aware ranking + clarification + transparency safeguards in single endpoint (`POST /recommendations`).
 - **Data sources in practice:** TMDB + OMDb + IMDb-derived fields (via OMDb/FMDb and TMDB mappings), Streaming Availability API, optional LLM explanation generation.
 - **Transparency behavior:** Explicitly states proxy interpretation when user asks for critics-oriented results and explicitly clarifies unsupported external critic sources.
+- **Content safety:** The current TMDB filter blocks titles marked `adult`; rating definitions exist, but detailed certification enforcement is not implemented on this path.
+- **Current validation (October 2, 2026):** Backend and frontend builds and lint checks pass. Backend Jest passes all 128 tests. Frontend Browserslist data was refreshed and the build no longer warns that it is stale.
+
+### Repository Updates Since May 2026
+- Added a backend content-safety filter and rating enum; current enforcement relies on TMDB's `adult` flag rather than detailed ratings.
+- Archived legacy cleanup/runtime artifacts in the August 21, 2026 commit.
+- Updated `ts-jest` to `29.4.12` on September 1, 2026 to address a Handlebars vulnerability.
+- Development tokens referenced in historical notes were rotated (confirmed October 2, 2026).
 
 ---
 
@@ -118,6 +126,8 @@
 
 ## Validation Snapshot
 
+Items below record previously validated behavior; the current build and Jest status is recorded above.
+
 - [x] Backend build passes.
 - [x] Frontend build passes.
 - [x] `Critics favourites from 2020` now returns movie-only 2020 set with interpretation note and proxy constraint.
@@ -141,8 +151,9 @@
 
 ## Remaining Gaps
 
+- [ ] Implement and test detailed content-rating enforcement if unrated/NC-17 blocking remains a product requirement; current TMDB filter only checks `adult`.
 - [ ] Run full browser smoke pass for all major conversational journeys after latest transparency changes.
-- [ ] Refresh older long-form memory docs where legacy assumptions still appear.
+- [x] Review all memory-bank files; align current facts and label legacy snapshots (October 2, 2026).
 - [ ] Add targeted automated tests for critics-intent guardrails and interpretation-note behavior.
 - [ ] Add automated coverage for `GET /highlights/:type/:id` and frontend highlight-details caching/fallback behavior.
 - [ ] Add frontend visual regression coverage for details-panel layout variants and motion states.

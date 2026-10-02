@@ -136,6 +136,32 @@ describe('End-to-End Recommendation Flow - Phase 5 Integration', () => {
       // Action should be removed from genres if it was there
       expect(preferences.genres).not.toContain('Action')
     })
+
+    it('should not restore an explicitly excluded genre through hard genre inference', () => {
+      const preferences = PreferenceParser.parse({ description: 'A heist, no thriller' })
+      const ranked = (recommendationEngine as any).rankTitles([
+        {
+          id: 'crime-only',
+          title: 'Crime Pick',
+          genres: ['Crime'],
+          plot: 'A crew plans a carefully coordinated heist.',
+          rating: 7.1,
+          voteCount: 500,
+          year: 2020
+        },
+        {
+          id: 'thriller-heist',
+          title: 'Thriller Pick',
+          genres: ['Crime', 'Thriller'],
+          plot: 'A tense heist unfolds against the clock.',
+          rating: 8.0,
+          voteCount: 2000,
+          year: 2020
+        }
+      ], preferences, [])
+
+      expect(ranked.map((title: any) => title.title)).toEqual(['Crime Pick'])
+    })
   })
 
   describe('Multiple mood extraction', () => {
@@ -154,7 +180,7 @@ describe('End-to-End Recommendation Flow - Phase 5 Integration', () => {
       }
       const preferences = PreferenceParser.parse(request)
 
-      for (const [mood, confidence] of preferences.moodStrength!.entries()) {
+      for (const confidence of preferences.moodStrength!.values()) {
         expect(confidence).toBeGreaterThan(0)
         expect(confidence).toBeLessThanOrEqual(1.0)
       }
@@ -162,6 +188,13 @@ describe('End-to-End Recommendation Flow - Phase 5 Integration', () => {
   })
 
   describe('Genre Detection Across Queries', () => {
+    it('should not infer documentary from the substring in "really"', () => {
+      const preferences = PreferenceParser.parse({ description: 'I really want a comedy' })
+
+      expect(preferences.genres).toContain('Comedy')
+      expect(preferences.genres).not.toContain('Documentary')
+    })
+
     it('should detect multiple genres when mentioned', () => {
       const request = {
         description: 'comedy thriller with mystery elements'
@@ -183,6 +216,14 @@ describe('End-to-End Recommendation Flow - Phase 5 Integration', () => {
   })
 
   describe('Reference Title Detection', () => {
+    it('should retain full title references and reject generic like-phrases', () => {
+      const titlePreferences = PreferenceParser.parse({ description: 'Like The Office' })
+      const genericPreferences = PreferenceParser.parse({ description: "I'd like something" })
+
+      expect(titlePreferences.referenceTitle).toContain('The Office')
+      expect(genericPreferences.referenceTitle).toEqual([])
+    })
+
     it('should detect movie reference when mentioned', () => {
       const request = {
         description: 'something like Inception'
@@ -287,7 +328,160 @@ describe('Manual Smoke Tests - Phase 4 Explanations', () => {
   })
 })
 
+describe('TMDB genre discovery', () => {
+  it('uses OR semantics when discovering multiple requested genres', async () => {
+    const enabledSpy = jest.spyOn(tmdbClient, 'isEnabled').mockReturnValue(true)
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [] })
+    } as Response)
+
+    await tmdbClient.discoverByGenres(['Drama', 'Romance'], {
+      includeMovies: true,
+      includeTV: false,
+      excludeAdult: true,
+      excludedGenres: ['Horror'],
+      yearRange: { min: 1980, max: 1989 }
+    })
+
+    const requestedUrl = new URL(fetchSpy.mock.calls[0][0] as string)
+    expect(requestedUrl.searchParams.get('with_genres')).toBe('18|10749')
+    expect(requestedUrl.searchParams.get('without_genres')).toBe('27')
+    expect(requestedUrl.searchParams.get('primary_release_date.gte')).toBe('1980-01-01')
+    expect(requestedUrl.searchParams.get('primary_release_date.lte')).toBe('1989-12-31')
+
+    fetchSpy.mockRestore()
+    enabledSpy.mockRestore()
+  })
+
+  it('resolves search concepts to TMDB keywords before discover requests', async () => {
+    const enabledSpy = jest.spyOn(tmdbClient, 'isEnabled').mockReturnValue(true)
+    const fetchSpy = jest.spyOn(global, 'fetch').mockImplementation(async input => {
+      const url = new URL(String(input))
+      const results = url.pathname.endsWith('/search/keyword') ? [{ id: 42 }] : []
+      return { ok: true, json: async () => ({ results }) } as Response
+    })
+
+    await tmdbClient.discoverByKeywords(['cozy'], {
+      includeMovies: true,
+      includeTV: false,
+      excludeAdult: true
+    })
+
+    const keywordSearchUrl = new URL(fetchSpy.mock.calls[0][0] as string)
+    const discoverUrl = new URL(fetchSpy.mock.calls[1][0] as string)
+    expect(keywordSearchUrl.pathname).toContain('/search/keyword')
+    expect(keywordSearchUrl.searchParams.get('query')).toBe('cozy')
+    expect(discoverUrl.searchParams.get('with_keywords')).toBe('42')
+
+    fetchSpy.mockRestore()
+    enabledSpy.mockRestore()
+  })
+
+  it('uses TV genre IDs and keeps TV discover results typed as series', async () => {
+    const enabledSpy = jest.spyOn(tmdbClient, 'isEnabled').mockReturnValue(true)
+    const fetchSpy = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        results: [{
+          id: 52,
+          name: 'A TV drama',
+          overview: 'A dramatic story.',
+          poster_path: '/tv.jpg',
+          genre_ids: [10759],
+          vote_average: 7,
+          vote_count: 100,
+          adult: false,
+          original_language: 'en'
+        }]
+      })
+    } as Response)
+
+    const results = await tmdbClient.discoverByGenres(['Action'], {
+      includeMovies: false,
+      includeTV: true,
+      excludeAdult: true
+    })
+
+    const requestedUrl = new URL(fetchSpy.mock.calls[0][0] as string)
+    expect(requestedUrl.searchParams.get('with_genres')).toBe('10759')
+    expect(results[0].media_type).toBe('tv')
+    expect(tmdbClient.mapGenreIdsToNames([10759], 'tv')).toEqual(['Action'])
+
+    fetchSpy.mockRestore()
+    enabledSpy.mockRestore()
+  })
+
+  it('does not use title search for mood or genre discovery signals', async () => {
+    const enabledSpy = jest.spyOn(tmdbClient, 'isEnabled').mockReturnValue(true)
+    const genreDiscoverSpy = jest.spyOn(tmdbClient, 'discoverByGenres').mockResolvedValue([])
+    const keywordDiscoverSpy = jest.spyOn(tmdbClient, 'discoverByKeywords').mockResolvedValue([])
+    const titleSearchSpy = jest.spyOn(tmdbClient, 'searchTitles').mockResolvedValue([])
+
+    await (recommendationEngine as any).searchWithTmdbPrimary(
+      [],
+      'movie',
+      'mood',
+      ['Drama', 'Romance'],
+      ['cozy', 'feel-good']
+    )
+
+    expect(genreDiscoverSpy).toHaveBeenCalled()
+    expect(keywordDiscoverSpy).toHaveBeenCalled()
+    expect(titleSearchSpy).not.toHaveBeenCalled()
+
+    enabledSpy.mockRestore()
+    genreDiscoverSpy.mockRestore()
+    keywordDiscoverSpy.mockRestore()
+    titleSearchSpy.mockRestore()
+  })
+
+  it('uses keyword concepts for OMDb fallback when TMDB discovery is empty', async () => {
+    const enabledSpy = jest.spyOn(tmdbClient, 'isEnabled').mockReturnValue(true)
+    const tmdbSearchSpy = jest.spyOn(recommendationEngine as any, 'searchWithTmdbPrimary').mockResolvedValue([])
+    const omdbSearchSpy = jest.spyOn(recommendationEngine as any, 'searchWithOmdbFallback').mockResolvedValue([
+      { id: 'tt1234567', title: 'Cozy fallback title' }
+    ])
+
+    const searched = await (recommendationEngine as any).searchCandidates(
+      [],
+      'movie',
+      'mood',
+      ['Drama', 'Romance'],
+      ['cozy', 'feel-good']
+    )
+
+    expect(omdbSearchSpy).toHaveBeenCalledWith(
+      expect.arrayContaining(['cozy', 'feel-good']),
+      'movie'
+    )
+    expect(searched.source).toBe('omdb')
+
+    enabledSpy.mockRestore()
+    tmdbSearchSpy.mockRestore()
+    omdbSearchSpy.mockRestore()
+  })
+})
+
 describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
+  it('keeps inferred mood genres soft instead of filtering out calm cross-genre titles', () => {
+    const preferences = PreferenceParser.parse({ description: 'A cozy weekend movie' })
+    const ranked = (recommendationEngine as any).rankTitles([
+      {
+        id: 'tmdb:movie:cozy-animation',
+        title: 'A Gentle Animated Story',
+        genres: ['Animation'],
+        plot: 'A peaceful, cozy journey with a gentle tone.',
+        rating: 7.2,
+        voteCount: 500,
+        year: 2020
+      }
+    ], preferences, [])
+
+    expect(preferences.inferredGenresFromMood).toBe(true)
+    expect(ranked.map((title: any) => title.title)).toContain('A Gentle Animated Story')
+  })
+
   it('should suppress anchor title for contrastive reference prompts', () => {
     const preferences = PreferenceParser.parse({
       description: 'Like Inception but more relaxing'
@@ -586,7 +780,7 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
     expect(ranked[0].scoringFactors.composite).toBeGreaterThan(ranked[1].scoringFactors.composite)
   })
 
-  it('should boost 80s titles when decade refinement is provided', () => {
+  it('should strictly filter to 80s titles when decade refinement is provided', () => {
     const preferences = PreferenceParser.parse({
       description: 'Like Blade Runner but warmer',
       clarificationContext: {
@@ -621,7 +815,33 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
     const ranked = (recommendationEngine as any).rankTitles(titles, preferences, [])
 
     expect(ranked[0].id).toBe('ttC333333')
-    expect(ranked[0].scoringFactors.composite).toBeGreaterThan(ranked[1].scoringFactors.composite)
+    expect(ranked).toHaveLength(1)
+  })
+
+  it('should remove explicitly excluded genres instead of merely penalizing them', () => {
+    const preferences = PreferenceParser.parse({ description: 'A comedy but no horror' })
+    const ranked = (recommendationEngine as any).rankTitles([
+      {
+        id: 'ttH111111',
+        title: 'Horror Comedy',
+        genres: ['Comedy', 'Horror'],
+        plot: 'A funny but frightening story.',
+        rating: 8.5,
+        voteCount: 10000,
+        year: 2020
+      },
+      {
+        id: 'ttC111111',
+        title: 'Straight Comedy',
+        genres: ['Comedy'],
+        plot: 'A witty, lighthearted story.',
+        rating: 7.1,
+        voteCount: 500,
+        year: 2020
+      }
+    ], preferences, [])
+
+    expect(ranked.map((title: any) => title.title)).toEqual(['Straight Comedy'])
   })
 
   it('should reuse previous recommendations and skip broad retrieval when pool is sufficient', async () => {
@@ -719,6 +939,73 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
     actorSearchSpy.mockRestore()
     broadSearchSpy.mockRestore()
     externalIdsSpy.mockRestore()
+  })
+
+  it('should retrieve a new actor anchor on a follow-up instead of reusing only prior results', async () => {
+    const previousIds = Array.from({ length: 10 }, (_, index) => `tt900000${index}`)
+    const enabledSpy = jest.spyOn(tmdbClient, 'isEnabled').mockReturnValue(true)
+    const actorSearchSpy = jest.spyOn(tmdbClient, 'searchTitlesForPerson').mockResolvedValue([
+      {
+        id: 201,
+        title: 'The Holiday',
+        media_type: 'movie',
+        poster_path: '/holiday.jpg',
+        overview: 'Two women find romance and a fresh start during a winter holiday.',
+        release_date: '2006-12-08',
+        genre_ids: [35, 10749],
+        vote_average: 7.0,
+        vote_count: 1800,
+        adult: false,
+        original_language: 'en'
+      } as any
+    ])
+    const detailsSpy = jest.spyOn(fmdbClient, 'getDetails').mockImplementation(async id => ({
+      imdbID: id,
+      Title: `Previous title ${id}`,
+      Year: '2019',
+      Type: 'movie',
+      Plot: 'A dramatic story about a family facing a difficult choice.',
+      Genre: 'Drama',
+      imdbRating: '7.0',
+      Poster: 'N/A',
+      Rated: 'PG-13',
+      Director: 'A Director',
+      Actors: 'Another Actor'
+    } as any))
+    const broadSearchSpy = jest
+      .spyOn(recommendationEngine as any, 'searchCandidates')
+      .mockResolvedValue({ results: [], source: 'omdb' })
+    const externalIdsSpy = jest.spyOn(tmdbClient, 'getExternalIds').mockResolvedValue({})
+    const titleDetailsSpy = jest.spyOn(tmdbClient, 'getTitleDetails').mockResolvedValue(null)
+    const creditsSpy = jest.spyOn(tmdbClient, 'getTitleCredits').mockResolvedValue({ mainCast: [], directors: [] })
+    const videosSpy = jest.spyOn(tmdbClient, 'getVideos').mockResolvedValue([])
+
+    const recommendations = await recommendationEngine.getRecommendations({
+      description: 'A cozy weekend movie',
+      region: 'US',
+      clarificationContext: {
+        clarificationRound: 1,
+        userClarification: 'Something with Jude Law',
+        previousRecommendationIds: previousIds
+      }
+    })
+
+    expect(actorSearchSpy).toHaveBeenCalledWith(
+      'Jude Law',
+      expect.objectContaining({ includeMovies: true, includeTV: false }),
+      20
+    )
+    expect(recommendations.some(recommendation => recommendation.title === 'The Holiday')).toBe(true)
+    expect(broadSearchSpy).toHaveBeenCalled()
+
+    enabledSpy.mockRestore()
+    actorSearchSpy.mockRestore()
+    detailsSpy.mockRestore()
+    broadSearchSpy.mockRestore()
+    externalIdsSpy.mockRestore()
+    titleDetailsSpy.mockRestore()
+    creditsSpy.mockRestore()
+    videosSpy.mockRestore()
   })
 
   it('should avoid empty responses when talent strict-filter finds no actor metadata matches', async () => {

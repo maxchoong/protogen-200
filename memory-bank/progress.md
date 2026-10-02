@@ -2,6 +2,14 @@
 
 ## Overall Status
 
+**Updated:** October 2, 2026
+
+- Backend and frontend production builds pass.
+- Backend Jest: 128/128 passing after updating the stale route-test contract assertion.
+- Latest repository updates include the TMDB `adult`-flag safety filter and a `ts-jest` security update to `29.4.12`.
+- Detailed age/certification enforcement is not implemented by the current TMDB safety filter; see the safety checklist below.
+- [x] Development tokens referenced in historical notes were rotated (confirmed October 2, 2026).
+
 - [x] Phase 1 complete: frontend/backend skeleton and API wiring
 - [x] Phase 2 complete: OMDb catalog integration and safety filters
 - [x] Phase 3 complete: GitHub Models integration with fallback
@@ -16,8 +24,8 @@
 - [x] Transparency policy implemented for critics-style requests (proxy explanation + unsupported-source guardrail)
 - [x] Editorial details panel redesign iteration complete (hero narrative, metadata rail, motion, and typography pass)
 - [x] Shared button/link style utility pass complete across primary frontend interaction surfaces
-- [ ] Documentation fully aligned with current implementation
-- [x] Frontend lint configuration added
+- [x] Memory-bank status and design references aligned with current implementation
+- [x] Frontend/backend lint configured and enforced in CI
 - [ ] TMDB configured locally for trailer verification
 
 ---
@@ -52,8 +60,8 @@
 - [x] Return dynamic recommendations instead of mock-only data
 
 ### Content Safety
-- [x] Filter adult and unsafe content
-- [x] Block unrated / X / NC-17 / TV-MA style results in backend filtering
+- [x] Filter titles marked adult by TMDB
+- [ ] Enforce unrated / X / NC-17 / TV-MA exclusions using detailed certification data
 - [x] Log filtering behavior for debugging
 
 ---
@@ -108,13 +116,22 @@
 
 ---
 
-## Current Verification
+## Current Verification (October 2, 2026)
+
+- [x] Backend `npm run build` passes, including explicit `.js` import checks.
+- [x] Frontend `npm run build` passes.
+- [x] Frontend and backend `npm run lint` checks pass.
+- [x] Backend Jest suite passes cleanly (128/128).
+- [x] GitHub Actions runs frontend lint/build and backend lint/build/test on pushes and pull requests.
+- [x] Frontend Browserslist data refreshed; frontend build passes without the stale-data warning.
+
+## Previously Verified Behavior
 
 - [x] Backend build passes
 - [x] Frontend build passes
 - [x] Backend returns localized availability data for supported titles
 - [x] Frontend can render availability links and fallback messaging
-- [x] Frontend lint runs with current config (non-blocking TypeScript support warning only)
+- [x] Frontend and backend lint scripts pass with compatible TypeScript-ESLint versions.
 - [x] Critics-style query now returns explicit interpretation note when using proxy signals
 - [x] Explicit Rotten Tomatoes / Metacritic requests now trigger clarification instead of fabricated source coverage
 
@@ -203,7 +220,7 @@
 - [x] Finalize immediately when enough context has been gathered
 - [x] Cap clarification turns to avoid procedural loops
 
-### Verification
+### Verification at Phase 6 Completion (Historical)
 - [x] Route-level tests updated for dynamic clarification behavior
 - [x] Integration regression added for relaxing-reference ranking behavior
 - [x] Backend Jest suite passing (87/87)
@@ -297,7 +314,7 @@
 - [ ] Add automated regression tests for `GET /highlights/:type/:id` and highlight details caching/fallback behavior
 - [ ] Add targeted UI regression coverage for shared `buttonStyles` variants across light/dark themes and key interactive states
 - [ ] Add targeted visual regression coverage for highlight tile hover-lift states (including edge-column clipping checks)
-- [ ] Rotate exposed development secrets
+- [x] Development tokens referenced in historical notes were rotated (confirmed October 2, 2026).
 - [ ] Consider backend pipeline optimization or refactoring if performance becomes an issue
 - [ ] Test full multi-turn flow end-to-end with live API and browser snapshots
 - [ ] Run accessibility audit on new conversational UI

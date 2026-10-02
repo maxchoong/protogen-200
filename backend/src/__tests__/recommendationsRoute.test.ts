@@ -7,7 +7,7 @@ describe('POST /recommendations route guardrails', () => {
     jest.restoreAllMocks()
   })
 
-  it('should return weak recommendations with refinement suggestions', async () => {
+  it('should return weak recommendations with applied constraints', async () => {
     const mockRecommendations = [
       {
         id: 'tt1234567',
@@ -44,8 +44,8 @@ describe('POST /recommendations route guardrails', () => {
     expect(response.body.success).toBe(true)
     expect(response.body.requiresClarification).toBeUndefined()
     expect(response.body.recommendations).toHaveLength(2)
-    expect(response.body.refinementSuggestions).toBeDefined()
-    expect(response.body.refinementSuggestions.length).toBeGreaterThan(0)
+    expect(response.body.appliedConstraints).toEqual(expect.any(Array))
+    expect(response.body).not.toHaveProperty('refinementSuggestions')
   })
 
   it('should bypass first-turn clarification for high-confidence non-mixed intent', async () => {

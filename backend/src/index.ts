@@ -534,7 +534,7 @@ app.get('/highlights', async (req: Request, res: Response<ApiResponse>) => {
         voteCount: item.voteCount,
         posterUrl: `${TMDB_POSTER_BASE_URL}${item.posterPath}`,
         synopsis: item.overview,
-        genres: tmdbClient.mapGenreIdsToNames(item.genreIds),
+        genres: tmdbClient.mapGenreIdsToNames(item.genreIds, item.mediaType),
         originalLanguage: item.originalLanguage
       }))
 
@@ -589,7 +589,7 @@ app.get('/highlights/:type/:id', async (req: Request, res: Response<ApiResponse>
       title: details.title || details.name || 'Untitled',
       year: (typeParam === 'tv' ? details.first_air_date : details.release_date)?.slice(0, 4) || 'Unknown year',
       type: typeParam,
-      genres: tmdbClient.mapGenreIdsToNames(details.genre_ids || []),
+      genres: tmdbClient.mapGenreIdsToNames(details.genre_ids || [], typeParam),
       originalLanguage: details.original_language,
       runtimeMinutes: details.runtime,
       rating: details.vote_average,
