@@ -44,6 +44,28 @@ describe('RankingScorer - Phase 3 Tests', () => {
       expect(score).toBeLessThan(1.0)
     })
 
+    it('should score reference matches against the full anchor genre profile', () => {
+      const factors = RankingScorer.calculateCompositeScore({
+        genres: ['Sci-Fi'],
+        plot: 'A speculative story.'
+      }, {
+        genres: ['Action', 'Adventure', 'Sci-Fi', 'Thriller'],
+        explicitGenres: [],
+        referenceGenres: ['Action', 'Adventure', 'Sci-Fi', 'Thriller'],
+        mood: [],
+        contentType: 'movie',
+        maxRating: 'R'
+      })
+
+      expect(factors.genreScore).toBe(0.25)
+    })
+
+    it('should treat one of several reference genres as a partial match', () => {
+      const score = RankingScorer.genreMatchScore(['Sci-Fi'], ['Sci-Fi', 'Thriller'])
+
+      expect(score).toBe(0.5)
+    })
+
     it('should score no genre match as 0', () => {
       const itemGenres = ['Action', 'Sci-Fi']
       const preferredGenres = ['Comedy', 'Drama']
@@ -87,6 +109,81 @@ describe('RankingScorer - Phase 3 Tests', () => {
 
       const score = RankingScorer.moodMatchScore(plot, moods, moodStrength)
       expect(score).toBe(0)
+    })
+
+    it('should discount relaxing language contradicted by a violent premise', () => {
+      const moods = ['Relaxing']
+      const strength = new Map([['Relaxing', 1]])
+      const peacefulStory = RankingScorer.moodMatchScore(
+        'A gentle, peaceful story about two friends.',
+        moods,
+        strength
+      )
+      const violentStory = RankingScorer.moodMatchScore(
+        'They live peacefully until a vengeful brother returns for revenge.',
+        moods,
+        strength
+      )
+
+      expect(violentStory).toBeLessThan(peacefulStory)
+    })
+
+    it('should discount incidental calm words contradicted by urgent stakes', () => {
+      const moods = ['Relaxing']
+      const strength = new Map([['Relaxing', 1]])
+      const peacefulStory = RankingScorer.moodMatchScore(
+        'A gentle, peaceful story about friends sharing an easy day.',
+        moods,
+        strength,
+        ['Relaxing'],
+        [],
+        true
+      )
+      const highStakesPlots = [
+        'A scientist must solve a riddle and use unorthodox ideas to save everything on Earth from extinction.',
+        'A dark force threatens the peaceful existence of the city, and the heroes race to safeguard the future of the universe.',
+        'The fate of the galaxy rests with rivals whose partnership must lead the crew through unimaginable danger.'
+      ]
+
+      for (const plot of highStakesPlots) {
+        expect(RankingScorer.moodMatchScore(
+          plot,
+          moods,
+          strength,
+          ['Relaxing'],
+          ['Intense'],
+          true
+        )).toBeLessThanOrEqual(0.55)
+      }
+      expect(RankingScorer.moodMatchScore(
+        'A scientist saves Earth from extinction while building an unexpected friendship; their humour keeps the journey hopeful.',
+        moods,
+        strength,
+        ['Relaxing'],
+        ['Intense'],
+        true
+      )).toBeCloseTo(0.75)
+      expect(RankingScorer.moodMatchScore(
+        'A perilous survival mission ends in a crash.',
+        moods,
+        strength,
+        ['Relaxing'],
+        ['Intense'],
+        true
+      )).toBeLessThanOrEqual(0.2)
+      expect(RankingScorer.relaxingConflictMultiplier(
+        'A man chooses to fight for his destiny and love.'
+      )).toBe(1)
+      expect(peacefulStory).toBeGreaterThan(0.8)
+    })
+
+    it('should recognize cooperative science problem-solving only for relaxing reference requests', () => {
+      const plot = 'A scientist with no recollection of his mission must solve a scientific riddle with ingenuity and forms an unexpected friendship.'
+      const moods = ['Relaxing']
+      const strength = new Map([['Relaxing', 0.9]])
+
+      expect(RankingScorer.moodMatchScore(plot, moods, strength)).toBe(0)
+      expect(RankingScorer.moodMatchScore(plot, moods, strength, ['Relaxing'], ['Intense'], true)).toBeGreaterThan(0)
     })
 
     it('should handle empty plot or moods', () => {
@@ -258,8 +355,15 @@ describe('RankingScorer - Phase 3 Tests', () => {
 
       const highFactors = RankingScorer.calculateCompositeScore(highPopularity, noveltyPrefs)
       const lowFactors = RankingScorer.calculateCompositeScore(lowPopularity, noveltyPrefs)
+      const lowQualityHiddenTitle = {
+        ...lowPopularity,
+        id: 'ttC',
+        rating: 4.5
+      }
+      const lowQualityFactors = RankingScorer.calculateCompositeScore(lowQualityHiddenTitle, noveltyPrefs)
 
       expect(lowFactors.composite).toBeGreaterThan(highFactors.composite)
+      expect(highFactors.composite).toBeGreaterThan(lowQualityFactors.composite)
     })
   })
 

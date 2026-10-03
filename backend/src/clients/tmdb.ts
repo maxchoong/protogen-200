@@ -115,6 +115,12 @@ export interface SearchQuery {
   genres: string[]
   excludedGenres?: string[]
   yearRange?: { min?: number; max?: number }
+  keywordPages?: number
+  keywordLimit?: number
+  separateKeywordQueries?: boolean
+  sortBy?: string
+  minimumVoteCount?: number
+  minimumVoteAverage?: number
   minRating: number
   maxRating: number
   excludeAdult: boolean
@@ -218,8 +224,18 @@ export class TMDBClient {
     try {
       const movieGenreIds = genres.map(genre => GENRE_MAP[genre]).filter(Boolean).join('|')
       const tvGenreIds = genres.map(genre => TV_GENRE_MAP[genre]).filter(Boolean).join('|')
-      const moviePromise = movieGenreIds ? this.discoverMovies(movieGenreIds, options) : Promise.resolve([])
-      const tvPromise = tvGenreIds ? this.discoverTV(tvGenreIds, options) : Promise.resolve([])
+      const moviePromise = movieGenreIds && options.includeMovies !== false
+        ? Promise.all([
+            this.discoverMovies(movieGenreIds, options, 1),
+            this.discoverMovies(movieGenreIds, options, 2)
+          ]).then(results => results.flat())
+        : Promise.resolve([])
+      const tvPromise = tvGenreIds && options.includeTV !== false
+        ? Promise.all([
+            this.discoverTV(tvGenreIds, options, 1),
+            this.discoverTV(tvGenreIds, options, 2)
+          ]).then(results => results.flat())
+        : Promise.resolve([])
 
       const [movies, tv] = await Promise.all([moviePromise, tvPromise])
       return [...movies, ...tv]
@@ -238,7 +254,8 @@ export class TMDBClient {
     }
 
     try {
-      const keywordSearches = await Promise.all(keywords.slice(0, 4).map(async keyword => {
+      const keywordLimit = Math.max(1, Math.min(16, Math.floor(options.keywordLimit || 8)))
+      const keywordSearches = await Promise.all(keywords.slice(0, keywordLimit).map(async keyword => {
         const params = this.applyAuth(new URLSearchParams({ query: keyword }))
         const response = await fetch(`${this.baseUrl}/search/keyword?${params}`, {
           signal: AbortSignal.timeout(5000),
@@ -251,16 +268,74 @@ export class TMDBClient {
       const keywordIds = Array.from(new Set(keywordSearches.flat().map(keyword => keyword.id)))
       if (keywordIds.length === 0) return []
 
-      const keywordIdList = keywordIds.join('|')
       const includeMovies = options.includeMovies ?? true
       const includeTV = options.includeTV ?? true
+      const pageCount = Math.max(1, Math.min(3, Math.floor(options.keywordPages || 2)))
+      const discoverPages = (mediaType: 'movie' | 'tv') =>
+        Promise.all(Array.from({ length: pageCount }, (_, index) =>
+          this.discoverByKeywordIds(mediaType, keywordIds.join('|'), options, index + 1)
+        )).then(results => results.flat())
+      if (options.separateKeywordQueries) {
+        const keywordGroups = keywordSearches
+          .map(results => Array.from(new Set(results.map(keyword => keyword.id))).slice(0, 2))
+          .filter(group => group.length > 0)
+        const groupedDiscoveries = await Promise.all(keywordGroups.map(async group => {
+          const ids = group.join('|')
+          const [movies, tv] = await Promise.all([
+            includeMovies
+              ? Promise.all(Array.from({ length: pageCount }, (_, index) => this.discoverByKeywordIds('movie', ids, options, index + 1)))
+                  .then(results => results.flat())
+              : Promise.resolve([]),
+            includeTV
+              ? Promise.all(Array.from({ length: pageCount }, (_, index) => this.discoverByKeywordIds('tv', ids, options, index + 1)))
+                  .then(results => results.flat())
+              : Promise.resolve([])
+          ])
+          return [...movies, ...tv]
+        }))
+        return groupedDiscoveries.flat()
+      }
+
       const [movies, tv] = await Promise.all([
-        includeMovies ? this.discoverByKeywordIds('movie', keywordIdList, options) : Promise.resolve([]),
-        includeTV ? this.discoverByKeywordIds('tv', keywordIdList, options) : Promise.resolve([])
+        includeMovies ? discoverPages('movie') : Promise.resolve([]),
+        includeTV ? discoverPages('tv') : Promise.resolve([])
       ])
       return [...movies, ...tv]
     } catch (error) {
       console.error('[TMDB] Keyword discovery error:', error)
+      return []
+    }
+  }
+
+  async getRelatedTitles(
+    titleId: number,
+    mediaType: 'movie' | 'tv',
+    relation: 'recommendations' | 'similar'
+  ): Promise<TMDBTitle[]> {
+    if (!this.isEnabled()) {
+      return []
+    }
+
+    try {
+      const params = this.applyAuth(new URLSearchParams({ page: '1' }))
+      const response = await fetch(
+        `${this.baseUrl}/${mediaType}/${titleId}/${relation}?${params}`,
+        {
+          signal: AbortSignal.timeout(5000),
+          headers: this.buildAuthHeaders()
+        }
+      )
+      if (!response.ok) return []
+
+      const data = await response.json() as { results?: TMDBTitle[] }
+      const normalized = (data.results || []).map(item => ({ ...item, media_type: item.media_type || mediaType }))
+      return this.filterTitles(normalized, {
+        includeMovies: mediaType === 'movie',
+        includeTV: mediaType === 'tv',
+        excludeAdult: true
+      })
+    } catch (error) {
+      console.error(`[TMDB] Related-title ${relation} error:`, error)
       return []
     }
   }
@@ -844,7 +919,8 @@ export class TMDBClient {
 
   private async discoverMovies(
     genreIds: string,
-    options: Partial<SearchQuery>
+    options: Partial<SearchQuery>,
+    page: number
   ): Promise<TMDBTitle[]> {
     if (options.includeMovies === false) return []
 
@@ -852,7 +928,7 @@ export class TMDBClient {
       with_genres: genreIds,
       include_adult: String(!options.excludeAdult),
       sort_by: 'popularity.desc',
-      page: '1'
+      page: String(page)
     }))
     const excludedGenreIds = (options.excludedGenres || []).map(genre => GENRE_MAP[genre]).filter(Boolean)
     if (excludedGenreIds.length > 0) params.set('without_genres', excludedGenreIds.join('|'))
@@ -878,7 +954,8 @@ export class TMDBClient {
 
   private async discoverTV(
     genreIds: string,
-    options: Partial<SearchQuery>
+    options: Partial<SearchQuery>,
+    page: number
   ): Promise<TMDBTitle[]> {
     if (options.includeTV === false) return []
 
@@ -886,7 +963,7 @@ export class TMDBClient {
       with_genres: genreIds,
       include_adult: String(!options.excludeAdult),
       sort_by: 'popularity.desc',
-      page: '1'
+      page: String(page)
     }))
     const excludedGenreIds = (options.excludedGenres || []).map(genre => TV_GENRE_MAP[genre]).filter(Boolean)
     if (excludedGenreIds.length > 0) params.set('without_genres', excludedGenreIds.join('|'))
@@ -913,14 +990,21 @@ export class TMDBClient {
   private async discoverByKeywordIds(
     mediaType: 'movie' | 'tv',
     keywordIds: string,
-    options: Partial<SearchQuery>
+    options: Partial<SearchQuery>,
+    page: number
   ): Promise<TMDBTitle[]> {
     const params = this.applyAuth(new URLSearchParams({
       with_keywords: keywordIds,
       include_adult: String(!options.excludeAdult),
-      sort_by: 'popularity.desc',
-      page: '1'
+      sort_by: options.sortBy || 'popularity.desc',
+      page: String(page)
     }))
+    if (options.minimumVoteCount !== undefined) {
+      params.set('vote_count.gte', String(options.minimumVoteCount))
+    }
+    if (options.minimumVoteAverage !== undefined) {
+      params.set('vote_average.gte', String(options.minimumVoteAverage))
+    }
     const genreMap = mediaType === 'tv' ? TV_GENRE_MAP : GENRE_MAP
     const excludedGenreIds = (options.excludedGenres || []).map(genre => genreMap[genre]).filter(Boolean)
     if (excludedGenreIds.length > 0) params.set('without_genres', excludedGenreIds.join('|'))

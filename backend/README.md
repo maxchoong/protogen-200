@@ -1,5 +1,13 @@
 # Film & TV Advisor Backend
 
+## Optional LLM Setup
+
+GitHub Models was retired on July 30, 2026. Configure `OPENAI_API_KEY` and
+optionally `LLM_MODEL`, or `LLM_API_KEY` + `LLM_BASE_URL` + `LLM_MODEL` for a
+compatible provider. See [migration and setup instructions](GITHUB_MODELS_SETUP.md).
+Run `npm run check:llm` to verify parsing and explanation generation after
+configuring credentials locally. The app uses rule-based fallbacks without them.
+
 ## Development
 
 Install dependencies:

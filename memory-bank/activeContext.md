@@ -2,9 +2,9 @@
 
 ## Project Status
 
-**Date:** October 2, 2026
+**Date:** October 3, 2026
 **Phase:** Post-Phase-6 quality hardening and transparency updates
-**Overall Progress:** Conversational recommendations, TMDB enrichment, transparency safeguards, and freeform follow-ups are implemented. Frontend/backend lint and builds pass; backend Jest passes 128/128 tests and CI enforces these gates.
+**Overall Progress:** Conversational recommendations, TMDB enrichment, transparency safeguards, active preference continuity, and evidence-weighted reference matching are implemented. Frontend/backend builds pass; backend Jest passes 169/169 tests and CI enforces these gates.
 
 ---
 
@@ -16,7 +16,10 @@
 - **Data sources in practice:** TMDB + OMDb + IMDb-derived fields (via OMDb/FMDb and TMDB mappings), Streaming Availability API, optional LLM explanation generation.
 - **Transparency behavior:** Explicitly states proxy interpretation when user asks for critics-oriented results and explicitly clarifies unsupported external critic sources.
 - **Content safety:** The current TMDB filter blocks titles marked `adult`; rating definitions exist, but detailed certification enforcement is not implemented on this path.
-- **Current validation (October 2, 2026):** Backend and frontend builds and lint checks pass. Backend Jest passes all 128 tests. Frontend Browserslist data was refreshed and the build no longer warns that it is stale.
+- **Conversation continuity:** Follow-up API requests carry user turns. Parsing retains compatible active preferences and drops pre-pivot turns; explicit actor matches are ranked before supplemental candidates across intent modes.
+- **Reference contrast:** TMDB relatedness alone no longer qualifies a title. Reference searches prioritize dream, memory, reality, time, and space concepts; whole-word concept matching avoids substring collisions. Direct time-dilation/language bridges and psychologically grounded speculative, constructed-reality, and fate/agency matches receive concept support. Relaxing mood scores discount incidental positive words when a synopsis also has high-stakes urgency; severe violence, survival, peril, and countdown-plus-threat plots are filtered. Softer adventure wildcards remain eligible but are demoted.
+- **Indie discovery:** `Indie` is treated as a soft discovery label rather than a TMDB genre hard filter. Novelty searches use separate quality-filtered keyword groups and catalog-validated LLM title seeds, default to movies unless TV is explicit, and require minimum rating/vote support. Low popularity only boosts titles when rating evidence is credible.
+- **Current validation (October 3, 2026):** Backend build, lint, and all 169 Jest tests pass; frontend build and lint pass. GitHub's official documentation confirms GitHub Models retired July 30, 2026; the old Azure inference hostname fails DNS. The LLM client now uses OPENAI_API_KEY or LLM_API_KEY with LLM_BASE_URL/LLM_MODEL, ignores GITHUB_TOKEN, and blocks retired endpoints. Live Gemini parsing and explanation generation pass `npm --prefix backend run check:llm` with `gemini-3.5-flash-lite` and Google's OpenAI-compatible endpoint. A live `Surprising indie gems` run returned five user-targeted films in its top six: A Ghost Story, Sorry to Bother You, The One I Love, The Vast of Night, and The Station Agent. Other tail titles still vary with LLM seeds and catalog metadata.
 
 ### Repository Updates Since May 2026
 - Added a backend content-safety filter and rating enum; current enforcement relies on TMDB's `adult` flag rather than detailed ratings.

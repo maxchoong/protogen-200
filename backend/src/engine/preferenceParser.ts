@@ -43,6 +43,7 @@ export interface LLMPreferenceHints {
   maxRating?: string
   keywords?: string[]
   referenceTitles?: string[]
+  referenceSuggestions?: string[]
   actors?: string[]
   excludedGenres?: string[]
   yearRange?: { min?: number; max?: number }
@@ -50,10 +51,13 @@ export interface LLMPreferenceHints {
 
 export interface ParsedPreferences {
   genres: string[]
+  explicitGenres?: string[]
+  referenceGenres?: string[]
   inferredGenresFromMood?: boolean
   mood: string[]
   keywords?: string[]
   contentType: 'movie' | 'tv' | 'both'
+  contentTypeExplicit?: boolean
   maxRating: string
   yearRange?: {
     min?: number
@@ -61,6 +65,7 @@ export interface ParsedPreferences {
   }
   // Phase 1: Enhanced parsing
   referenceTitle?: string[]     // Titles mentioned as "like" or "similar to"
+  referenceSuggestions?: string[]
   excludedGenres?: string[]     // Genres user wants to avoid
   constraints?: string[]        // Captured constraints (e.g., "slow-paced", "short episodes")
   moodStrength?: Map<string, number>  // Mood confidence 0-1 (e.g., "funny": 1.0, "kinda dark": 0.6)
@@ -94,6 +99,7 @@ export interface RecommendationRequest {
     previousRecommendationId?: string
     previousRecommendationIds?: string[]
     userClarification?: string
+    userTurns?: string[]
     clarificationIndex?: number
     askedQuestionIds?: string[]
     cumulativeConstraints?: string[]
@@ -212,11 +218,11 @@ export class PreferenceParser {
 
   // Patterns for extracting reference titles
   private static readonly REFERENCE_PATTERNS = [
-    /like\s+['"]?([a-zA-Z0-9][a-zA-Z0-9\s&:'"-]*?)(?:['"])?(?=\s+(?:but|with|without|instead|rather\s+than|not\s+as)\b|[,.;!?]|$)/gi,
-    /similar\s+to\s+['"]?([a-zA-Z0-9][a-zA-Z0-9\s&:'"-]*?)(?:['"])?(?=\s+(?:but|with|without|instead|rather\s+than|not\s+as)\b|[,.;!?]|$)/gi,
-    /reminds?\s+me\s+of\s+['"]?([a-zA-Z0-9][a-zA-Z0-9\s&:'"-]*?)(?:['"])?(?=\s+(?:but|with|without|instead|rather\s+than|not\s+as)\b|[,.;!?]|$)/gi,
-    /in\s+the\s+style\s+of\s+['"]?([a-zA-Z0-9][a-zA-Z0-9\s&:'"-]*?)(?:['"])?(?=\s+(?:but|with|without|instead|rather\s+than|not\s+as)\b|[,.;!?]|$)/gi,
-    /vibes\s+of\s+['"]?([a-zA-Z0-9][a-zA-Z0-9\s&:'"-]*?)(?:['"])?(?=\s+(?:but|with|without|instead|rather\s+than|not\s+as)\b|[,.;!?]|$)/gi
+    /like\s+['"]?([a-zA-Z0-9][a-zA-Z0-9\s&:'"-]*?)(?:['"])?(?=\s+(?:but|with|without|instead|rather\s+than|not\s+as)\b|[,.;!?|]|$)/gi,
+    /similar\s+to\s+['"]?([a-zA-Z0-9][a-zA-Z0-9\s&:'"-]*?)(?:['"])?(?=\s+(?:but|with|without|instead|rather\s+than|not\s+as)\b|[,.;!?|]|$)/gi,
+    /reminds?\s+me\s+of\s+['"]?([a-zA-Z0-9][a-zA-Z0-9\s&:'"-]*?)(?:['"])?(?=\s+(?:but|with|without|instead|rather\s+than|not\s+as)\b|[,.;!?|]|$)/gi,
+    /in\s+the\s+style\s+of\s+['"]?([a-zA-Z0-9][a-zA-Z0-9\s&:'"-]*?)(?:['"])?(?=\s+(?:but|with|without|instead|rather\s+than|not\s+as)\b|[,.;!?|]|$)/gi,
+    /vibes\s+of\s+['"]?([a-zA-Z0-9][a-zA-Z0-9\s&:'"-]*?)(?:['"])?(?=\s+(?:but|with|without|instead|rather\s+than|not\s+as)\b|[,.;!?|]|$)/gi
   ]
 
   // Patterns for extracting exclusions
@@ -522,6 +528,9 @@ export class PreferenceParser {
       genres: [],
       mood: [],
       contentType: this.inferContentType(analysisText, request.preferences?.contentType),
+      contentTypeExplicit: !!request.preferences?.contentType ||
+        this.MOVIE_HINT_KEYWORDS.some(keyword => description.includes(keyword)) ||
+        this.TV_HINT_KEYWORDS.some(keyword => description.includes(keyword)),
       maxRating: request.preferences?.maxRating || 'R',
       referenceTitle: [],
       excludedGenres: [],
@@ -546,6 +555,7 @@ export class PreferenceParser {
 
     // === PHASE 1 STEP 1.1: Extract genres (existing logic) ===
     preferences.genres = this.detectGenres(description)
+    let explicitGenres = [...preferences.genres]
 
     // Remove excluded genres from detected genres
     if (preferences.excludedGenres.length > 0) {
@@ -557,6 +567,7 @@ export class PreferenceParser {
     // === Override with explicit preferences ===
     if (request.preferences?.genres && request.preferences.genres.length > 0) {
       preferences.genres = request.preferences.genres
+      explicitGenres = [...request.preferences.genres]
       preferences.inferredGenresFromMood = false
     }
 
@@ -578,16 +589,19 @@ export class PreferenceParser {
       preferences.genres = preferences.genres.filter(
         g => !preferences.excludedGenres!.includes(g)
       )
+      explicitGenres = explicitGenres.filter(
+        genre => !preferences.excludedGenres!.some(excluded => excluded.toLowerCase() === genre.toLowerCase())
+      )
     }
 
     if (llmHints) {
       const llmGenres = this.normalizeGenres(llmHints.genres || [])
-      const explicitGenres = this.normalizeGenres(request.preferences?.genres || [])
+      const explicitGenreOverrides = this.normalizeGenres(request.preferences?.genres || [])
       if (llmGenres.length > 0) {
         preferences.genres = llmGenres
         preferences.inferredGenresFromMood = false
       }
-      preferences.genres = Array.from(new Set([...preferences.genres, ...explicitGenres]))
+      preferences.genres = Array.from(new Set([...preferences.genres, ...explicitGenreOverrides]))
 
       const llmMoods = this.normalizeMoods(llmHints.mood || [])
       const explicitMoods = this.normalizeMoods(request.preferences?.mood || [])
@@ -612,12 +626,19 @@ export class PreferenceParser {
         preferences.referenceTitle = Array.from(new Set([...(preferences.referenceTitle || []), ...llmReferences]))
       }
 
+      preferences.referenceSuggestions = Array.from(new Set(
+        (llmHints.referenceSuggestions || []).map(title => title.trim()).filter(Boolean)
+      )).slice(0, 5)
+
       const llmExcludedGenres = this.normalizeGenres(llmHints.excludedGenres || [])
       preferences.excludedGenres = Array.from(new Set([
         ...(preferences.excludedGenres || []),
         ...llmExcludedGenres
       ]))
       preferences.genres = preferences.genres.filter(
+        genre => !preferences.excludedGenres?.some(excluded => excluded.toLowerCase() === genre.toLowerCase())
+      )
+      explicitGenres = explicitGenres.filter(
         genre => !preferences.excludedGenres?.some(excluded => excluded.toLowerCase() === genre.toLowerCase())
       )
 
@@ -709,6 +730,12 @@ export class PreferenceParser {
       if (!preferences.genres.includes('Indie')) {
         preferences.genres.push('Indie')
       }
+      if (
+        preferences.contentType === 'both' &&
+        !this.TV_HINT_KEYWORDS.some(keyword => description.includes(keyword))
+      ) {
+        preferences.contentType = 'movie'
+      }
       if (preferences.constraints) {
         preferences.constraints = Array.from(new Set([...preferences.constraints, 'novelty', 'discovery']))
       }
@@ -735,6 +762,7 @@ export class PreferenceParser {
 
     // Store original description for later use
     preferences.description = analysisText
+    preferences.explicitGenres = Array.from(new Set(explicitGenres))
 
     // If no genres found, infer genre hints from mood/novelty for non-reference discovery.
     if (
@@ -842,11 +870,29 @@ export class PreferenceParser {
     const base = request.description || ''
     const clarification = request.clarificationContext?.userClarification?.trim()
     const cumulativeConstraints = request.clarificationContext?.cumulativeConstraints || []
+    const userTurns = (request.clarificationContext?.userTurns || [])
+      .map(turn => turn.trim())
+      .filter(Boolean)
 
     const cumulative = cumulativeConstraints
       .map(value => value.trim())
       .filter(Boolean)
       .join(' ')
+
+    if (userTurns.length > 0) {
+      if (base && !userTurns.includes(base.trim())) {
+        userTurns.unshift(base.trim())
+      }
+      if (clarification && userTurns[userTurns.length - 1] !== clarification) {
+        userTurns.push(clarification)
+      }
+
+      const lastHardPivotIndex = userTurns.reduce((lastIndex, turn, index) =>
+        this.HARD_PIVOT_CUES.some(cue => turn.toLowerCase().includes(cue)) ? index : lastIndex,
+      -1)
+
+      return userTurns.slice(Math.max(0, lastHardPivotIndex)).join(' | ')
+    }
 
     if (!clarification && !cumulative) {
       return base

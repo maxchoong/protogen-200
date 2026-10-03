@@ -1,5 +1,113 @@
 # GitHub Models Setup Guide
 
+## Current Setup: Migrate Away From GitHub Models
+
+GitHub Models was retired on July 30, 2026. Its inference API is no longer
+available. GitHub Copilot is a separate service and cannot supply this app's
+model requests. Rotating a GitHub token will not restore the retired API.
+
+Official notice: https://docs.github.com/en/github-models/quickstart
+
+The backend now supports OpenAI or an OpenAI-compatible Chat Completions API.
+No provider has been purchased or credential changed automatically.
+
+### OpenAI
+
+1. Create an API key at https://platform.openai.com/api-keys and configure API
+   billing/model access. API usage is billed separately from ChatGPT and Copilot.
+2. Enter the key directly in your local `backend/.env`, never in chat or git:
+
+```env
+OPENAI_API_KEY=your_provider_key
+LLM_MODEL=gpt-4o-mini
+```
+
+Keep any other existing local API settings. `GITHUB_TOKEN` and `GITHUB_MODEL`
+are no longer used by this LLM client. The default base URL is
+`https://api.openai.com/v1`. Leave `LLM_API_KEY` and `LLM_BASE_URL` unset for
+this configuration.
+
+### Another Compatible Provider
+
+#### Gemini Free Tier
+
+Keep your Google AI Studio project on the free tier and enter its key privately
+in local `backend/.env`:
+
+```env
+LLM_API_KEY=your_gemini_api_key
+LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+LLM_MODEL=gemini-3.5-flash-lite
+```
+
+This uses Google's documented OpenAI-compatible endpoint, not the native
+Interactions REST endpoint. The native SDK's `GEMINI_API_KEY` setting is not
+automatically read by this client; use `LLM_API_KEY` here.
+
+On October 2, 2026, this model passed both live smoke-check paths. The earlier
+`gemini-2.5-flash-lite` setting returned 404 on generation despite appearing in
+the model catalog. Google notes that 2.5 model access is limited for new
+projects; use a currently supported model rather than treating catalog presence
+as proof of access. Model availability and free quotas may change.
+
+References: https://ai.google.dev/gemini-api/docs/openai and
+https://ai.google.dev/gemini-api/docs/deprecations.
+
+#### Other Providers
+
+Set the provider-specific key, base URL, and model together in local `backend/.env`:
+
+```env
+LLM_API_KEY=your_provider_key
+LLM_BASE_URL=https://provider.example/v1
+LLM_MODEL=your_provider_model
+```
+
+`LLM_API_KEY` takes precedence over `OPENAI_API_KEY`. Use only an endpoint you
+trust: this key and viewing requests will be sent there. The selected model
+must support Chat Completions, JSON-object responses, `temperature`, and
+`max_tokens`. Azure endpoints requiring a different authentication scheme or
+deployment-specific API version need additional integration; they are not
+automatically supported by setting these variables.
+
+### Verify and Restart
+
+From the workspace root:
+
+```bash
+npm --prefix backend run check:llm
+```
+
+This sends two small provider requests and may incur usage charges. It reports
+success only after both preference parsing and explanation generation return
+usable responses; merely configuring a key does not prove connectivity.
+
+Stop the existing backend in its terminal with Ctrl+C, then restart:
+
+```bash
+npm --prefix backend run dev
+```
+
+For deployment, set the same variables in the backend host's secret settings
+and redeploy/restart. Do not expose provider keys through frontend `VITE_*`
+variables. Without a supported provider key, the app keeps rule-based parsing
+and template explanations, and no requests are made to the retired service.
+
+### Troubleshooting
+
+- `401`/`403`: verify the new provider key, permissions, and model access.
+- `404`: verify the API base path and model identifier.
+- `429`: inspect provider quota/rate limits and billing.
+- Connection errors: inspect DNS, TLS trust, firewall, or proxy settings. Do
+  not disable TLS verification to work around them.
+- JSON-output errors: select a model supporting the required request options.
+
+## Historical Instructions (Obsolete, Do Not Follow)
+
+The original GitHub Models configuration below is retained for historical
+context only. Its endpoints, token advice, models, pricing, and limits are no
+longer valid setup instructions.
+
 ## Overview
 
 Phase 3 uses **GitHub Models** - a free AI service that provides access to GPT-4o-mini and other models at no cost!

@@ -161,6 +161,7 @@ describe('POST /recommendations route guardrails', () => {
         clarificationContext: {
           clarificationRound: 1,
           userClarification: 'prioritize blockbusters',
+          userTurns: ['Like Inception but more relaxing', 'prioritize blockbusters'],
           previousRecommendationIds: ['tt1375666', 'tt0816692'],
           cumulativeConstraints: ['show me movies from the 80s']
         }
@@ -185,6 +186,7 @@ describe('POST /recommendations route guardrails', () => {
         clarificationContext: expect.objectContaining({
           clarificationRound: 1,
           userClarification: 'prioritize blockbusters',
+          userTurns: ['Like Inception but more relaxing', 'prioritize blockbusters'],
           previousRecommendationIds: ['tt1375666', 'tt0816692'],
           cumulativeConstraints: ['show me movies from the 80s']
         })

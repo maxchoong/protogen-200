@@ -13,6 +13,7 @@ interface ConversationalHomeProps {
       askedQuestionIds?: string[]
       previousRecommendationIds?: string[]
       cumulativeConstraints?: string[]
+      userTurns?: string[]
     }
   ) => Promise<{
     recommendations?: any[]
@@ -63,6 +64,8 @@ interface ConversationalHomeProps {
 
 type PendingPhase = 'initial' | 'slow' | 'delayed' | null
 
+const HARD_PIVOT_CUE_PATTERN = /\b(?:instead|actually|forget that|forget this|different direction|switch gears|new direction|not that|start over)\b/i
+
 export default function ConversationalHome({
   conversation,
   onSubmit,
@@ -110,12 +113,13 @@ export default function ConversationalHome({
     const shouldTreatAsFollowUp = options.forceFollowUp ?? false
     const isFollowUp = state.hasCompletedInitialRequest || shouldTreatAsFollowUp
     const baseQuery = state.lastQuery || trimmed
+    const submittedAt = Date.now()
 
     if (shouldAppendUserMessage) {
       conversation.addMessage({
         role: 'user',
         text: trimmed,
-        timestamp: Date.now()
+        timestamp: submittedAt
       })
       setInputValue('')
     }
@@ -134,9 +138,32 @@ export default function ConversationalHome({
     const previousRecommendationIds = (latestPass?.recommendations || [])
       .map((item: any) => item?.id)
       .filter((id: string | undefined): id is string => !!id)
+    const userTurns = [
+      ...state.messages.filter(message => message.role === 'user').map(message => message.text),
+      ...(shouldAppendUserMessage ? [trimmed] : [])
+    ]
+    const latestHardPivotTurn = [...userTurns].reverse().find(turn => HARD_PIVOT_CUE_PATTERN.test(turn))
+    const latestHardPivotMessage = latestHardPivotTurn
+      ? [...state.messages].reverse().find(message => message.role === 'user' && message.text === latestHardPivotTurn)
+      : undefined
+    const latestHardPivotTimestamp = latestHardPivotTurn
+      ? shouldAppendUserMessage && latestHardPivotTurn === trimmed
+        ? submittedAt
+        : latestHardPivotMessage?.timestamp || 0
+      : undefined
+    const latestHardPivotPassIndex = state.recommendationPasses.reduce(
+      (lastIndex, pass, index) => pass.turnOperation?.continuity === 'hard_pivot' ? index : lastIndex,
+      -1
+    )
+    const latestHardPivotPass = state.recommendationPasses[latestHardPivotPassIndex]
+    const hardPivotIsUnresolved = latestHardPivotTimestamp !== undefined &&
+      (!latestHardPivotPass || latestHardPivotPass.timestamp < latestHardPivotTimestamp)
+    const activePasses = latestHardPivotPassIndex >= 0
+      ? state.recommendationPasses.slice(latestHardPivotPassIndex)
+      : state.recommendationPasses
     const cumulativeConstraints = Array.from(
       new Set(
-        state.recommendationPasses.flatMap(pass => pass.appliedConstraints || [])
+        (hardPivotIsUnresolved ? [] : activePasses).flatMap(pass => pass.appliedConstraints || [])
       )
     )
 
@@ -149,7 +176,8 @@ export default function ConversationalHome({
               userClarification: trimmed,
               askedQuestionIds,
               previousRecommendationIds,
-              cumulativeConstraints
+              cumulativeConstraints,
+              userTurns
             }
           : undefined
       )

@@ -10,13 +10,17 @@ This file includes:
 
 ## Current Status
 
-**Last updated: October 2, 2026.** The current product is a conversation-first film and TV advisor. Users refine requests in free text; meta-steering and refinement suggestion chips are not part of the UI.
+**Last updated: October 3, 2026.** The current product is a conversation-first film and TV advisor. Users refine requests in free text; meta-steering and refinement suggestion chips are not part of the UI.
 
 - Retrieval uses TMDB discovery when enabled, with OMDb/FMDb fallback and metadata compatibility.
 - Responses can include applied constraints, intent metadata, retrieval diagnostics, and interpretation notes for proxy assumptions.
 - Content safety currently blocks TMDB titles marked `adult`; detailed certification enforcement is not implemented.
 - LLM features, streaming availability, and trailer enrichment remain optional and degrade gracefully.
-- Frontend/backend lint and builds pass; backend Jest passes 128/128 tests.
+- Frontend/backend lint and builds pass; backend Jest passes 169/169 tests.
+- GitHub Models retired July 30, 2026. The current client supports configurable OpenAI-compatible providers; Gemini 3.5 Flash-Lite now passes live parsing and explanation checks. Historical GitHub Models descriptions below are superseded.
+- Contrastive reference matching uses prioritized concept retrieval and whole-word evidence; violent/survival mismatches and low-support keyword noise are filtered.
+- Indie discovery treats Indie as a soft pseudo-genre, combines diverse catalog-validated title seeds with quality-filtered keyword searches, and defaults to movies unless TV is explicitly requested.
+- Relaxing reference ranking applies graded synopsis conflict signals: moderate urgency demotes, while severe peril/survival/violence and countdown-plus-threat plots are excluded.
 - GitHub Actions runs frontend lint/build and backend lint/build/test on pushes and pull requests.
 - Frontend Browserslist data is current; the production build has no stale-data warning.
 - Development tokens referenced in historical notes have been rotated (confirmed October 2, 2026).

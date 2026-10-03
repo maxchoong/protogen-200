@@ -2,10 +2,6 @@ import OpenAI from 'openai'
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions'
 import type { LLMPreferenceHints } from '../engine/preferenceParser.js'
 
-// GitHub Models configuration
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN || ''
-const GITHUB_MODEL = process.env.GITHUB_MODEL || 'gpt-4o-mini'
-const GITHUB_API_BASE = 'https://models.inference.ai.azure.com'
 const LLM_TIMEOUT_MS = 15000
 const MAX_RETRIES = 2
 
@@ -18,40 +14,50 @@ interface LLMCache {
 }
 
 /**
- * GitHub Models LLM Client for Film Advisor
+ * OpenAI-compatible LLM Client for Film Advisor
  * Handles preference parsing, explanation generation, and synopsis creation
- * Uses free GitHub Models tier (150 requests/day)
  */
 export class LLMClient {
   private client: OpenAI | null = null
   private cache: LLMCache = {}
   private enabled: boolean = false
+  private model: string
 
   constructor() {
-    if (GITHUB_TOKEN && GITHUB_TOKEN !== '') {
+    const apiKey = process.env.LLM_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim() || ''
+    const baseURL = process.env.LLM_BASE_URL?.trim() || 'https://api.openai.com/v1'
+    this.model = process.env.LLM_MODEL?.trim() || 'gpt-4o-mini'
+
+    if (apiKey) {
       try {
+        const endpoint = new URL(baseURL)
+        if (['models.inference.ai.azure.com', 'models.github.ai'].includes(endpoint.hostname)) {
+          console.warn('[LLM] GitHub Models was retired on July 30, 2026. Configure a supported provider; using fallbacks.')
+          return
+        }
         this.client = new OpenAI({
-          apiKey: GITHUB_TOKEN,
-          baseURL: GITHUB_API_BASE,
+          apiKey,
+          baseURL,
           timeout: LLM_TIMEOUT_MS,
           maxRetries: MAX_RETRIES
         })
         this.enabled = true
-        console.log(`✅ GitHub Models LLM Client initialized (${GITHUB_MODEL})`)
-        console.log(`📊 Free tier: 150 requests/day`)
-      } catch (error) {
-        console.error('❌ Failed to initialize GitHub Models client:', error)
+        console.log(`[LLM] Client configured (${this.model}); connectivity is verified on request.`)
+      } catch {
+        console.error('[LLM] Failed to initialize client; check LLM_BASE_URL and provider configuration.')
         this.enabled = false
       }
     } else {
-      console.log('⚠️  GITHUB_TOKEN not set. LLM features will use fallbacks.')
-      console.log('💡 Get a token at: https://github.com/settings/tokens?type=beta')
+      if (process.env.GITHUB_TOKEN) {
+        console.warn('[LLM] GitHub Models was retired on July 30, 2026. GITHUB_TOKEN cannot enable LLM features.')
+      }
+      console.log('[LLM] Set OPENAI_API_KEY or LLM_API_KEY for a supported provider. Using fallbacks.')
       this.enabled = false
     }
   }
 
   /**
-   * Check if LLM is available
+  * Check if a supported LLM provider is configured (not a connectivity probe)
    */
   isEnabled(): boolean {
     return this.enabled
@@ -74,12 +80,12 @@ export class LLMClient {
     }
 
     try {
-      console.log('[LLM] Parsing preferences with GPT-4o-mini...')
+      console.log(`[LLM] Parsing preferences with ${this.model}...`)
 
       const messages: ChatCompletionMessageParam[] = [
         {
           role: 'system',
-          content: `You are a film recommendation assistant. Extract only preferences clearly expressed by the user. Do not invent actors, titles, genres, exclusions, or constraints.
+          content: `You are a film recommendation assistant. Extract only preferences clearly expressed by the user. Do not invent actors, reference titles, genres, exclusions, or constraints. The separate referenceSuggestions field may contain catalog-search ideas when a referenced title and requested change in tone make that useful.
 Return ONLY valid JSON with this exact structure:
 {
   "genres": [],
@@ -88,6 +94,7 @@ Return ONLY valid JSON with this exact structure:
   "maxRating": "R",
   "keywords": [],
   "referenceTitles": [],
+  "referenceSuggestions": [],
   "actors": [],
   "excludedGenres": [],
   "yearRange": {"min": null, "max": null}
@@ -96,6 +103,8 @@ Return ONLY valid JSON with this exact structure:
 Use canonical genres: Action, Adventure, Animation, Comedy, Crime, Documentary, Drama, Family, Fantasy, History, Horror, Music, Mystery, Romance, Sci-Fi, Thriller, War, Western.
 Use canonical moods: Happy, Sad, Intense, Relaxing, Funny, Thoughtful, Dark, Romantic, Suspenseful, Surprising.
 Put title similarity anchors in referenceTitles, named performers in actors, and descriptive concepts useful for catalog search in keywords.
+When a request names a reference and asks for a tonal change, suggest up to five real, specific titles that retain conceptual or narrative appeal while fitting the new tone. Cross genres when the premise supports it (for example, a high-concept memory puzzle can point to thoughtful science fiction). Do not include the reference itself. These titles are search seeds that will be checked against the catalog, not guaranteed matches.
+For a broad novelty or indie-discovery request without a named reference, put up to five diverse, real title search seeds in referenceSuggestions. Cover unusual premise or genre shift, atmosphere, quiet character/emotional impact, visual or formal invention, and offbeat satire; include titles from different genres rather than clustering in sci-fi/thriller. For calibration, this range can include The One I Love or Coherence (odd premise), The Vast of Night (atmosphere), The Station Agent or The Rider (character impact), The Fall or A Ghost Story (visual/formal), and Sorry to Bother You (satire/genre shift). These are examples, not a fixed whitelist. Favor distinctive voice and credible quality with modest exposure; do not equate obscurity with quality or limit suggestions to plot twists. The catalog will validate each title.
 Use null for unknown year bounds. Preserve all relevant details from the full conversation.`
         },
         {
@@ -105,7 +114,7 @@ Use null for unknown year bounds. Preserve all relevant details from the full co
       ]
 
       const response = await this.client!.chat.completions.create({
-        model: GITHUB_MODEL,
+        model: this.model,
         messages,
         temperature: 0.3,
         max_tokens: 450,
@@ -137,6 +146,7 @@ Use null for unknown year bounds. Preserve all relevant details from the full co
           : 'R',
         keywords: toStringArray(parsed.keywords),
         referenceTitles: toStringArray(parsed.referenceTitles),
+        referenceSuggestions: toStringArray(parsed.referenceSuggestions).slice(0, 5),
         actors: toStringArray(parsed.actors),
         excludedGenres: toStringArray(parsed.excludedGenres),
         yearRange: yearRange
@@ -203,7 +213,7 @@ Why recommend this?`
       ]
 
       const response = await this.client!.chat.completions.create({
-        model: GITHUB_MODEL,
+        model: this.model,
         messages,
         temperature: 0.7,
         max_tokens: 100
@@ -310,7 +320,7 @@ Generate explanations as JSON object with numbered keys. Reference the matching 
       ]
 
       const response = await this.client!.chat.completions.create({
-        model: GITHUB_MODEL,
+        model: this.model,
         messages,
         temperature: 0.7,
         max_tokens: 500,
@@ -375,7 +385,7 @@ Generate explanations as JSON object with numbered keys. Reference the matching 
       ]
 
       const response = await this.client!.chat.completions.create({
-        model: GITHUB_MODEL,
+        model: this.model,
         messages,
         temperature: 0.6,
         max_tokens: 150
@@ -441,7 +451,7 @@ Rules:
       ]
 
       const response = await this.client!.chat.completions.create({
-        model: GITHUB_MODEL,
+        model: this.model,
         messages,
         temperature: 0.2,
         max_tokens: 220,

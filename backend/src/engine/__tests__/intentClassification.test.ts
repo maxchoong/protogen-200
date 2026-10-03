@@ -25,6 +25,7 @@ describe('LLM preference hint merging', () => {
       mood: ['relaxing'],
       contentType: 'movie',
       keywords: ['cozy', 'feel-good'],
+      referenceSuggestions: ['Project Hail Mary', 'Arrival'],
       actors: ['Jude Law'],
       excludedGenres: ['horror']
     })
@@ -39,6 +40,69 @@ describe('LLM preference hint merging', () => {
     expect(preferences.genres).not.toContain('Horror')
     expect(preferences.excludedGenres).toContain('Horror')
     expect(preferences.keywords).toEqual(['cozy', 'feel-good'])
+    expect(preferences.referenceSuggestions).toEqual(['Project Hail Mary', 'Arrival'])
+  })
+})
+
+describe('Active conversation preference context', () => {
+  it('retains actor and genre signals across compatible refinements', () => {
+    const request: RecommendationRequest = {
+      description: 'A cozy weekend movie',
+      clarificationContext: {
+        clarificationRound: 2,
+        userClarification: 'More of a rom-com vibe',
+        userTurns: [
+          'A cozy weekend movie',
+          'Something with Jude Law',
+          'More of a rom-com vibe'
+        ]
+      }
+    }
+    const analysisText = PreferenceParser.buildAnalysisText(request)
+    const preferences = PreferenceParser.parse(request)
+
+    expect(analysisText).toContain('Something with Jude Law')
+    expect(preferences.detectedActors).toContain('Jude Law')
+    expect(preferences.genres).toEqual(expect.arrayContaining(['Comedy', 'Romance']))
+    expect(preferences.mood).toContain('Relaxing')
+  })
+
+  it('clears actor and genre signals after an explicit hard pivot', () => {
+    const request: RecommendationRequest = {
+      description: 'A cozy weekend movie',
+      clarificationContext: {
+        clarificationRound: 2,
+        userClarification: 'Forget that, show me a documentary',
+        userTurns: [
+          'A cozy weekend movie',
+          'Something with Jude Law',
+          'Forget that, show me a documentary'
+        ]
+      }
+    }
+    const analysisText = PreferenceParser.buildAnalysisText(request)
+    const preferences = PreferenceParser.parse(request)
+
+    expect(analysisText).not.toContain('Jude Law')
+    expect(preferences.detectedActors).toEqual([])
+    expect(preferences.genres).toContain('Documentary')
+    expect(preferences.mood).not.toContain('Relaxing')
+  })
+
+  it('retains reference and mood signals without introducing actor intent', () => {
+    const request: RecommendationRequest = {
+      description: 'Like Inception',
+      clarificationContext: {
+        clarificationRound: 1,
+        userClarification: 'More relaxing',
+        userTurns: ['Like Inception', 'More relaxing']
+      }
+    }
+    const preferences = PreferenceParser.parse(request)
+
+    expect(preferences.referenceTitle).toContain('Inception')
+    expect(preferences.mood).toContain('Relaxing')
+    expect(preferences.detectedActors).toEqual([])
   })
 })
 
@@ -249,8 +313,12 @@ describe('Phase 5: Intent Classification & Clarification', () => {
 
       expect(preferences.noveltyIntent).toBe(true)
       expect(preferences.genres).toContain('Indie')
+      expect(preferences.contentType).toBe('movie')
       expect((preferences.intentConfidence || 0)).toBeGreaterThanOrEqual(0.65)
       expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull()
+
+      const seriesPreferences = PreferenceParser.parse({ description: 'Surprising indie series' })
+      expect(seriesPreferences.contentType).toBe('tv')
     })
 
     it('should infer tv content type from show-oriented wording', () => {

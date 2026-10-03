@@ -16,7 +16,7 @@
 ### External Services
 - TMDB for discovery, details enrichment, credits, trailers, and IMDb mapping
 - OMDb/FMDb path for search/details fallback and metadata compatibility
-- GitHub Models `gpt-4o-mini` for preference parsing and recommendation explanations (optional)
+- OpenAI-compatible Chat Completions API for optional preference parsing and explanations (default model: `gpt-4o-mini`)
 - Streaming Availability API via RapidAPI for watch-platform availability
 
 ---
@@ -121,9 +121,12 @@
 - Provides additional search/detail fallback and compatibility fields.
 - Supports recommendation continuity where TMDB is unavailable or sparse.
 
-### GitHub Models
-- Base URL: `https://models.inference.ai.azure.com`
-- Model: `gpt-4o-mini`
+### Optional LLM Provider
+- GitHub Models retired July 30, 2026; the original Azure inference hostname fails DNS. See https://docs.github.com/en/github-models/quickstart.
+- Default base URL: `https://api.openai.com/v1`, default model: `gpt-4o-mini`.
+- Configure `OPENAI_API_KEY`, or provider-specific `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL`. GitHub tokens are not used as provider credentials.
+- `npm --prefix backend run check:llm` checks actual parsing and explanation responses; a configured key alone does not prove availability.
+- Gemini is now configured locally via `LLM_API_KEY`, `LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/`, and `LLM_MODEL=gemini-3.5-flash-lite`. Both live smoke-check paths passed October 2, 2026; the 2.5 Flash-Lite model returned 404 despite catalog presence. Keys stay in the ignored local environment file. Restart backend processes after environment changes.
 - Used for:
   - enhanced preference parsing
   - batch recommendation explanations

@@ -91,15 +91,32 @@ export class RecommendationEngine {
 
     const includeMovies = typeFilter !== 'series'
     const includeTV = typeFilter !== 'movie'
+    const isNoveltyDiscovery = discoveryMode === 'mood' && preferredGenres.some(
+      genre => genre.toLowerCase() === 'indie'
+    )
 
     const shouldUseGenreDiscover =
       preferredGenres.length > 0 &&
       (discoveryMode === 'mood' || discoveryMode === 'reference' || discoveryMode === 'mixed' || discoveryMode === 'talent')
 
     const tmdbResultSets: any[][] = []
+    const tmdbTitleSearchResults: any[][] = searchTerms.length > 0
+      ? await Promise.all(searchTerms.map(term =>
+          tmdbClient.searchTitles(term, {
+            includeMovies,
+            includeTV,
+            excludeAdult: true
+          })
+        ))
+      : []
 
+    if (discoveryMode === 'reference' || isNoveltyDiscovery) {
+      tmdbResultSets.push(...tmdbTitleSearchResults)
+    }
+
+    let genreDiscoverResults: any[] = []
     if (shouldUseGenreDiscover) {
-      const discoverResults = await tmdbClient.discoverByGenres(
+      genreDiscoverResults = await tmdbClient.discoverByGenres(
         preferredGenres.slice(0, 3),
         {
           includeMovies,
@@ -109,8 +126,10 @@ export class RecommendationEngine {
           yearRange
         }
       )
-      tmdbResultSets.push(discoverResults)
-      console.log(`[Engine] TMDB genre discovery yielded ${discoverResults.length} titles`)
+      if (discoveryMode !== 'reference') {
+        tmdbResultSets.push(genreDiscoverResults)
+      }
+      console.log(`[Engine] TMDB genre discovery yielded ${genreDiscoverResults.length} titles`)
     }
 
     if (keywords.length > 0) {
@@ -119,23 +138,24 @@ export class RecommendationEngine {
         includeTV,
         excludeAdult: true,
         excludedGenres,
-        yearRange
+        yearRange,
+          keywordLimit: discoveryMode === 'reference' || isNoveltyDiscovery ? 16 : 8,
+          keywordPages: 2,
+          separateKeywordQueries: discoveryMode === 'reference' || isNoveltyDiscovery,
+          sortBy: isNoveltyDiscovery ? 'vote_average.desc' : undefined,
+          minimumVoteCount: isNoveltyDiscovery ? 100 : undefined,
+          minimumVoteAverage: isNoveltyDiscovery ? 6 : undefined
       })
       tmdbResultSets.push(keywordResults)
       console.log(`[Engine] TMDB keyword discovery yielded ${keywordResults.length} titles`)
     }
 
-    if (searchTerms.length > 0) {
-      const tmdbSearches = await Promise.all(
-        searchTerms.map(term =>
-          tmdbClient.searchTitles(term, {
-            includeMovies,
-            includeTV,
-            excludeAdult: true
-          })
-        )
-      )
-      tmdbResultSets.push(...tmdbSearches)
+    if (discoveryMode === 'reference') {
+      tmdbResultSets.push(genreDiscoverResults)
+    }
+
+    if (discoveryMode !== 'reference' && !isNoveltyDiscovery) {
+      tmdbResultSets.push(...tmdbTitleSearchResults)
     }
 
     const deduped = Array.from(
@@ -146,7 +166,8 @@ export class RecommendationEngine {
       ).values()
     )
 
-    const limited = deduped.slice(0, 30)
+    const candidatePoolLimit = discoveryMode === 'reference' ? 640 : isNoveltyDiscovery ? 120 : 60
+    const limited = deduped.slice(0, candidatePoolLimit)
 
     const converted = await Promise.all(
       limited.map(async item => this.convertTmdbResult(item))
@@ -240,7 +261,10 @@ export class RecommendationEngine {
     const detailed = await Promise.all(imdbIds.map(id => fmdbClient.getDetails(id)))
     return detailed
       .filter((item): item is any => !!item)
-      .map(item => fmdbClient.convertToInternal(item))
+      .map(item => ({
+        ...fmdbClient.convertToInternal(item),
+        fromPreviousRecommendation: true
+      }))
   }
 
   private async searchCandidates(
@@ -332,6 +356,136 @@ export class RecommendationEngine {
     return specific.length > 0 ? specific : unique
   }
 
+  private buildReferenceConceptKeywords(referenceTitles: any[]): string[] {
+    const referenceText = referenceTitles
+      .map(reference => reference?.plot || '')
+      .join(' ')
+      .toLowerCase()
+    const keywords = new Set<string>()
+
+    if (referenceTitles.some(reference => (reference?.genres || []).includes('Sci-Fi'))) {
+      keywords.add('space station')
+      keywords.add('space travel')
+      keywords.add('astronaut')
+      keywords.add('time travel')
+      keywords.add('time perception')
+      keywords.add('first contact')
+      keywords.add('suspended animation')
+      keywords.add('destiny')
+      keywords.add('fate')
+    }
+    if (/\b(dream|subconscious|memory|memories|mind|consciousness|identity)\b/.test(referenceText)) {
+      keywords.add('memory')
+      keywords.add('memory erasure')
+      keywords.add('mind-bending')
+      keywords.add('amnesia')
+      keywords.add('identity')
+    }
+    if (/\b(idea|plan|puzzle|riddle|clue|mystery|secret|uncover)\b/.test(referenceText)) {
+      keywords.add('puzzle')
+      keywords.add('problem solving')
+    }
+    if (/\b(dreams?|subconscious|reality|illusion|simulation|perception|parallel)\b/.test(referenceText)) {
+      keywords.add('dream')
+      keywords.add('reality-bending')
+      keywords.add('alternate reality')
+      keywords.add('simulation')
+      keywords.add('hidden camera')
+      keywords.add('artificial reality')
+    }
+
+    const priority = [
+      'dream', 'memory', 'alternate reality', 'simulation', 'time travel',
+      'time perception', 'first contact', 'space station', 'space travel',
+      'astronaut', 'memory erasure', 'hidden camera', 'artificial reality',
+      'fate', 'destiny', 'suspended animation', 'mind-bending',
+      'identity', 'amnesia', 'puzzle', 'problem solving'
+    ]
+    return priority.filter(keyword => keywords.has(keyword)).slice(0, 16)
+  }
+
+  private scoreReferenceConceptFit(candidatePlot: string | undefined, referenceTitles: any[]): number {
+    if (!candidatePlot || referenceTitles.length === 0) return 0
+
+    const conceptTerms: Record<string, string[]> = {
+      cognition: ['mind', 'subconscious', 'memory', 'memories', 'remember', 'recollection', 'identity', 'hibernation', 'stasis', 'awaken'],
+      mentalManipulation: ['subconscious', 'dream-sharing', 'dream sharing', 'plant an idea', 'implant an idea', 'memory erasure', 'erase memories', 'erase him from her memory', 'memory manipulation'],
+      constructedReality: ['reality tv', 'staged', 'unseen audience', 'fictional world', 'sitcom', 'television show', 'black-and-white world', 'hidden camera', 'artificial reality', 'constructed reality', 'scripted world'],
+      psychologicalSpeculation: ['psychologist', 'psychological', 'psyche', 'repressed memory', 'mental problems', 'obsessions'],
+      agencyManipulation: ['planning', 'planned', 'plant an idea', 'altered his future', 'control the future', 'controlling his destiny', 'fate has planned', 'predetermined future'],
+      perception: ['dream', 'subconscious', 'reality', 'illusion', 'simulation', 'perception', 'parallel world', 'alternate world', 'time dilation', 'time perception', 'alternate timeline', 'fate', 'destiny'],
+      puzzle: ['puzzle', 'riddle', 'solve', 'decipher', 'decode', 'determine', 'understand', 'clue', 'plan', 'idea', 'secret', 'uncover', 'discover', 'mystery'],
+      speculative: ['science', 'scientist', 'technology', 'experiment', 'space', 'astronaut', 'wormhole', 'invention', 'future', 'time travel', 'alien', 'aliens', 'linguist'],
+      languageAndTime: ['linguist', 'language', 'communication', 'first contact', 'time perception', 'perception of time', 'time dilation', 'dilated time', 'nonlinear time', 'non-linear time']
+    }
+    const getConcepts = (text: string) => {
+      const words = text.toLowerCase().match(/[a-z0-9]+/g) || []
+      return Object.entries(conceptTerms)
+        .filter(([, terms]) => terms.some(term => {
+          const termWords = term.toLowerCase().match(/[a-z0-9]+/g) || []
+          return termWords.length > 0 && words.some((_, index) =>
+            termWords.every((word, offset) => words[index + offset] === word)
+          )
+        }))
+      .map(([concept]) => concept)
+    }
+    const referenceConcepts = new Set(
+      referenceTitles.flatMap(reference => getConcepts(reference?.plot || ''))
+    )
+    const isSciFiReference = referenceTitles.some(reference =>
+      (reference?.genres || []).includes('Sci-Fi')
+    )
+    if (isSciFiReference) {
+      referenceConcepts.add('speculative')
+      if (referenceConcepts.has('cognition') && referenceConcepts.has('perception')) {
+        referenceConcepts.add('languageAndTime')
+      }
+    }
+    if (referenceConcepts.has('perception')) {
+      referenceConcepts.add('constructedReality')
+    }
+    if (isSciFiReference && (referenceConcepts.has('cognition') || referenceConcepts.has('perception'))) {
+      referenceConcepts.add('psychologicalSpeculation')
+    }
+    if (referenceConcepts.has('mentalManipulation')) {
+      referenceConcepts.add('agencyManipulation')
+    }
+    if (referenceConcepts.size === 0) return 0
+
+    const candidateConcepts = new Set(getConcepts(candidatePlot))
+    const overlapCount = Array.from(referenceConcepts).filter(concept => candidateConcepts.has(concept)).length
+    const matchingCoreConcepts = ['cognition', 'perception'].filter(concept =>
+      referenceConcepts.has(concept) && candidateConcepts.has(concept)
+    )
+    const hasMentalManipulationMatch = referenceConcepts.has('mentalManipulation') &&
+      candidateConcepts.has('mentalManipulation')
+    const hasLanguageTimeBridge = isSciFiReference &&
+      (referenceConcepts.has('cognition') || referenceConcepts.has('perception')) &&
+      candidateConcepts.has('languageAndTime')
+    const hasConstructedRealityBridge = referenceConcepts.has('perception') &&
+      candidateConcepts.has('constructedReality')
+    const hasPsychologicalSpeculationBridge = referenceConcepts.has('psychologicalSpeculation') &&
+      candidateConcepts.has('psychologicalSpeculation')
+    const hasAgencyManipulationBridge = referenceConcepts.has('agencyManipulation') &&
+      candidateConcepts.has('agencyManipulation')
+    const hasCognitionPuzzleSpeculation =
+      candidateConcepts.has('cognition') && candidateConcepts.has('puzzle') && candidateConcepts.has('speculative')
+    const conceptScore = overlapCount / referenceConcepts.size
+    if (hasLanguageTimeBridge) {
+      return Math.max(1, conceptScore)
+    }
+    if (hasMentalManipulationMatch) {
+      return Math.max(0.8, conceptScore)
+    }
+    if (hasConstructedRealityBridge || hasPsychologicalSpeculationBridge || hasAgencyManipulationBridge) {
+      return Math.max(0.75, conceptScore)
+    }
+    if (hasCognitionPuzzleSpeculation) return Math.max(0.7, conceptScore)
+    if (matchingCoreConcepts.length === 2) return Math.max(0.65, conceptScore)
+    if (matchingCoreConcepts.length === 1) return Math.max(0.55, conceptScore)
+    return conceptScore
+  }
+
   private getDecade(year: number | undefined): number | null {
     if (!year || !Number.isFinite(year)) {
       return null
@@ -387,7 +541,7 @@ export class RecommendationEngine {
     return adjustment
   }
 
-  private selectFinalResults(ranked: any[], limit: number): any[] {
+  private selectFinalResults(ranked: any[], limit: number, diversityWeight: number = 1): any[] {
     if (ranked.length <= limit) {
       return ranked.slice(0, limit)
     }
@@ -403,7 +557,7 @@ export class RecommendationEngine {
 
       remaining.forEach((candidate, index) => {
         const composite = candidate.scoringFactors?.composite || 0
-        const adjustedScore = composite + this.scoreDiversityAdjustment(candidate, selected)
+        const adjustedScore = composite + this.scoreDiversityAdjustment(candidate, selected) * diversityWeight
 
         if (adjustedScore > bestScore) {
           bestScore = adjustedScore
@@ -541,6 +695,7 @@ export class RecommendationEngine {
 
     // === PHASE 2.2: Fetch and cache reference titles ===
     const referenceTitles: any[] = []
+    const referenceCandidates: any[] = []
     if (preferences.referenceTitle && preferences.referenceTitle.length > 0) {
       console.log(`[Engine] Fetching reference titles: ${preferences.referenceTitle.join(', ')}`)
       const refTitlePromises = preferences.referenceTitle.map(refTitle =>
@@ -550,9 +705,58 @@ export class RecommendationEngine {
       const validRefs = refResults.filter((r): r is any => r !== null)
       referenceTitles.push(...validRefs)
       const referenceGenres = this.deriveReferenceGenres(referenceTitles)
+      preferences.referenceGenres = Array.from(new Set(
+        referenceTitles.flatMap(reference => reference?.genres || [])
+      ))
       if (referenceGenres.length > 0) {
         preferences.genres = Array.from(new Set([...referenceGenres, ...preferences.genres]))
       }
+
+      const referenceMediaTypes = new Set(referenceTitles.map(title =>
+        title.type === 'series' || title.type === 'episode' ? 'tv' : 'movie'
+      ))
+      if (!preferences.contentTypeExplicit && preferences.contentType === 'both' && referenceMediaTypes.size === 1) {
+        preferences.contentType = Array.from(referenceMediaTypes)[0] === 'tv' ? 'tv' : 'movie'
+      }
+
+      if (tmdbClient.isEnabled()) {
+        const relatedTitleSets = await Promise.all(referenceTitles.map(async reference => {
+          if (!this.isImdbId(reference.id)) return []
+
+          const mediaType = reference.type === 'series' || reference.type === 'episode' ? 'tv' : 'movie'
+          if (
+            (preferences.contentType === 'movie' && mediaType !== 'movie') ||
+            (preferences.contentType === 'tv' && mediaType !== 'tv')
+          ) {
+            return []
+          }
+
+          const tmdbReference = await tmdbClient.findTitleByImdbId(reference.id, mediaType)
+          if (!tmdbReference) return []
+
+          const [recommendations, similarTitles] = await Promise.all([
+            tmdbClient.getRelatedTitles(tmdbReference.tmdbId, mediaType, 'recommendations'),
+            tmdbClient.getRelatedTitles(tmdbReference.tmdbId, mediaType, 'similar')
+          ])
+
+          return [
+            ...recommendations.map((item, index) => ({
+              ...this.convertTmdbResult(item),
+              referenceSimilarityScore: Math.max(0.85, 1 - index * 0.01)
+            })),
+            ...similarTitles.map((item, index) => ({
+              ...this.convertTmdbResult(item),
+              referenceSimilarityScore: Math.max(0.6, 0.7 - index * 0.005)
+            }))
+          ]
+        }))
+        referenceCandidates.push(...relatedTitleSets.flat())
+        if (referenceCandidates.length > 0) {
+          diagnostics.usedTmdb = true
+          console.log(`[Engine] Retrieved ${referenceCandidates.length} TMDB candidates related to reference titles`)
+        }
+      }
+
       console.log(`[Engine] Resolved ${referenceTitles.length} reference titles`)
     }
 
@@ -577,7 +781,10 @@ export class RecommendationEngine {
       console.log(`[Engine] Mixed/default mode: extracted search terms`)
     }
 
-    searchTerms = this.normalizeSearchTerms(searchTerms)
+    searchTerms = this.normalizeSearchTerms([
+      ...searchTerms,
+      ...(preferences.referenceSuggestions || []).slice(0, 5)
+    ])
 
     const moodKeywordHints: Record<string, string[]> = {
       Relaxing: ['cozy', 'feel-good', 'comfort'],
@@ -590,10 +797,17 @@ export class RecommendationEngine {
       Suspenseful: ['suspense', 'mystery'],
       Surprising: ['unexpected', 'unusual']
     }
+    const referenceConceptKeywords = this.buildReferenceConceptKeywords(referenceTitles)
+    const orderedPreferenceKeywords = preferences.discoveryMode === 'reference'
+      ? [...referenceConceptKeywords, ...(preferences.keywords || [])]
+      : [...(preferences.keywords || []), ...referenceConceptKeywords]
     const discoveryKeywords = Array.from(new Set([
-      ...(preferences.keywords || []),
+      ...orderedPreferenceKeywords,
       ...(preferences.mood || []).flatMap(mood => moodKeywordHints[mood] || []),
-      ...(preferences.noveltyIntent ? ['independent', 'indie film', 'hidden gem', 'offbeat'] : [])
+      ...(preferences.noveltyIntent ? [
+        'independent film', 'independent cinema', 'indie film', 'film festival',
+        'cult film', 'low budget', 'offbeat', 'unexpected premise'
+      ] : [])
     ]))
 
     if (!tmdbClient.isEnabled() && searchTerms.length === 0) {
@@ -630,7 +844,7 @@ export class RecommendationEngine {
       hasExactYearConstraint
 
     let actorFilmographyCandidates: any[] = []
-    if (preferences.discoveryMode === 'talent' && preferences.detectedActors && preferences.detectedActors.length > 0 && tmdbClient.isEnabled()) {
+    if (preferences.detectedActors && preferences.detectedActors.length > 0 && tmdbClient.isEnabled()) {
       const includeMovies = typeFilter !== 'series'
       const includeTV = typeFilter !== 'movie'
 
@@ -643,7 +857,7 @@ export class RecommendationEngine {
               includeTV,
               excludeAdult: true
             },
-            20
+            100
           )
         )
       )
@@ -654,14 +868,17 @@ export class RecommendationEngine {
 
       if (actorFilmographyCandidates.length > 0) {
         diagnostics.usedTmdb = true
-        console.log(`[Engine] Talent mode: retrieved ${actorFilmographyCandidates.length} actor filmography candidates from TMDB`)
+        console.log(`[Engine] Retrieved ${actorFilmographyCandidates.length} filmography candidates for active actor constraints`)
       }
     }
 
     const previousRecommendationIds = request.clarificationContext?.previousRecommendationIds || []
     const shouldReusePreviousCandidates =
       (request.clarificationContext?.clarificationRound ?? 0) > 0 &&
-      previousRecommendationIds.length > 0
+      previousRecommendationIds.length > 0 &&
+      preferences.turnOperation?.continuity !== 'hard_pivot' &&
+      preferences.turnOperation?.operation !== 'replace' &&
+      !preferences.turnOperation?.rationaleTags.includes('anchor_shift')
 
     let previousCandidates: any[] = []
     if (shouldReusePreviousCandidates) {
@@ -688,7 +905,11 @@ export class RecommendationEngine {
         page
       )
 
-      candidates = pagedMainstream.map(item => this.convertTmdbResult(item))
+      candidates = [
+        ...referenceCandidates,
+        ...actorFilmographyCandidates,
+        ...pagedMainstream.map(item => this.convertTmdbResult(item))
+      ]
       diagnostics.usedTmdb = true
       console.log(
         `[Engine] Blockbuster paging: fetched ${candidates.length} candidates for year ${preferences.yearRange!.min} page ${page}`
@@ -709,7 +930,11 @@ export class RecommendationEngine {
         1
       )
 
-      candidates = criticsPool.map(item => this.convertTmdbResult(item))
+      candidates = [
+        ...referenceCandidates,
+        ...actorFilmographyCandidates,
+        ...criticsPool.map(item => this.convertTmdbResult(item))
+      ]
       diagnostics.usedTmdb = true
       console.log(
         `[Engine] Critics proxy: fetched ${candidates.length} candidates for year ${preferences.yearRange!.min}`
@@ -725,7 +950,7 @@ export class RecommendationEngine {
       previousCandidates.length >= limit &&
       !hasActorAnchor
     ) {
-      candidates = [...previousCandidates]
+      candidates = [...previousCandidates, ...referenceCandidates]
       console.log('[Engine] Reuse mode: skipping broad retrieval (sufficient prior candidates)')
     } else if (!useBlockbusterPaging && !useCriticsYearProxy) {
       const searched = await this.searchCandidates(
@@ -745,7 +970,7 @@ export class RecommendationEngine {
       }
 
       const searchedCandidates = searched.results
-      candidates = [...previousCandidates, ...actorFilmographyCandidates, ...searchedCandidates]
+      candidates = [...previousCandidates, ...referenceCandidates, ...actorFilmographyCandidates, ...searchedCandidates]
     }
 
     if (!useBlockbusterPaging && !useCriticsYearProxy && candidates.length < RecommendationEngine.MIN_CANDIDATE_POOL) {
@@ -857,15 +1082,15 @@ export class RecommendationEngine {
 
     // Rank and limit
     const ranked = this.rankTitles(titlesWithTalentScores, preferences, referenceTitles)
-    const filteredRanked =
-      preferences.discoveryMode === 'talent' && preferences.detectedActors && preferences.detectedActors.length > 0
-        ? ranked.filter(title => this.matchesRequestedActors(title, preferences.detectedActors || []))
-        : ranked
-
-    let effectiveRanked = filteredRanked
+    let actorMatches = preferences.detectedActors?.length
+      ? ranked.filter(title => this.matchesRequestedActors(title, preferences.detectedActors || []))
+      : []
+    let effectiveRanked = actorMatches.length > 0
+      ? [...actorMatches, ...ranked.filter(title => !this.matchesRequestedActors(title, preferences.detectedActors || []))]
+      : ranked
 
     if (
-      effectiveRanked.length === 0 &&
+      actorMatches.length === 0 &&
       preferences.discoveryMode === 'talent' &&
       preferences.detectedActors &&
       preferences.detectedActors.length > 0
@@ -896,19 +1121,41 @@ export class RecommendationEngine {
         )
 
         if (recoveredFiltered.length > 0) {
-          effectiveRanked = recoveredFiltered
+          actorMatches = recoveredFiltered
+          effectiveRanked = [
+            ...recoveredFiltered,
+            ...ranked.filter(title => !this.matchesRequestedActors(title, preferences.detectedActors || []))
+          ]
           console.log(`[Engine] Talent recovery succeeded with ${recoveredFiltered.length} actor-matching titles`)
         }
       }
 
-      if (effectiveRanked.length === 0 && ranked.length > 0) {
+      if (actorMatches.length === 0 && effectiveRanked.length === 0 && ranked.length > 0) {
         // Last-resort fallback: avoid empty response loops when actor metadata is missing.
         effectiveRanked = ranked
         console.log('[Engine] Talent recovery fallback: returning best available non-empty ranked set')
       }
     }
 
-    const finalCandidates = this.selectFinalResults(effectiveRanked, limit)
+    const selectedActorMatches = this.selectFinalResults(
+      actorMatches,
+      Math.min(limit, actorMatches.length),
+      preferences.isContrastiveReference ? 0 : 1
+    )
+    const selectedOtherMatches = selectedActorMatches.length < limit
+      ? this.selectFinalResults(
+          effectiveRanked.filter(title => !actorMatches.includes(title)),
+          limit - selectedActorMatches.length,
+          preferences.isContrastiveReference ? 0 : 1
+        )
+      : []
+    const finalCandidates = actorMatches.length > 0
+      ? [...selectedActorMatches, ...selectedOtherMatches]
+      : this.selectFinalResults(
+          effectiveRanked,
+          limit,
+          preferences.isContrastiveReference ? 0 : 1
+        )
     const final = await this.resolveImdbIds(finalCandidates)
 
     this.lastRetrievalDiagnostics = {
@@ -1120,8 +1367,6 @@ export class RecommendationEngine {
   private inferCoreGenres(
     query: string,
     parsedGenres: string[],
-    referenceTitles: any[] = [],
-    inferredGenresFromMood = false,
     excludedGenres: string[] = []
   ): string[] {
     const removeExcludedGenres = (genres: string[]) => genres.filter(genre =>
@@ -1161,12 +1406,11 @@ export class RecommendationEngine {
       return removeExcludedGenres(Array.from(new Set(requiredGenres)))
     }
 
-    const referenceGenres = this.deriveReferenceGenres(referenceTitles)
-    if (referenceGenres.length > 0) {
-      return removeExcludedGenres(referenceGenres)
+    if (parsedGenres.length > 0) {
+      return removeExcludedGenres(parsedGenres)
     }
 
-    return removeExcludedGenres(inferredGenresFromMood ? [] : parsedGenres)
+    return []
   }
 
   /**
@@ -1177,13 +1421,14 @@ export class RecommendationEngine {
   private rankTitles(titles: any[], preferences: ParsedPreferences, referenceTitles: any[] = []): any[] {
     // === PHASE 3.1: Hard Genre Filter ===
     // Infer core genres from query and parsed preferences
-    const coreGenres = this.inferCoreGenres(
+    const inferredCoreGenres = this.inferCoreGenres(
       preferences.description || '',
-      preferences.genres,
-      referenceTitles,
-      preferences.inferredGenresFromMood,
+      preferences.explicitGenres || [],
       preferences.excludedGenres || []
     )
+    const coreGenres = preferences.noveltyIntent
+      ? inferredCoreGenres.filter(genre => genre.toLowerCase() !== 'indie')
+      : inferredCoreGenres
 
     // Check if query is heist-specific to enable semantic filtering
     const isHeistQuery = (preferences.description || '').toLowerCase().match(/\bheist\b|\btheft\b|\brobbery\b|\bcaper\b/i)
@@ -1199,13 +1444,29 @@ export class RecommendationEngine {
 
     if (!hasRewatchIntent && referenceTitles.length > 0) {
       const referenceIds = new Set(referenceTitles.map(ref => ref.id).filter(Boolean))
+      const referenceNames = new Set(
+        referenceTitles.map(reference => String(reference.title || '').trim().toLowerCase()).filter(Boolean)
+      )
       const beforeCount = filtered.length
-      filtered = filtered.filter(t => !referenceIds.has(t.id))
+      filtered = filtered.filter(t => !referenceIds.has(t.id) && !referenceNames.has(String(t.title || '').trim().toLowerCase()))
       if (filtered.length < beforeCount) {
         console.log(
           `[Engine.Rank] Suppressed ${beforeCount - filtered.length} explicitly-mentioned anchor title(s)`
         )
       }
+    }
+
+    const explicitlyRequestedHorror = preferences.explicitGenres?.some(
+      genre => genre.toLowerCase() === 'horror'
+    )
+    if (
+      preferences.isContrastiveReference &&
+      preferences.boostedMoods?.includes('Relaxing') &&
+      !explicitlyRequestedHorror
+    ) {
+      filtered = filtered.filter(title =>
+        !(title.genres || []).some((genre: string) => genre.toLowerCase() === 'horror')
+      )
     }
 
     if (coreGenres.length > 0) {
@@ -1265,6 +1526,16 @@ export class RecommendationEngine {
 
       if (beforeCount !== filtered.length) {
         console.log(`[Engine.Rank] Year-range filter removed ${beforeCount - filtered.length} titles`)
+      }
+    }
+
+    if (preferences.noveltyIntent) {
+      const beforeCount = filtered.length
+      filtered = filtered.filter(title =>
+        Number(title.rating) >= 6 && Number(title.voteCount) >= 50
+      )
+      if (filtered.length < beforeCount) {
+        console.log(`[Engine.Rank] Novelty quality floor removed ${beforeCount - filtered.length} low-support titles`)
       }
     }
 
@@ -1365,6 +1636,23 @@ export class RecommendationEngine {
       }
     }
 
+    if (
+      preferences.isContrastiveReference &&
+      scoringConfig &&
+      !preferences.rankingStrategyPreference &&
+      !preferences.preferTopRated &&
+      !preferences.criticsIntent
+    ) {
+      scoringConfig.weights = {
+        genre: 0.2,
+        mood: 0.35,
+        talent: 0.2,
+        rating: 0.15,
+        popularity: 0.05,
+        recency: 0.05
+      }
+    }
+
     if (preferences.preferTopRated) {
       const baseWeights = scoringConfig?.weights || RankingScorer.getWeightsForMode('mixed').weights
       if (scoringConfig) {
@@ -1415,6 +1703,78 @@ export class RecommendationEngine {
         )
       }
     }
+
+    if (preferences.isContrastiveReference && referenceTitles.length > 0) {
+      const referenceGenres = new Set(
+        referenceTitles.flatMap(reference => (reference.genres || []).map((genre: string) => genre.toLowerCase()))
+      )
+      const relevantCandidates = filtered.filter(title => {
+        const referenceGenreScore = RankingScorer.genreMatchScore(
+          title.genres || [],
+          Array.from(referenceGenres)
+        )
+        const hasStrongReferenceGenreMatch = referenceGenreScore >= 0.75
+        const conceptFit = this.scoreReferenceConceptFit(title.plot, referenceTitles)
+        const hasConceptMatch = conceptFit >= 0.5
+        const positiveMoodScore = RankingScorer.moodMatchScore(
+          title.plot,
+          preferences.mood || [],
+          preferences.moodStrength,
+          preferences.boostedMoods || [],
+          preferences.reducedMoods || [],
+          preferences.boostedMoods?.includes('Relaxing') === true
+        )
+        const hasPositiveMoodSignal = positiveMoodScore >= 0.6
+        const voteCount = Number(title.voteCount) || 0
+        const fromPreviousRecommendation = title.fromPreviousRecommendation === true
+        const hasCatalogSupport = fromPreviousRecommendation || preferences.noveltyIntent === true || voteCount >= 50
+        const hasRelatedTitleSignal = Number(title.referenceSimilarityScore) > 0
+        const hasActionGenre = (title.genres || []).some((genre: string) => genre.toLowerCase() === 'action')
+        const hasRomanceGenre = (title.genres || []).some((genre: string) => genre.toLowerCase() === 'romance')
+        const hasExplicitGenreMatch = (preferences.explicitGenres || []).some(explicitGenre =>
+          (title.genres || []).some((genre: string) => genre.toLowerCase() === explicitGenre.toLowerCase())
+        )
+        const hasMainstreamSciFiAnchor =
+          (title.genres || []).some((genre: string) => genre.toLowerCase() === 'sci-fi') && voteCount >= 30000
+        const hasSevereConflict = !explicitlyRequestedHorror && (
+          RankingScorer.relaxingConflictMultiplier(title.plot) <= 0.2 ||
+          RankingScorer.hasImminentThreat(title.plot)
+        )
+        const isCredibleGenreMatch = !hasSevereConflict && (
+          (referenceGenreScore >= 0.65 && voteCount >= 10000) || hasMainstreamSciFiAnchor
+        )
+        const isLowIntensityGenreWildcard =
+          hasStrongReferenceGenreMatch && hasRelatedTitleSignal && !hasSevereConflict &&
+          (!hasActionGenre || hasRomanceGenre)
+        const isSupportedComfortAnimation =
+          positiveMoodScore >= 0.8 &&
+          voteCount >= 1000 &&
+          (title.genres || []).some((genre: string) => ['animation', 'family'].includes(genre.toLowerCase())) &&
+          ['gentle', 'playful', 'friendship', 'imaginative inventions'].some(phrase =>
+            (title.plot || '').toLowerCase().includes(phrase)
+          )
+        const hasStrongConceptMatch = conceptFit >= 0.55
+        const hasReferenceProfile = referenceTitles.some(reference =>
+          (reference.genres || []).length > 0 || Boolean(String(reference.plot || '').trim())
+        )
+        const hasReferenceEvidence =
+          conceptFit >= 0.25 || referenceGenreScore >= 0.3 || hasRelatedTitleSignal ||
+          isSupportedComfortAnimation || fromPreviousRecommendation ||
+          (!hasReferenceProfile && hasPositiveMoodSignal)
+        const isRelevantCandidate = hasCatalogSupport && hasReferenceEvidence && !hasSevereConflict && (
+          hasPositiveMoodSignal ||
+          hasConceptMatch ||
+          hasStrongConceptMatch ||
+          isCredibleGenreMatch ||
+          isLowIntensityGenreWildcard ||
+          isSupportedComfortAnimation ||
+          hasExplicitGenreMatch
+        )
+        return isRelevantCandidate
+      })
+
+      filtered = relevantCandidates
+    }
     
     if (scoringConfig && preferences.discoveryMode) {
       console.log(
@@ -1427,18 +1787,72 @@ export class RecommendationEngine {
     }
 
     const ranked = RankingScorer.rankTitles(filtered, preferences, scoringConfig)
+    const normalizeTitle = (title: unknown) => String(title || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+    const noveltySeedTitles = new Set((preferences.referenceSuggestions || []).map(normalizeTitle))
 
     const adjustedRanked = ranked.map(r => {
       const moodShiftMultiplier = this.calculateMoodShiftMultiplier(r, preferences)
       const refinementMultiplier = this.calculateRefinementMultiplier(r, preferences)
+      const fullReferenceGenres = Array.from(new Set(
+        referenceTitles.flatMap(reference => (reference.genres || []).map((genre: string) => genre.toLowerCase()))
+      ))
+      const referenceGenreScore = RankingScorer.genreMatchScore(r.genres || [], fullReferenceGenres)
+      const hasActionGenre = (r.genres || []).some((genre: string) => genre.toLowerCase() === 'action')
+      const voteCount = Number(r.voteCount) || 0
+      const hasMainstreamSciFiAnchor =
+        (r.genres || []).some((genre: string) => genre.toLowerCase() === 'sci-fi') &&
+        voteCount >= 30000 &&
+        !hasActionGenre
+      const relaxingConflictMultiplier = RankingScorer.relaxingConflictMultiplier(r.plot)
+      const contrastiveIntensityMultiplier = preferences.isContrastiveReference &&
+        preferences.boostedMoods?.includes('Relaxing') &&
+        relaxingConflictMultiplier < 1
+        ? relaxingConflictMultiplier <= 0.2 ? 0.82 : 0.92
+        : 1
+      const referenceConceptFit = this.scoreReferenceConceptFit(r.plot, referenceTitles)
+      const positiveMoodScore = RankingScorer.moodMatchScore(
+        r.plot,
+        preferences.mood || [],
+        preferences.moodStrength,
+        preferences.boostedMoods || [],
+        preferences.reducedMoods || [],
+        preferences.boostedMoods?.includes('Relaxing') === true
+      )
+      const credibleGenreBoost = preferences.isContrastiveReference &&
+        !hasActionGenre &&
+        ((referenceGenreScore >= 0.65 && voteCount >= 10000) || hasMainstreamSciFiAnchor)
+        ? hasMainstreamSciFiAnchor ? 0.16 : 0.14
+        : 0
+      const hasStrongContrastiveMatch =
+        referenceConceptFit >= 0.55 ||
+        positiveMoodScore >= 0.6 ||
+        hasMainstreamSciFiAnchor
+      const contrastiveWildcardMultiplier =
+        preferences.isContrastiveReference && !hasStrongContrastiveMatch ? 0.72 : 1
+      const referenceSimilarityBoost = preferences.referenceTitle?.length
+        ? (Number(r.referenceSimilarityScore) || 0) * (preferences.isContrastiveReference ? 0.02 : 0.06)
+        : 0
+      const conceptualReferenceBoost = referenceConceptFit *
+        (preferences.isContrastiveReference
+          ? referenceConceptFit >= 0.65 ? 0.8 : 0.4
+          : 0.12)
+      const hasQualityBackedNoveltySeed = preferences.noveltyIntent === true &&
+        noveltySeedTitles.has(normalizeTitle(r.title)) &&
+        Number(r.rating) >= 6.5 &&
+        Number(r.voteCount) >= 100
+      const noveltySeedScore = hasQualityBackedNoveltySeed
+        ? Math.max(r.scoringFactors.composite, 0.68)
+        : r.scoringFactors.composite
       return {
         ...r,
         scoringFactors: {
           ...r.scoringFactors,
-          composite: Math.max(
-            0,
-            r.scoringFactors.composite * moodShiftMultiplier * refinementMultiplier
-          )
+          composite: Math.max(0, Math.min(
+            1,
+            noveltySeedScore * moodShiftMultiplier * refinementMultiplier * contrastiveWildcardMultiplier +
+            credibleGenreBoost +
+            referenceSimilarityBoost + conceptualReferenceBoost
+          )) * contrastiveIntensityMultiplier
         }
       }
     })
@@ -1481,8 +1895,8 @@ export class RecommendationEngine {
 
     const plotLower = title.plot.toLowerCase()
     const moodKeywords: Record<string, string[]> = {
-      Relaxing: ['calm', 'peaceful', 'gentle', 'cozy', 'soothing', 'quiet', 'heartwarming'],
-      Intense: ['intense', 'high-stakes', 'adrenaline', 'relentless', 'frantic', 'dangerous'],
+      Relaxing: ['calm', 'peaceful', 'gentle', 'cozy', 'soothing', 'quiet', 'heartwarming', 'unexpected friendship', 'unlikely friendship', 'cooperation', 'hopeful', 'warm-hearted', 'playful', 'problem-solving', 'problem solving', 'ingenuity'],
+      Intense: ['intense', 'high-stakes', 'high stakes', 'adrenaline', 'relentless', 'frantic', 'dangerous', 'danger', 'perilous', 'peril', 'crisis', 'urgent', 'action-packed', 'action packed', 'high-octane', 'explosive', 'battle', 'combat', 'superhero', 'mercenary', 'suit-up', 'fight', 'chase', 'violent', 'vengeful', 'revenge', 'murder', 'assassin', 'war', 'survival', 'save the world', 'save everything', 'threat to earth', 'race against time', 'destruction'],
       Dark: ['dark', 'grim', 'bleak', 'brooding', 'disturbing'],
       Suspenseful: ['suspense', 'edge of your seat', 'tense', 'twist', 'mystery'],
       Funny: ['funny', 'comedic', 'hilarious', 'witty', 'laugh'],
@@ -1500,12 +1914,28 @@ export class RecommendationEngine {
 
     for (const mood of reduced) {
       const keywords = moodKeywords[mood] || []
-      if (keywords.some(kw => plotLower.includes(kw))) {
+      const hasMatch = keywords.some(kw => plotLower.includes(kw)) ||
+        (mood === 'Intense' && boosted.has('Relaxing') && RankingScorer.hasHighIntensityCue(title.plot))
+      if (hasMatch) {
         multiplier -= preferences.isContrastiveReference ? 0.3 : 0.2
       }
     }
 
-    return Math.max(0.5, Math.min(1.3, multiplier))
+    const titleGenres = (title.genres || []).map((genre: string) => genre.toLowerCase())
+    if (reduced.has('Intense')) {
+      if (titleGenres.includes('action')) multiplier -= 0.14
+      if (titleGenres.includes('thriller')) multiplier -= 0.1
+      if (titleGenres.includes('horror')) multiplier -= 0.4
+      if (titleGenres.includes('war')) multiplier -= 0.15
+    }
+
+    const minimumMultiplier = preferences.isContrastiveReference &&
+      boosted.has('Relaxing') &&
+      titleGenres.includes('horror')
+      ? 0.2
+      : 0.5
+
+    return Math.max(minimumMultiplier, Math.min(1.3, multiplier))
   }
 
   private calculateRefinementMultiplier(title: any, preferences: ParsedPreferences): number {

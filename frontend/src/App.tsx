@@ -15,6 +15,7 @@ interface RecommendationRequest {
     askedQuestionIds?: string[]
     previousRecommendationIds?: string[]
     cumulativeConstraints?: string[]
+    userTurns?: string[]
   }
   preferences?: {
     genres?: string[]

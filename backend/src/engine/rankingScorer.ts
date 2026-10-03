@@ -130,8 +130,7 @@ export class RankingScorer {
     // For now, just exact matches
 
     // Normalize to 0-1
-    // Max possible score is min(preferredGenres.length, itemGenres.length) * 0.5
-    const maxScore = Math.min(preferredGenres.length, itemGenres.length) * 0.5
+    const maxScore = preferredGenres.length * 0.5
     const normalized = maxScore > 0 ? Math.min(1.0, score / maxScore) : 0
 
     return normalized
@@ -153,7 +152,8 @@ export class RankingScorer {
     preferredMoods: string[],
     moodStrength: Map<string, number> | undefined,
     boostedMoods: string[] = [],
-    reducedMoods: string[] = []
+    reducedMoods: string[] = [],
+    relaxingReference = false
   ): number {
     if (!plotText || plotText.length === 0 || preferredMoods.length === 0) return 0
 
@@ -163,14 +163,21 @@ export class RankingScorer {
     const moodKeywords: Record<string, string[]> = {
       'Happy': ['heartwarming', 'uplifting', 'joyful', 'cheerful', 'feel-good', 'delightful', 'amusing', 'lighthearted'],
       'Sad': ['emotional', 'touching', 'tearjerker', 'melancholy', 'poignant', 'devastating', 'tragic', 'sorrowful'],
-      'Intense': ['action', 'thrilling', 'suspenseful', 'gripping', 'intense', 'adrenaline', 'explosive', 'relentless'],
-      'Relaxing': ['gentle', 'peaceful', 'calm', 'cozy', 'comfort', 'soothing', 'tranquil', 'laid-back'],
+      'Intense': ['action', 'thrilling', 'suspenseful', 'gripping', 'intense', 'adrenaline', 'explosive', 'relentless', 'perilous', 'peril', 'danger', 'crisis', 'urgent', 'threat', 'battle', 'attack', 'war', 'destruction'],
+      'Relaxing': ['gentle', 'peaceful', 'calm', 'cozy', 'comfort', 'soothing', 'tranquil', 'laid-back', 'meditative', 'intimate', 'tender', 'quietly', 'low-key', 'low stakes', 'hopeful', 'warm-hearted', 'playful'],
       'Funny': ['comedy', 'hilarious', 'humorous', 'witty', 'comedic', 'laugh', 'comedians', 'absurd', 'silly', 'humor', 'joke', 'comic'],
       'Thoughtful': ['philosophical', 'thought-provoking', 'intelligent', 'cerebral', 'profound', 'explores', 'examines', 'questions', 'reflects', 'meaning', 'struggle', 'dilemma', 'contemplative'],
       'Dark': ['dark', 'gritty', 'bleak', 'moody', 'brooding', 'noir', 'cynical', 'sinister', 'ominous'],
       'Romantic': ['love', 'romance', 'tender', 'passionate', 'intimate', 'devoted', 'affection', 'relationship'],
-      'Suspenseful': ['suspense', 'tension', 'thrilling', 'edge-of-seat', 'mystery', 'twist', 'cliffhanger', 'unpredictable']
+      'Suspenseful': ['suspense', 'tension', 'thrilling', 'edge-of-seat', 'mystery', 'twist', 'cliffhanger', 'unpredictable'],
+      'Surprising': ['unexpected', 'unexpectedly', 'unpredictable', 'unusual', 'offbeat', 'surreal', 'absurd', 'bizarre', 'unconventional', 'twist']
     }
+    const relaxingReferenceKeywords = [
+      'solve the riddle', 'solves the riddle', 'problem-solving', 'problem solving',
+      'unorthodox ideas', 'scientific puzzle', 'unexpected friendship',
+      'unexpected friendships', 'unlikely friendship', 'unlikely friendships',
+      'ingenuity', 'cooperation'
+    ]
 
     let totalScore = 0
     let matchCount = 0
@@ -180,7 +187,8 @@ export class RankingScorer {
       if (keywords.length === 0) continue
 
       // Check if any keyword matches
-      const matched = keywords.some(kw => plotLower.includes(kw))
+      const matched = this.matchesAnyPhrase(plotLower, keywords) ||
+        (relaxingReference && mood === 'Relaxing' && this.matchesAnyPhrase(plotLower, relaxingReferenceKeywords))
       if (!matched) continue
 
       // Weight by mood confidence and contrastive preference adjustments.
@@ -191,14 +199,72 @@ export class RankingScorer {
       if (reducedMoods.includes(mood)) {
         confidence *= 0.5
       }
-
       confidence = Math.max(0, Math.min(1, confidence))
+      if (mood === 'Relaxing') {
+        confidence *= this.relaxingConflictMultiplier(plotLower)
+      }
       totalScore += confidence
       matchCount++
     }
 
     // Return average confidence of matched moods
     return matchCount > 0 ? Math.min(1.0, totalScore / matchCount) : 0
+  }
+
+  private static matchesAnyPhrase(text: string, phrases: string[]): boolean {
+    const words = text.match(/[a-z0-9]+/g) || []
+    return phrases.some(phrase => {
+      const phraseWords = phrase.toLowerCase().match(/[a-z0-9]+/g) || []
+      return phraseWords.length > 0 && words.some((_, index) =>
+        phraseWords.every((word, offset) => words[index + offset] === word)
+      )
+    })
+  }
+
+  static hasHighIntensityCue(plotText: string | undefined): boolean {
+    return this.relaxingConflictMultiplier(plotText) < 1
+  }
+
+  static relaxingConflictMultiplier(plotText: string | undefined): number {
+    if (!plotText) return 1
+
+    const plot = plotText.toLowerCase()
+    const severeConflict = [
+      'perilous', 'survival', 'survive', 'crash', 'hunted', 'vengeful', 'revenge',
+      'violent', 'violence', 'battle', 'war', 'attack', 'assassin',
+      'murder', 'kill', 'weapon', 'combat', 'horror', 'terrifying', 'explosive',
+      'villainous', 'superhero', 'mercenary', 'invasion', 'destroy', 'destruction'
+    ]
+    if (this.matchesAnyPhrase(plot, severeConflict)) return 0.2
+
+    const highStakes = [
+      'danger', 'dangerous', 'threat', 'threatens', 'menace', 'race to',
+      'race against', 'safeguard', 'extinction', 'save the world', 'save earth',
+      'save everything', 'fate of', 'high stakes', 'high-stakes', 'crisis',
+      'urgent', 'unimaginable danger', 'impossible mission', 'sentinel',
+      '72 hours', 'goes wrong', 'turns upside down', 'hangs in the balance',
+      'ultimate test', 'unexpected action'
+    ]
+    if (!this.matchesAnyPhrase(plot, highStakes)) return 1
+
+    const hasGentleCounterbalance = this.matchesAnyPhrase(plot, [
+      'unexpected friendship', 'unlikely friendship', 'forms a friendship',
+      'forms a bond', 'hopeful', 'optimistic', 'warm-hearted', 'lighthearted',
+      'light-hearted', 'humorous', 'humor', 'funny', 'playful', 'cooperation',
+      'calm reason', 'unlikely partnership'
+    ])
+    return hasGentleCounterbalance ? 0.75 : 0.55
+  }
+
+  static hasImminentThreat(plotText: string | undefined): boolean {
+    if (!plotText) return false
+
+    const plot = plotText.toLowerCase()
+    const hasDeadline = this.matchesAnyPhrase(plot, ['72 hours', 'race against time', 'countdown'])
+    const hasActiveThreat = this.matchesAnyPhrase(plot, [
+      'sentinel', 'sentinels', 'enemy', 'threat', 'threatens', 'attack', 'destroy', 'villain'
+    ])
+    return hasDeadline && hasActiveThreat
   }
 
   /**
@@ -278,14 +344,27 @@ export class RankingScorer {
     }
 
     // Calculate individual factors - explicitly ensure all are numbers
-    const genreScore = Number(this.genreMatchScore(title.genres || [], preferences.genres)) || 0
+    const referenceGenres = preferences.referenceGenres || []
+    const additionalGenres = (preferences.explicitGenres || []).filter(genre =>
+      !referenceGenres.some(referenceGenre => referenceGenre.toLowerCase() === genre.toLowerCase())
+    )
+    const noveltyGenres = preferences.noveltyIntent
+      ? preferences.genres.filter(genre => genre.toLowerCase() !== 'indie')
+      : preferences.genres
+    const genreScore = referenceGenres.length > 0
+      ? additionalGenres.length > 0
+        ? this.genreMatchScore(title.genres || [], referenceGenres) * 0.45 +
+          this.genreMatchScore(title.genres || [], additionalGenres) * 0.55
+        : this.genreMatchScore(title.genres || [], referenceGenres)
+      : this.genreMatchScore(title.genres || [], noveltyGenres)
     const moodScore = Number(
       this.moodMatchScore(
         title.plot,
         preferences.mood || [],
         preferences.moodStrength,
         preferences.boostedMoods || [],
-        preferences.reducedMoods || []
+        preferences.reducedMoods || [],
+        preferences.isContrastiveReference === true && preferences.boostedMoods?.includes('Relaxing') === true
       )
     ) || 0
     const talentScore = Number(this.talentMatchScore(title.talentMatchScore)) || 0
@@ -295,7 +374,7 @@ export class RankingScorer {
 
     // Calculate composite score
     const popularitySignal = preferences.noveltyIntent
-      ? (1 - popularityScore)
+      ? (1 - popularityScore) * ratingScore
       : popularityScore
 
     const composite =

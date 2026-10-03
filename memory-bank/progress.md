@@ -2,10 +2,18 @@
 
 ## Overall Status
 
-**Updated:** October 2, 2026
+**Updated:** October 3, 2026
 
 - Backend and frontend production builds pass.
-- Backend Jest: 128/128 passing after updating the stale route-test contract assertion.
+- Backend Jest: 169/169 passing.
+- GitHub Models retirement diagnosed from official documentation and DNS failure. Client migrated to configurable OpenAI-compatible providers. Live Gemini parsing and explanation generation pass `npm --prefix backend run check:llm` using `gemini-3.5-flash-lite`; the older 2.5 Flash-Lite setting returned 404. Restart the existing backend to load the corrected model before browser testing.
+- Follow-up requests preserve user-turn history, reset accumulated constraints after hard pivots, and place active actor matches before supplemental results across intent modes.
+- Contrastive reference retrieval searches a prioritized 16-keyword concept set; whole-word matching, catalog support, and conflict signals prevent related-title and broad-genre bypasses. Concept scoring now recognizes direct time dilation, constructed reality, psychological speculation, and fate/agency evidence.
+- Indie-gem discovery treats Indie as a soft pseudo-genre, searches separate quality-filtered keyword groups, prioritizes catalog-validated title seeds, defaults to movies unless TV is explicit, and only rewards low popularity when rating support is credible.
+- Relaxing reference scoring now discounts incidental calm phrases when paired with stakes/urgency cues, distinguishes moderate stakes from severe peril/survival/violence, and filters explicit countdown-plus-threat plots.
+- The exact relaxing Inception prompt now removes Kill ’em All 2, Chaos Walking, Alive, The Matrix Reloaded, Do I Sound Gay?, Planet of the Apes, and The Saint from the current-source live list while retaining stronger concept matches.
+- Latest live audit (one variable upstream run): Pleasantville, The Martian, Arrival, Eternal Sunshine, Project Hail Mary, and Solaris ranked in the top six; Truman Show ranked ninth and Hoppers was excluded. Interstellar and The Man from Earth remain lower when the catalog synopsis lacks specific time/mind evidence.
+- Latest `Surprising indie gems` audit returned A Ghost Story, Sorry to Bother You, The One I Love, The Vast of Night, and The Station Agent in its top six; remaining results varied across runs and included some broader catalog fits.
 - Latest repository updates include the TMDB `adult`-flag safety filter and a `ts-jest` security update to `29.4.12`.
 - Detailed age/certification enforcement is not implemented by the current TMDB safety filter; see the safety checklist below.
 - [x] Development tokens referenced in historical notes were rotated (confirmed October 2, 2026).
@@ -17,6 +25,7 @@
 - [x] Phase 5 complete: Intent classification, conversational UI, multi-turn clarification
 - [x] Phase 6 complete: End-to-end testing, API integration validation
 - [x] Recommendation-quality refinement complete: dynamic clarification, anchor suppression, and reference-flow ranking improvements
+- [x] Active preference continuity added with hard-pivot reset and actor-first result ordering across intent modes
 - [x] Follow-up reliability improvements shipped: deterministic blockbuster paging + TV-drift fix for "show me more"
 - [x] Genre intent parsing generalized (aliases/plurals/hyphenated forms)
 - [x] Meta-steering prompt removed from UX
@@ -116,12 +125,12 @@
 
 ---
 
-## Current Verification (October 2, 2026)
+## Current Verification (October 3, 2026)
 
 - [x] Backend `npm run build` passes, including explicit `.js` import checks.
 - [x] Frontend `npm run build` passes.
 - [x] Frontend and backend `npm run lint` checks pass.
-- [x] Backend Jest suite passes cleanly (128/128).
+- [x] Backend Jest suite passes cleanly (169/169).
 - [x] GitHub Actions runs frontend lint/build and backend lint/build/test on pushes and pull requests.
 - [x] Frontend Browserslist data refreshed; frontend build passes without the stale-data warning.
 
