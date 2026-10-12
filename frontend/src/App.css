@@ -256,8 +256,8 @@
   -webkit-backdrop-filter: blur(3px) saturate(1.15);
   backdrop-filter: blur(3px) saturate(1.15);
   box-shadow:
-    inset 12px -12px 26px -20px var(--glass-warm),
-    inset -12px 12px 26px -20px var(--glass-cool);
+    inset -2px 2px 8px -3px var(--glass-warm),
+    inset 2px -2px 8px -3px var(--glass-cool);
 }
 
 /* The shader lens replaces the CSS hover treatment when it is running. */

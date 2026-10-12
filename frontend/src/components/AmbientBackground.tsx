@@ -1,5 +1,6 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState, useSyncExternalStore } from 'react'
 import type { ThemeMode } from '../hooks/useTheme'
+import { getShaderEnabled, subscribeShaderEnabled } from '../lensTweaks'
 
 const BeamBackground = lazy(() => import('./BeamBackground'))
 
@@ -22,7 +23,12 @@ export default function AmbientBackground({ theme }: { theme: ThemeMode }) {
   const reducedMotion = usePrefersReducedMotion()
   const [shaderFailed, setShaderFailed] = useState(false)
   const [shaderReady, setShaderReady] = useState(false)
-  const useShader = !reducedMotion && !shaderFailed
+  const shaderEnabled = useSyncExternalStore(subscribeShaderEnabled, getShaderEnabled)
+  const useShader = shaderEnabled && !reducedMotion && !shaderFailed
+
+  useEffect(() => {
+    if (!useShader) setShaderReady(false)
+  }, [useShader])
 
   return (
     <div className="ambient-background" data-shader-ready={useShader && shaderReady} aria-hidden="true">

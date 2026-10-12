@@ -1,5 +1,93 @@
 import { PreferenceParser, RecommendationRequest } from '../preferenceParser'
 
+describe('Creator intent', () => {
+  it('defaults films by a person to director-first discovery', () => {
+    const preferences = PreferenceParser.parse({ description: 'Films by James Cameron' })
+
+    expect(preferences).toEqual(expect.objectContaining({
+      detectedCreators: [{ name: 'James Cameron', role: 'director', allowOtherRoles: true }],
+      detectedActors: [],
+      discoveryMode: 'talent'
+    }))
+    expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull()
+  })
+
+  it.each([
+    ['films by james cameron', 'James Cameron', 'director', true],
+    ['Films directed by James Cameron', 'James Cameron', 'director', false],
+    ['Movies written by James Cameron', 'James Cameron', 'writer', false],
+    ['Movies produced by James Cameron', 'James Cameron', 'producer', false],
+    ['Shows created by Phoebe Waller-Bridge', 'Phoebe Waller-Bridge', 'creator', false],
+    ['Films by "James Cameron" from 1990', 'James Cameron', 'director', true]
+  ])('extracts role from %s', (description, name, role, allowOtherRoles) => {
+    expect(PreferenceParser.parse({ description }).detectedCreators).toEqual([
+      { name, role, allowOtherRoles }
+    ])
+  })
+
+  it('does not interpret by myself as a creator', () => {
+    expect(PreferenceParser.parse({ description: 'Films to watch by myself' }).detectedCreators).toEqual([])
+  })
+
+  it('parses multiple people and explicit role clauses without merging their names', () => {
+    expect(PreferenceParser.parse({ description: 'Films by James Cameron and Christopher Nolan' }).detectedCreators).toEqual([
+      { name: 'James Cameron', role: 'director', allowOtherRoles: true },
+      { name: 'Christopher Nolan', role: 'director', allowOtherRoles: true }
+    ])
+    expect(PreferenceParser.parse({ description: 'Films directed by James Cameron and written by Nora Ephron' }).detectedCreators).toEqual([
+      { name: 'James Cameron', role: 'director', allowOtherRoles: false },
+      { name: 'Nora Ephron', role: 'writer', allowOtherRoles: false }
+    ])
+  })
+
+  it('replaces the creator on an unambiguous new creator follow-up', () => {
+    const preferences = PreferenceParser.parse({
+      description: 'Films by James Cameron',
+      clarificationContext: { clarificationRound: 1, userClarification: 'What about films by Christopher Nolan?' }
+    }, { creators: [{ name: 'James Cameron', role: 'director', allowOtherRoles: true }] })
+    expect(preferences.detectedCreators).toEqual([
+      { name: 'Christopher Nolan', role: 'director', allowOtherRoles: true }
+    ])
+    expect(preferences.turnOperation?.rationaleTags).toContain('anchor_shift')
+  })
+
+  it('keeps rule-based roles when LLM hints confuse a director with an actor', () => {
+    const preferences = PreferenceParser.parse({ description: 'Films by James Cameron with Tom Hanks' }, {
+      actors: ['James Cameron', 'Tom Hanks'],
+      creators: [{ name: 'James Cameron', role: 'producer', allowOtherRoles: false }]
+    })
+    expect(preferences.detectedActors).toEqual(['Tom Hanks'])
+    expect(preferences.detectedCreators).toEqual([
+      { name: 'James Cameron', role: 'director', allowOtherRoles: true }
+    ])
+  })
+
+  it('retains creators through refinements and narrows an implicit role', () => {
+    const preferences = PreferenceParser.parse({
+      description: 'Films by James Cameron',
+      clarificationContext: {
+        clarificationRound: 2,
+        userTurns: ['Films by James Cameron', 'From the 1990s', 'Only ones he directed'],
+        userClarification: 'Only ones he directed'
+      }
+    })
+    expect(preferences.detectedCreators).toEqual([
+      { name: 'James Cameron', role: 'director', allowOtherRoles: false }
+    ])
+    expect(preferences.yearRange).toEqual({ min: 1990, max: 1999 })
+  })
+
+  it('clears creators on a hard pivot and replaces them on a new named creator', () => {
+    const request: RecommendationRequest = {
+      description: 'Films by James Cameron',
+      clarificationContext: { clarificationRound: 1, userClarification: 'Forget that, show me a comedy' }
+    }
+    expect(PreferenceParser.parse(request).detectedCreators).toEqual([])
+    request.clarificationContext!.userClarification = 'Films by Christopher Nolan instead'
+    expect(PreferenceParser.parse(request).detectedCreators?.map(creator => creator.name)).toEqual(['Christopher Nolan'])
+  })
+})
+
 describe('LLM preference hint merging', () => {
   it('does not replace rule-based media type with the LLM default', () => {
     const preferences = PreferenceParser.parse(

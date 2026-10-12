@@ -8,6 +8,19 @@ export type DiscoveryMode = 'mood' | 'reference' | 'talent' | 'mixed'
 export type TurnContinuity = 'continue' | 'soft_pivot' | 'hard_pivot'
 export type TurnOperationType = 'narrow' | 'widen' | 'replace'
 
+export type CreatorRole = 'director' | 'writer' | 'producer' | 'creator'
+
+export interface CreatorPreference {
+  name: string
+  role: CreatorRole
+  allowOtherRoles: boolean
+}
+
+export interface CreatorCredit {
+  name: string
+  roles: CreatorRole[]
+}
+
 export interface TurnOperation {
   continuity: TurnContinuity
   operation: TurnOperationType
@@ -18,6 +31,7 @@ export interface TurnOperation {
 export interface IntentSignals {
   foundReferenceTitle: boolean
   foundActorNames: boolean
+  foundCreatorNames?: boolean
   hasMoodDescriptors: boolean
   hasSituationDescriptors: boolean
   conflictingSignals: boolean        // Multiple intent types detected
@@ -45,6 +59,7 @@ export interface LLMPreferenceHints {
   referenceTitles?: string[]
   referenceSuggestions?: string[]
   actors?: string[]
+  creators?: CreatorPreference[]
   excludedGenres?: string[]
   yearRange?: { min?: number; max?: number }
 }
@@ -73,6 +88,7 @@ export interface ParsedPreferences {
   
   // Phase 5: Intent classification signals
   detectedActors?: string[]     // Actor names mentioned (e.g., "Ryan Gosling")
+  detectedCreators?: CreatorPreference[]
   discoveryMode?: DiscoveryMode // Primary intent mode
   intentConfidence?: number      // Confidence in discovered mode (0-1)
   intentSignals?: IntentSignals  // Raw signal breakdown
@@ -742,10 +758,32 @@ export class PreferenceParser {
     }
 
     // === PHASE 5: Extract actors and classify intent ===
+    const latestTurn = request.clarificationContext?.userClarification || ''
+    const latestCreators = this.extractCreators(latestTurn)
+    const replacesCreators = latestCreators.length > 0 && !/\b(?:also|alongside|as well)\b/i.test(latestTurn)
+    const ruleCreators = replacesCreators ? latestCreators : this.extractCreators(analysisText)
+    const creatorNames = new Set(ruleCreators.map(creator => creator.name.toLowerCase()))
+    preferences.detectedCreators = [
+      ...ruleCreators,
+      ...(llmHints?.creators || []).filter(creator =>
+        !replacesCreators && creator.name.trim() && !creatorNames.has(creator.name.trim().toLowerCase()) &&
+        analysisText.toLowerCase().includes(creator.name.trim().toLowerCase())
+      )
+    ]
+    if (/\bonly\b.*\b(?:directed|written|produced|created)\b/i.test(latestTurn)) {
+      const role: CreatorRole = /\bwritten\b/i.test(latestTurn) ? 'writer'
+        : /\bproduced\b/i.test(latestTurn) ? 'producer'
+          : /\bcreated\b/i.test(latestTurn) ? 'creator' : 'director'
+      preferences.detectedCreators = preferences.detectedCreators.map(creator => ({
+        ...creator, role, allowOtherRoles: false
+      }))
+    }
     const llmActors = (llmHints?.actors || []).map(actor => actor.trim()).filter(Boolean)
     preferences.detectedActors = Array.from(new Set([
       ...this.extractActors(analysisText),
-      ...llmActors
+      ...llmActors.filter(actor => !preferences.detectedCreators!.some(creator =>
+        creator.name.toLowerCase() === actor.toLowerCase()
+      ))
     ]))
     const intentClassification = this.classifyIntent(
       preferences.referenceTitle || [],
@@ -753,7 +791,8 @@ export class PreferenceParser {
       Array.from(preferences.moodStrength?.keys() || []),
       this.hasSituationKeywords(description),
       preferences.isContrastiveReference || false,
-      preferences.noveltyIntent || false
+      preferences.noveltyIntent || false,
+      preferences.detectedCreators
     )
     preferences.discoveryMode = intentClassification.mode
     preferences.intentConfidence = intentClassification.confidence
@@ -769,7 +808,8 @@ export class PreferenceParser {
       preferences.genres.length === 0 &&
       !request.preferences?.genres &&
       (preferences.referenceTitle?.length || 0) === 0 &&
-      !this.isClearRefinementRequest(preferences)
+      !this.isClearRefinementRequest(preferences) &&
+      !preferences.detectedCreators?.length
     ) {
       preferences.genres = this.inferFallbackGenresFromMood(preferences)
       preferences.inferredGenresFromMood = true
@@ -801,7 +841,8 @@ export class PreferenceParser {
     const hasNarrowCue = this.NARROW_CUES.some(cue => latestTurn.includes(cue))
     const hasNewAnchorSignals =
       /(like|similar to|in the style of|vibes of)\s+/.test(latestTurn) ||
-      /(?:with|starring|featuring|cast:)\s+[a-z]/.test(latestTurn)
+      /(?:with|starring|featuring|cast:)\s+[a-z]/.test(latestTurn) ||
+      this.extractCreators(latestTurn).length > 0
 
     if (hasHardPivotCue) {
       continuity = 'hard_pivot'
@@ -899,7 +940,9 @@ export class PreferenceParser {
     }
 
     // Use explicit separators so cross-turn text does not merge into accidental entities.
-    return [base, cumulative, clarification || '']
+    const activeBase = clarification && this.HARD_PIVOT_CUES.some(cue => clarification.toLowerCase().includes(cue))
+      ? '' : base
+    return [activeBase, activeBase ? cumulative : '', clarification || '']
       .map(value => value.trim())
       .filter(Boolean)
       .join(' | ')
@@ -1243,6 +1286,30 @@ export class PreferenceParser {
     return [...new Set(actors)]  // Deduplicate
   }
 
+  private static extractCreators(description: string): CreatorPreference[] {
+    const creators = new Map<string, CreatorPreference>()
+    const pattern = /(?:\b(directed|written|produced|created)\s+by|\b(films?|movies?|shows?|series|titles?)\s+by)\s+((?:(?!\s+(?:and\s+)?(?:directed|written|produced|created)\s+by)[^|!?;:\n])+)/gi
+    for (const match of description.matchAll(pattern)) {
+      const role: CreatorRole = match[1]?.toLowerCase() === 'written' ? 'writer'
+        : match[1]?.toLowerCase() === 'produced' ? 'producer'
+          : match[1]?.toLowerCase() === 'created' ? 'creator' : 'director'
+      const names = match[3]
+        .split(/\s+(?:with|starring|featuring|in|from|for|only|but|instead|who|that|please|directed|written|produced|created)\b|,\s*(?:only|from|with|please)\b/i)[0]
+        .split(/\s+and\s+|\s*,\s*/i)
+      for (const rawName of names) {
+        const name = rawName.trim().replace(/^["']|["'.]+$/g, '')
+        if (!/^[\p{L}][\p{L}.'\u2019-]*(?:\s+[\p{L}][\p{L}.'\u2019-]*){1,4}$/u.test(name)) {
+          continue
+        }
+        const normalizedName = /[A-Z]/.test(name) ? name : name.replace(/\b[a-z]/g, letter => letter.toUpperCase())
+        creators.set(normalizedName.toLowerCase(), {
+          name: normalizedName, role, allowOtherRoles: !match[1]
+        })
+      }
+    }
+    return [...creators.values()]
+  }
+
   /**
    * Phase 5: Detect if description contains situation keywords
    * E.g., "lazy Sunday", "date night", "stuck at home"
@@ -1263,11 +1330,14 @@ export class PreferenceParser {
     moods: string[],
     hasSituation: boolean,
     isContrastiveReference: boolean,
-    noveltyIntent: boolean
+    noveltyIntent: boolean,
+    creators: CreatorPreference[] = []
   ): IntentClassification {
+    const talentNames = [...actors, ...creators.map(creator => creator.name)]
     const signals: IntentSignals = {
       foundReferenceTitle: referenceTitle.length > 0,
       foundActorNames: actors.length > 0,
+      foundCreatorNames: creators.length > 0,
       hasMoodDescriptors: moods.length > 0,
       hasSituationDescriptors: hasSituation,
       conflictingSignals: false
@@ -1277,9 +1347,9 @@ export class PreferenceParser {
     let confidence = 0.5
 
     // Priority order: talent > reference > mood > mixed
-    if (actors.length > 0) {
+    if (talentNames.length > 0) {
       mode = 'talent'
-      confidence = Math.min(1.0, 0.85 + actors.length * 0.05)  // Higher with more actors
+      confidence = Math.min(1.0, 0.85 + talentNames.length * 0.05)
     } else if (referenceTitle.length > 0) {
       mode = 'reference'
       confidence = Math.min(1.0, 0.85 + referenceTitle.length * 0.05)
@@ -1297,15 +1367,15 @@ export class PreferenceParser {
 
     // Detect conflicts (multiple strong signals)
     const strongSignals = [
-      actors.length > 0,
+      talentNames.length > 0,
       referenceTitle.length > 0,
       moods.length > 0 && moods.length <= 1
     ]
     const signalCount = strongSignals.filter(s => s).length
 
-    const isActorMoodCompatible = actors.length > 0 && moods.length === 1 && referenceTitle.length === 0
+    const isActorMoodCompatible = talentNames.length > 0 && moods.length === 1 && referenceTitle.length === 0
     const isReferenceContrastCompatible =
-      referenceTitle.length > 0 && moods.length === 1 && isContrastiveReference && actors.length === 0
+      referenceTitle.length > 0 && moods.length === 1 && isContrastiveReference && talentNames.length === 0
 
     signals.conflictingSignals =
       signalCount > 1 && !isActorMoodCompatible && !isReferenceContrastCompatible
@@ -1325,7 +1395,7 @@ export class PreferenceParser {
     }
 
     // Multiple mood targets without an anchor are often ambiguous and should clarify.
-    if (actors.length === 0 && referenceTitle.length === 0 && moods.length > 1) {
+    if (talentNames.length === 0 && referenceTitle.length === 0 && moods.length > 1) {
       mode = 'mixed'
       confidence = Math.min(confidence, 0.58)
       signals.conflictingSignals = true

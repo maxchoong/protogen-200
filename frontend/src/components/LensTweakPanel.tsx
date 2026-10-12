@@ -3,9 +3,12 @@ import type { ThemeMode } from '../hooks/useTheme'
 import {
   LENS_DEFAULTS,
   getLensStore,
+  getShaderEnabled,
   resetLensParams,
   setLensParam,
+  setShaderEnabled,
   subscribeLensStore,
+  subscribeShaderEnabled,
   type LensParams,
 } from '../lensTweaks'
 
@@ -24,6 +27,7 @@ export default function LensTweakPanel({ theme }: { theme: ThemeMode }) {
   const [open, setOpen] = useState(true)
   const [copied, setCopied] = useState(false)
   const store = useSyncExternalStore(subscribeLensStore, getLensStore)
+  const shaderEnabled = useSyncExternalStore(subscribeShaderEnabled, getShaderEnabled)
   const params = store[theme]
 
   const copy = async () => {
@@ -46,6 +50,15 @@ export default function LensTweakPanel({ theme }: { theme: ThemeMode }) {
 
       {open && (
         <div className="mt-3 space-y-2">
+          <label className="flex items-center justify-between">
+            <span>Shaders enabled</span>
+            <input
+              type="checkbox"
+              checked={shaderEnabled}
+              onChange={e => setShaderEnabled(e.target.checked)}
+              className="h-4 w-4 accent-[var(--color-accent)]"
+            />
+          </label>
           {CONTROLS.map(({ key, label, min, max, step }) => (
             <label key={key} className="block">
               <span className="flex justify-between text-text-muted">

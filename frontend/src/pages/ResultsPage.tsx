@@ -1021,10 +1021,10 @@ export default function ResultsPage({
                     id="recommendation-context-popover"
                     role="dialog"
                     aria-label="Why these picks"
-                    className="absolute right-8 top-full z-20 mt-2 w-[22rem] rounded-lg border border-border/80 bg-surface px-4 py-4 shadow-card"
+                    className="absolute right-0 sm:right-8 top-full z-20 mt-2 w-[calc(100vw-4rem)] max-w-[22rem] sm:w-[22rem] max-h-[calc(100vh-6rem)] overflow-y-auto rounded-lg border border-border/80 bg-surface px-4 py-4 shadow-card"
                   >
                     <p className="text-[11px] uppercase tracking-[0.11em] text-text-muted">Why these picks</p>
-                    <div className="mt-3 space-y-2.5 text-[12px] leading-[1.6] text-text-muted">
+                    <div className="mt-3 space-y-2.5 text-[12px] leading-[1.6] text-text-muted break-words">
                       <p>
                         <span className="font-medium text-text">Round:</span> {passIndex + 1} of {passCount}
                       </p>

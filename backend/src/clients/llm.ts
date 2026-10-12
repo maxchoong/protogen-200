@@ -1,6 +1,6 @@
 import OpenAI from 'openai'
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions'
-import type { LLMPreferenceHints } from '../engine/preferenceParser.js'
+import type { CreatorCredit, CreatorPreference, CreatorRole, LLMPreferenceHints } from '../engine/preferenceParser.js'
 
 const LLM_TIMEOUT_MS = 15000
 const MAX_RETRIES = 2
@@ -96,6 +96,7 @@ Return ONLY valid JSON with this exact structure:
   "referenceTitles": [],
   "referenceSuggestions": [],
   "actors": [],
+  "creators": [],
   "excludedGenres": [],
   "yearRange": {"min": null, "max": null}
 }
@@ -103,6 +104,7 @@ Return ONLY valid JSON with this exact structure:
 Use canonical genres: Action, Adventure, Animation, Comedy, Crime, Documentary, Drama, Family, Fantasy, History, Horror, Music, Mystery, Romance, Sci-Fi, Thriller, War, Western.
 Use canonical moods: Happy, Sad, Intense, Relaxing, Funny, Thoughtful, Dark, Romantic, Suspenseful, Surprising.
 Put title similarity anchors in referenceTitles, named performers in actors, and descriptive concepts useful for catalog search in keywords.
+Put named directors, writers, producers, and creators in creators as {"name":"Person Name","role":"director|writer|producer|creator","allowOtherRoles":false}. Do not also put them in actors unless the user explicitly requests their acting. For an unqualified request such as "films by Person Name", use role "director" and allowOtherRoles true. Explicit "directed by", "written by", "produced by", or "created by" requests use their exact role and allowOtherRoles false. Never invent a person not named in the active conversation.
 When a request names a reference and asks for a tonal change, suggest up to five real, specific titles that retain conceptual or narrative appeal while fitting the new tone. Cross genres when the premise supports it (for example, a high-concept memory puzzle can point to thoughtful science fiction). Do not include the reference itself. These titles are search seeds that will be checked against the catalog, not guaranteed matches.
 For a broad novelty or indie-discovery request without a named reference, put up to five diverse, real title search seeds in referenceSuggestions. Cover unusual premise or genre shift, atmosphere, quiet character/emotional impact, visual or formal invention, and offbeat satire; include titles from different genres rather than clustering in sci-fi/thriller. For calibration, this range can include The One I Love or Coherence (odd premise), The Vast of Night (atmosphere), The Station Agent or The Rider (character impact), The Fall or A Ghost Story (visual/formal), and Sorry to Bother You (satire/genre shift). These are examples, not a fixed whitelist. Favor distinctive voice and credible quality with modest exposure; do not equate obscurity with quality or limit suggestions to plot twists. The catalog will validate each title.
 Use null for unknown year bounds. Preserve all relevant details from the full conversation.`
@@ -135,6 +137,18 @@ Use null for unknown year bounds. Preserve all relevant details from the full co
       const yearRange = parsed.yearRange && typeof parsed.yearRange === 'object'
         ? parsed.yearRange as Record<string, unknown>
         : undefined
+      const creators: CreatorPreference[] = Array.isArray(parsed.creators)
+        ? parsed.creators.flatMap((entry: unknown) => {
+            if (!entry || typeof entry !== 'object') return []
+            const creator = entry as Record<string, unknown>
+            if (typeof creator.name !== 'string' || !creator.name.trim() ||
+              !['director', 'writer', 'producer', 'creator'].includes(String(creator.role))) return []
+            return [{
+              name: creator.name.trim(), role: creator.role as CreatorRole,
+              allowOtherRoles: creator.role === 'director' && creator.allowOtherRoles === true
+            }]
+          })
+        : []
       const result: LLMPreferenceHints = {
         genres: toStringArray(parsed.genres),
         mood: toStringArray(parsed.mood),
@@ -148,6 +162,7 @@ Use null for unknown year bounds. Preserve all relevant details from the full co
         referenceTitles: toStringArray(parsed.referenceTitles),
         referenceSuggestions: toStringArray(parsed.referenceSuggestions).slice(0, 5),
         actors: toStringArray(parsed.actors),
+        creators,
         excludedGenres: toStringArray(parsed.excludedGenres),
         yearRange: yearRange
           ? {
@@ -251,6 +266,7 @@ Why recommend this?`
       talentMatchScore?: number
       referenceTitles?: string[]
       excludedGenres?: string[]
+      creatorCredits?: CreatorCredit[]
     }>
   ): Promise<Map<string, string>> {
     if (!this.enabled || titles.length === 0) {
@@ -263,6 +279,9 @@ Why recommend this?`
       const titlesText = titles
         .map((t, i) => {
           let desc = `${i + 1}. "${t.title}" (${t.genre})`
+          if (t.creatorCredits?.length) {
+            desc += ` [Verified creator credits: ${t.creatorCredits.map(credit => `${credit.name}: ${credit.roles.join(', ')}`).join('; ')}]`
+          }
           if (t.talentMatchScore && t.talentMatchScore > 0.5) {
             desc += ` [Talent Match: ${(t.talentMatchScore * 100).toFixed(0)}%]`
           }
@@ -302,6 +321,7 @@ Rules:
 - Do not claim similarity unless there is evidence in the supplied scores or plot cues.
 - If a title appears weakly matched (for example, all scores low), return null for that item.
 - Do not mention cast/director similarity unless talent score is clearly meaningful.
+- Named creator-role claims require the supplied verified creator credits; a producing or writing credit is not a directing credit.
 - For excluded genres, only mention avoidance when applicable.
 - No spoilers.
 Return valid JSON: {"1": "explanation or null", "2": "explanation or null", ...}`

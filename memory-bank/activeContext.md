@@ -2,9 +2,9 @@
 
 ## Project Status
 
-**Date:** October 3, 2026
+**Date:** October 12, 2026
 **Phase:** Post-Phase-6 quality hardening and transparency updates
-**Overall Progress:** Conversational recommendations, TMDB enrichment, transparency safeguards, active preference continuity, and evidence-weighted reference matching are implemented. Frontend/backend builds pass; backend Jest passes 169/169 tests and CI enforces these gates.
+**Overall Progress:** Conversational recommendations, TMDB enrichment, transparency safeguards, active preference continuity, evidence-weighted reference matching, and director-first creator discovery are implemented. Backend build and lint pass; backend Jest passes 199/199 tests. Frontend validation remains as previously recorded; unrelated frontend work was not modified or revalidated for this backend change.
 
 ---
 
@@ -30,6 +30,14 @@
 ---
 
 ## Recently Shipped Changes
+
+### Director-First Creator Discovery (October 12, 2026)
+- Bare "Films by James Cameron" requests are director-primary, with verified writing, producing, or creator credits filling remaining slots only after directed titles. Unrelated titles and acting-only appearances are excluded from creator results.
+- Explicit "directed by", "written by", "produced by", and "created by" requests require that role. Assistant-director credits do not count as directing; screenplay/story and executive-producer jobs map to writing/producing respectively.
+- Creator preferences are separate from actors, survive compatible refinements, and are replaced by a newly named creator or cleared by a hard pivot. "Only ones he directed" disables cross-role fallback.
+- TMDB combined credits preserve cast and crew separately, aggregate duplicate jobs, and use role-aware person resolution/cache keys. Creator role evidence survives candidate deduplication and IMDb hydration; directed results stay ahead of fallback credits through diversity selection.
+- Creator explanations use deterministic verified-credit wording rather than generated claims, and creators are not injected into cast metadata. Existing actor/reference ranking weights are unchanged.
+- Verification: all 199 Jest tests, backend lint, backend build/import checks, and whitespace checks pass. A live engine request with configured TMDB/LLM returned Avatar: Fire and Ash, Avatar: The Way of Water, Titanic, and Billie Eilish - Hit Me Hard and Soft: The Tour (Live in 3D); all four had James Cameron directing credits with actual cast separately populated. Catalog ordering is not a guaranteed title list. Browser/API-server interaction was not exercised in this change.
 
 ### Retrieval and Enrichment
 - Added TMDB enrichment for runtime, genres, language, cast, and directors.

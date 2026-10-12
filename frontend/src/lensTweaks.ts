@@ -18,7 +18,7 @@ export const LENS_DEFAULTS: Record<LensTheme, LensParams> = {
     splitG: 1.2,
     splitB: 1.4,
     brighten: 0.36,
-    fringe: 0.24,
+    fringe: 0.36,
     width: 8,
     radius: 12,
   },
@@ -73,6 +73,36 @@ export const setLensParam = (theme: LensTheme, key: keyof LensParams, value: num
 export const resetLensParams = (theme: LensTheme) => commit({ ...store, [theme]: { ...LENS_DEFAULTS[theme] } })
 
 export const getLensStore = () => store
+
+const SHADER_KEY = 'lumera-shader-enabled'
+
+let shaderEnabled = (() => {
+  try {
+    return window.localStorage.getItem(SHADER_KEY) !== 'off'
+  } catch {
+    return true
+  }
+})()
+const shaderListeners = new Set<() => void>()
+
+export const getShaderEnabled = () => shaderEnabled
+
+export const setShaderEnabled = (enabled: boolean) => {
+  shaderEnabled = enabled
+  try {
+    window.localStorage.setItem(SHADER_KEY, enabled ? 'on' : 'off')
+  } catch {
+    // Without storage the toggle only lasts for the session.
+  }
+  shaderListeners.forEach(listener => listener())
+}
+
+export const subscribeShaderEnabled = (listener: () => void) => {
+  shaderListeners.add(listener)
+  return () => {
+    shaderListeners.delete(listener)
+  }
+}
 
 export const isTweakPanelEnabled = () =>
   import.meta.env.DEV || new URLSearchParams(window.location.search).has('tweak')

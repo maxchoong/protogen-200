@@ -1,4 +1,5 @@
 import { config } from '../config.js'
+import type { CreatorCredit, CreatorPreference, CreatorRole } from '../engine/preferenceParser.js'
 
 /**
  * TMDB Genre mappings - Maps UI genre names to TMDB genre IDs
@@ -53,6 +54,8 @@ export interface TMDBTitle {
   vote_count?: number
   adult: boolean
   original_language: string
+  personCredit?: { cast: boolean; roles: CreatorRole[] }
+  creatorCredits?: CreatorCredit[]
 }
 
 interface TMDBPersonSearchResult {
@@ -75,6 +78,7 @@ interface TMDBPersonCredit {
   vote_count?: number
   adult?: boolean
   original_language?: string
+  job?: string
 }
 
 interface TMDBCastMember {
@@ -695,7 +699,7 @@ export class TMDBClient {
    */
   async searchTitlesForPerson(
     personName: string,
-    options: Partial<SearchQuery> = {},
+    options: Partial<SearchQuery> & { creator?: CreatorPreference } = {},
     limit: number = 30
   ): Promise<TMDBTitle[]> {
     if (!this.isEnabled()) {
@@ -703,13 +707,17 @@ export class TMDBClient {
     }
 
     try {
-      const personId = await this.searchPersonId(personName)
+      const personId = await this.searchPersonId(personName, options.creator?.role)
       if (!personId) {
         return []
       }
       const normalized = await this.getPersonCredits(personId)
 
-      const filtered = this.filterTitles(normalized, {
+      const roleMatches = normalized.filter(title => options.creator
+        ? title.personCredit?.roles.some(role => options.creator!.allowOtherRoles || role === options.creator!.role)
+        : title.personCredit?.cast)
+      const filtered = this.filterTitles(roleMatches, {
+        ...options,
         includeMovies: options.includeMovies ?? true,
         includeTV: options.includeTV ?? true,
         excludeAdult: options.excludeAdult ?? true
@@ -720,8 +728,17 @@ export class TMDBClient {
       )
 
       return deduped
-        .sort((a, b) => (b.vote_count || 0) - (a.vote_count || 0))
+        .sort((a, b) => {
+          const primaryDifference = options.creator
+            ? Number(b.personCredit!.roles.includes(options.creator.role)) - Number(a.personCredit!.roles.includes(options.creator.role))
+            : 0
+          return primaryDifference || (b.vote_count || 0) - (a.vote_count || 0)
+        })
         .slice(0, limit)
+        .map(title => options.creator ? {
+          ...title,
+          creatorCredits: [{ name: personName, roles: title.personCredit!.roles }]
+        } : title)
     } catch (error) {
       console.error('[TMDB] Person filmography search error:', error)
       return []
@@ -821,8 +838,9 @@ export class TMDBClient {
 
   // ===== Private methods =====
 
-  private async searchPersonId(personName: string): Promise<number | undefined> {
-    const cacheKey = personName.trim().toLowerCase()
+  private async searchPersonId(personName: string, role?: CreatorRole): Promise<number | undefined> {
+    const normalizedName = personName.trim().toLowerCase()
+    const cacheKey = `${normalizedName}:${role || 'actor'}`
     const cached = this.getCachedValue(this.personIdCache, cacheKey)
     if (cached !== undefined) {
       return cached || undefined
@@ -854,9 +872,10 @@ export class TMDBClient {
     }
 
     const ranked = [...results].sort((a, b) => {
-      const aActing = a.known_for_department === 'Acting' ? 1 : 0
-      const bActing = b.known_for_department === 'Acting' ? 1 : 0
-      return bActing - aActing
+      const exactDifference = Number(b.name.trim().toLowerCase() === normalizedName) - Number(a.name.trim().toLowerCase() === normalizedName)
+      const department = role === 'director' ? 'Directing' : role === 'writer' ? 'Writing'
+        : role === 'producer' ? 'Production' : role === 'creator' ? undefined : 'Acting'
+      return exactDifference || Number(b.known_for_department === department) - Number(a.known_for_department === department)
     })
 
     const personId = ranked[0].id
@@ -885,10 +904,17 @@ export class TMDBClient {
       throw new Error(`TMDB credits API error: ${response.status}`)
     }
 
-    const data = await response.json() as { cast?: TMDBPersonCredit[] }
-    const castCredits = data.cast || []
+    const data = await response.json() as { cast?: TMDBPersonCredit[]; crew?: TMDBPersonCredit[] }
+    const jobs: Record<string, CreatorRole> = {
+      director: 'director', 'series director': 'director', writer: 'writer', screenplay: 'writer', story: 'writer',
+      producer: 'producer', 'executive producer': 'producer', creator: 'creator'
+    }
+    const credits = [
+      ...(data.cast || []).map(credit => ({ ...credit, cast: true })),
+      ...(data.crew || []).map(credit => ({ ...credit, cast: false }))
+    ]
 
-    const normalized = castCredits
+    const normalized = credits
       .map((credit): TMDBTitle | null => {
         const mediaType = credit.media_type === 'tv' ? 'tv' : credit.media_type === 'movie' ? 'movie' : undefined
         if (!mediaType) {
@@ -908,13 +934,30 @@ export class TMDBClient {
           vote_average: credit.vote_average || 0,
           vote_count: credit.vote_count || 0,
           adult: credit.adult || false,
-          original_language: credit.original_language || 'en'
+          original_language: credit.original_language || 'en',
+          personCredit: {
+            cast: credit.cast,
+            roles: !credit.cast && jobs[(credit.job || '').toLowerCase()] ? [jobs[credit.job!.toLowerCase()]] : []
+          }
         }
       })
       .filter((item): item is TMDBTitle => item !== null)
 
-    this.setCachedValue(this.personCreditsCache, cacheKey, normalized, TMDB_PERSON_CREDITS_TTL_MS)
-    return normalized
+    const grouped = new Map<string, TMDBTitle>()
+    for (const title of normalized) {
+      const key = `${title.media_type}:${title.id}`
+      const existing = grouped.get(key)
+      grouped.set(key, existing ? {
+        ...existing,
+        personCredit: {
+          cast: existing.personCredit!.cast || title.personCredit!.cast,
+          roles: [...new Set([...existing.personCredit!.roles, ...title.personCredit!.roles])]
+        }
+      } : title)
+    }
+    const titles = [...grouped.values()]
+    this.setCachedValue(this.personCreditsCache, cacheKey, titles, TMDB_PERSON_CREDITS_TTL_MS)
+    return titles
   }
 
   private async discoverMovies(

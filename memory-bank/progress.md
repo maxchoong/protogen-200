@@ -2,10 +2,12 @@
 
 ## Overall Status
 
-**Updated:** October 3, 2026
+**Updated:** October 12, 2026
 
 - Backend and frontend production builds pass.
-- Backend Jest: 169/169 passing.
+- Backend Jest: 199/199 passing; backend build and lint verified October 12, 2026. Frontend validation was not rerun for this backend-only change.
+- Creator discovery: unqualified "films by NAME" selects verified directing credits first, then other verified creator credits if needed. Explicit roles are exact; creator evidence is kept separate from acting credits and preserved through deduplication/hydration. Compatible refinements retain creators, new creator anchors replace them, and hard pivots clear them.
+- Live Cameron query verified four directing matches with separate real cast metadata. Deterministic credit wording prevents producer-only fallbacks being described as directed films. Browser/server-endpoint interaction remains untested for this change.
 - GitHub Models retirement diagnosed from official documentation and DNS failure. Client migrated to configurable OpenAI-compatible providers. Live Gemini parsing and explanation generation pass `npm --prefix backend run check:llm` using `gemini-3.5-flash-lite`; the older 2.5 Flash-Lite setting returned 404. Restart the existing backend to load the corrected model before browser testing.
 - Follow-up requests preserve user-turn history, reset accumulated constraints after hard pivots, and place active actor matches before supplemental results across intent modes.
 - Contrastive reference retrieval searches a prioritized 16-keyword concept set; whole-word matching, catalog support, and conflict signals prevent related-title and broad-genre bypasses. Concept scoring now recognizes direct time dilation, constructed reality, psychological speculation, and fate/agency evidence.
@@ -26,6 +28,7 @@
 - [x] Phase 6 complete: End-to-end testing, API integration validation
 - [x] Recommendation-quality refinement complete: dynamic clarification, anchor suppression, and reference-flow ranking improvements
 - [x] Active preference continuity added with hard-pivot reset and actor-first result ordering across intent modes
+- [x] Director-first creator queries implemented with role-aware TMDB lookup, explicit-role filtering, verified fallback credits, and parser/client/integration regressions
 - [x] Follow-up reliability improvements shipped: deterministic blockbuster paging + TV-drift fix for "show me more"
 - [x] Genre intent parsing generalized (aliases/plurals/hyphenated forms)
 - [x] Meta-steering prompt removed from UX

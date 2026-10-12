@@ -92,4 +92,32 @@ describe('LLM provider configuration', () => {
       { title: 'Solaris', genre: 'Sci-Fi', plot: 'A psychologist confronts memories.' }
     ])).toEqual(new Map())
   })
+
+  it('validates creator hints and restricts cross-role fallback to director-primary requests', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key'
+    createCompletion.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
+      creators: [
+        { name: ' James Cameron ', role: 'director', allowOtherRoles: true },
+        { name: 'Nora Ephron', role: 'writer', allowOtherRoles: true },
+        { name: 'Invalid Role', role: 'celebrity' }, null, { name: 123, role: 'director' }
+      ]
+    }) } }] })
+    const hints = await new LLMClient().parsePreferences('Films by James Cameron and written by Nora Ephron')
+    expect(hints?.creators).toEqual([
+      { name: 'James Cameron', role: 'director', allowOtherRoles: true },
+      { name: 'Nora Ephron', role: 'writer', allowOtherRoles: false }
+    ])
+    expect(createCompletion.mock.calls[0][0].messages[0].content).toContain('unqualified request')
+  })
+
+  it('supplies actual creator roles rather than inferring direction from talent scores', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key'
+    createCompletion.mockResolvedValue({ choices: [{ message: { content: '{"1":"James Cameron has a producing credit."}' } }] })
+    const explanations = await new LLMClient().generateWhyThisBatch('Films by James Cameron', [{
+      title: 'Producer Pick', genre: 'Drama', plot: 'A story.', talentMatchScore: 0.6,
+      creatorCredits: [{ name: 'James Cameron', roles: ['producer'] }]
+    }])
+    expect(explanations.get('Producer Pick')).toContain('producing credit')
+    expect(createCompletion.mock.calls[0][0].messages[1].content).toContain('James Cameron: producer')
+  })
 })

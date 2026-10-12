@@ -8,6 +8,109 @@ import { recommendationEngine } from '../recommendationEngine'
 import { fmdbClient } from '../../clients/fmdb'
 import { llmClient } from '../../clients/llm'
 import { tmdbClient } from '../../clients/tmdb'
+import type { CreatorRole } from '../preferenceParser'
+
+describe('Creator filmography recommendations', () => {
+  const film = (id: number, roles: CreatorRole[], rating = 7) => ({
+    id, title: `Creator Film ${id}`, media_type: 'movie' as const,
+    poster_path: '/poster.jpg', overview: 'A dramatic story.', release_date: '1995-01-01',
+    genre_ids: [18], vote_average: rating, vote_count: rating * 1000, adult: false,
+    original_language: 'en', creatorCredits: [{ name: 'James Cameron', roles }]
+  })
+
+  beforeEach(() => {
+    jest.spyOn(llmClient, 'isEnabled').mockReturnValue(false)
+    jest.spyOn(tmdbClient, 'isEnabled').mockReturnValue(true)
+    jest.spyOn(tmdbClient, 'searchTitlesForPerson').mockResolvedValue([
+      film(1, ['director'], 5), film(2, ['producer'], 9), film(3, ['director', 'writer'], 6)
+    ])
+    jest.spyOn(recommendationEngine as any, 'searchCandidates').mockResolvedValue({
+      source: 'tmdb', results: [
+        { id: 'tmdb:movie:1', title: 'Creator Film 1', year: 1995, type: 'movie', genres: ['Drama'], rating: 5, plot: 'A dramatic story.' },
+        { id: 'tmdb:movie:99', title: 'Unrelated Popular Film', year: 1995, type: 'movie', genres: ['Drama'], rating: 10, plot: 'A dramatic story.' }
+      ]
+    })
+    jest.spyOn(tmdbClient, 'getExternalIds').mockImplementation(async id => ({ imdbId: `tt990000${id}` }))
+    jest.spyOn(tmdbClient, 'getTitleDetails').mockResolvedValue(null)
+    jest.spyOn(tmdbClient, 'getTitleCredits').mockResolvedValue({ mainCast: ['Actual Actor'], directors: ['Actual Director'] })
+    jest.spyOn(tmdbClient, 'getVideos').mockResolvedValue([])
+    jest.spyOn(tmdbClient, 'getTrailersBatch').mockResolvedValue(new Map())
+  })
+
+  afterEach(() => { jest.restoreAllMocks() })
+
+  it('returns directors before producer-only credits and preserves honest metadata', async () => {
+    const recommendations = await recommendationEngine.getRecommendations({ description: 'Films by James Cameron' }, 3)
+    expect(recommendations.map(item => item.title)).toEqual(['Creator Film 3', 'Creator Film 1', 'Creator Film 2'])
+    expect(recommendations.map(item => item.id)).toEqual(['tt9900003', 'tt9900001', 'tt9900002'])
+    expect(recommendations[0].directors).toEqual(['James Cameron'])
+    expect(recommendations[0].mainCast).toEqual(['Actual Actor'])
+    expect(recommendations[0].whyThis).toBe('Directed by James Cameron.')
+    expect(recommendations[2].whyThis).toBe('Producing credits include James Cameron.')
+    expect(recommendations[2].directors).not.toContain('James Cameron')
+    expect(tmdbClient.searchTitlesForPerson).toHaveBeenCalledWith('James Cameron', expect.objectContaining({
+      creator: { name: 'James Cameron', role: 'director', allowOtherRoles: true }, includeMovies: true, includeTV: false
+    }), 100)
+  })
+
+  it('does not use fallback credits when directors fill the result limit', async () => {
+    const recommendations = await recommendationEngine.getRecommendations({ description: 'Films by James Cameron' }, 2)
+    expect(recommendations).toHaveLength(2)
+    expect(recommendations.every(item => item.whyThis === 'Directed by James Cameron.')).toBe(true)
+  })
+
+  it.each([
+    ['directed', ['Creator Film 3', 'Creator Film 1']],
+    ['written', ['Creator Film 3']],
+    ['produced', ['Creator Film 2']]
+  ])('requires the explicit %s role', async (verb, expectedTitles) => {
+    const recommendations = await recommendationEngine.getRecommendations({ description: `Films ${verb} by James Cameron` })
+    expect(recommendations.map(item => item.title)).toEqual(expectedTitles)
+  })
+
+  it('keeps compatible year restrictions and does not invent missing credit matches', async () => {
+    const recommendations = await recommendationEngine.getRecommendations({
+      description: 'Films by James Cameron',
+      clarificationContext: { clarificationRound: 1, userClarification: 'Only from 2020' }
+    })
+    expect(recommendations).toEqual([])
+    jest.mocked(tmdbClient.searchTitlesForPerson).mockResolvedValue([])
+    expect(await recommendationEngine.getRecommendations({ description: 'Films by James Cameron' })).toEqual([])
+  })
+
+  it('requires both the requested actor and creator without confusing their credits', async () => {
+    jest.mocked(tmdbClient.searchTitlesForPerson).mockImplementation(async name => name === 'Tom Hanks'
+      ? [film(1, [])] : [film(1, ['director']), film(2, ['director'])])
+    const recommendations = await recommendationEngine.getRecommendations({ description: 'Films by James Cameron with Tom Hanks' })
+    expect(recommendations.map(item => item.title)).toEqual(['Creator Film 1'])
+    expect(recommendations[0].directors).toEqual(['James Cameron'])
+    expect(recommendations[0].mainCast).not.toContain('James Cameron')
+  })
+
+  it('does not fill movie creator requests with previous TV candidates', async () => {
+    jest.mocked(tmdbClient.searchTitlesForPerson).mockResolvedValue([])
+    jest.spyOn(recommendationEngine as any, 'hydratePreviousRecommendations').mockResolvedValue([{
+      id: 'tt9900008', title: 'A TV Series', year: 1995, type: 'series', genres: ['Drama'], rating: 9,
+      plot: 'A series.', director: 'James Cameron'
+    }])
+    const recommendations = await recommendationEngine.getRecommendations({
+      description: 'Films by James Cameron',
+      clarificationContext: { clarificationRound: 1, userClarification: 'More please', previousRecommendationIds: ['tt9900008'] }
+    })
+    expect(recommendations).toEqual([])
+  })
+
+  it('uses deterministic credit wording even with LLM enabled', async () => {
+    jest.mocked(llmClient.isEnabled).mockReturnValue(true)
+    jest.spyOn(llmClient, 'parsePreferences').mockResolvedValue({ actors: ['James Cameron'] })
+    const explanationsSpy = jest.spyOn(llmClient, 'generateWhyThisBatch').mockResolvedValue(new Map([
+      ['Creator Film 2', 'Directed by James Cameron.']
+    ]))
+    const recommendations = await recommendationEngine.getRecommendations({ description: 'Films by James Cameron' }, 3)
+    expect(recommendations[2].whyThis).toBe('Producing credits include James Cameron.')
+    expect(explanationsSpy).not.toHaveBeenCalled()
+  })
+})
 
 describe('End-to-End Recommendation Flow - Phase 5 Integration', () => {
   describe('Query: "funny heist like Ocean\'s Eleven"', () => {

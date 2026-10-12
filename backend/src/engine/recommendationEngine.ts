@@ -3,6 +3,7 @@ import { llmClient } from '../clients/llm.js'
 import { streamingClient } from '../clients/streaming.js'
 import { tmdbClient } from '../clients/tmdb.js'
 import { PreferenceParser, ParsedPreferences, RecommendationRequest, DiscoveryMode } from './preferenceParser.js'
+import type { CreatorCredit } from './preferenceParser.js'
 import { TalentMatcher } from './talentMatcher.js'
 import { RankingScorer, ScoringFactors } from './rankingScorer.js'
 
@@ -227,6 +228,8 @@ export class RecommendationEngine {
     const yearRaw = mediaType === 'movie' ? item.release_date : item.first_air_date
     const year = yearRaw ? parseInt(yearRaw.split('-')[0], 10) || 0 : 0
     const id = `tmdb:${mediaType}:${item.id}`
+    const creatorCredits: CreatorCredit[] = item.creatorCredits || []
+    const directors = creatorCredits.filter(credit => credit.roles.includes('director')).map(credit => credit.name)
 
     return {
       id,
@@ -242,11 +245,67 @@ export class RecommendationEngine {
       originalLanguage: item.original_language || undefined,
       runtimeMinutes: item.runtime || undefined,
       rated: undefined,
-      director: undefined,
+      creatorCredits,
+      directors: directors.length > 0 ? directors : undefined,
+      director: directors.length > 0 ? directors.join(', ') : undefined,
       actors: actorHints.length > 0 ? actorHints.join(', ') : undefined,
       requestedActorHit: actorHints.length > 0,
       voteCount: item.vote_count || 0
     }
+  }
+
+  private getCreatorCredits(title: any): CreatorCredit[] {
+    const credits = new Map<string, CreatorCredit>()
+    const directors: string[] = title.directors || (title.director || '').split(',').map((name: string) => name.trim()).filter(Boolean)
+    for (const credit of [...(title.creatorCredits || []), ...directors.map(name => ({ name, roles: ['director'] }))] as CreatorCredit[]) {
+      const key = credit.name.trim().toLowerCase()
+      const existing = credits.get(key)
+      credits.set(key, { name: credit.name, roles: [...new Set([...(existing?.roles || []), ...credit.roles])] })
+    }
+    return [...credits.values()]
+  }
+
+  private getCreatorTier(title: any, preferences: ParsedPreferences): number {
+    const creators = preferences.detectedCreators || []
+    if (creators.length === 0) return 2
+    if (preferences.contentType === 'movie' && title.type !== 'movie') return 2
+    if (preferences.contentType === 'tv' && title.type !== 'series') return 2
+    const credits = this.getCreatorCredits(title)
+    let tier = 0
+    for (const creator of creators) {
+      const match = credits.find(credit => credit.name.trim().toLowerCase() === creator.name.trim().toLowerCase())
+      if (!match?.roles.length) return 2
+      if (!match.roles.includes(creator.role)) {
+        if (!creator.allowOtherRoles) return 2
+        tier = 1
+      }
+    }
+    if (preferences.detectedActors?.length && !this.matchesRequestedActors(title, preferences.detectedActors)) return 2
+    return tier
+  }
+
+  private mergeCandidates(candidates: any[]): any[] {
+    const merged = new Map<string, any>()
+    for (const candidate of candidates) {
+      const previous = merged.get(candidate.id)
+      if (!previous) {
+        merged.set(candidate.id, candidate)
+        continue
+      }
+      const creatorCredits = this.getCreatorCredits({
+        ...previous,
+        creatorCredits: [...this.getCreatorCredits(previous), ...this.getCreatorCredits(candidate)]
+      })
+      merged.set(candidate.id, {
+        ...previous, ...candidate,
+        creatorCredits,
+        director: candidate.director || previous.director,
+        directors: candidate.directors?.length ? candidate.directors : previous.directors,
+        actors: candidate.actors || previous.actors,
+        requestedActorHit: previous.requestedActorHit || candidate.requestedActorHit
+      })
+    }
+    return [...merged.values()]
   }
 
   private async hydratePreviousRecommendations(
@@ -650,7 +709,7 @@ export class RecommendationEngine {
       })
     )
 
-    return Array.from(new Map(resolved.map(item => [item.id, item])).values())
+    return this.mergeCandidates(resolved)
   }
 
   /**
@@ -765,9 +824,9 @@ export class RecommendationEngine {
     // === PHASE 5: Mode-aware search strategy ===
     let searchTerms: string[] = []
     
-    if (preferences.discoveryMode === 'talent' && preferences.detectedActors && preferences.detectedActors.length > 0) {
-      searchTerms = [...preferences.detectedActors]
-      console.log(`[Engine] Talent mode: searching for actor anchors`)
+    if (preferences.discoveryMode === 'talent' && (preferences.detectedActors?.length || preferences.detectedCreators?.length)) {
+      searchTerms = [...(preferences.detectedActors || []), ...(preferences.detectedCreators || []).map(creator => creator.name)]
+      console.log(`[Engine] Talent mode: searching for person anchors`)
     } else if (preferences.discoveryMode === 'reference' && preferences.referenceTitle && preferences.referenceTitle.length > 0) {
       // Reference mode: fetches anchor metadata separately; search alternatives by genres/mood.
       searchTerms = []
@@ -872,6 +931,20 @@ export class RecommendationEngine {
       }
     }
 
+    const creatorFilmographyCandidates: any[] = []
+    if (preferences.detectedCreators?.length && tmdbClient.isEnabled()) {
+      const resultSets = await Promise.all(preferences.detectedCreators.map(creator =>
+        tmdbClient.searchTitlesForPerson(creator.name, {
+          includeMovies: typeFilter !== 'series',
+          includeTV: typeFilter !== 'movie',
+          excludeAdult: true,
+          creator
+        }, 100)
+      ))
+      creatorFilmographyCandidates.push(...resultSets.flat().map(item => this.convertTmdbResult(item)))
+      if (creatorFilmographyCandidates.length > 0) diagnostics.usedTmdb = true
+    }
+
     const previousRecommendationIds = request.clarificationContext?.previousRecommendationIds || []
     const shouldReusePreviousCandidates =
       (request.clarificationContext?.clarificationRound ?? 0) > 0 &&
@@ -942,7 +1015,7 @@ export class RecommendationEngine {
     }
 
     // On refinement turns, prefer re-ranking prior results before broad retrieval.
-    const hasActorAnchor = (preferences.detectedActors?.length || 0) > 0
+    const hasActorAnchor = (preferences.detectedActors?.length || 0) > 0 || (preferences.detectedCreators?.length || 0) > 0
     if (
       !useBlockbusterPaging &&
       !useCriticsYearProxy &&
@@ -972,6 +1045,8 @@ export class RecommendationEngine {
       const searchedCandidates = searched.results
       candidates = [...previousCandidates, ...referenceCandidates, ...actorFilmographyCandidates, ...searchedCandidates]
     }
+
+    candidates.push(...creatorFilmographyCandidates)
 
     if (!useBlockbusterPaging && !useCriticsYearProxy && candidates.length < RecommendationEngine.MIN_CANDIDATE_POOL) {
       const backfillTerms = this.buildBackfillSearchTerms(
@@ -1057,9 +1132,7 @@ export class RecommendationEngine {
     }
 
     // Remove duplicates by ID
-    const uniqueCandidates = Array.from(
-      new Map(candidates.map(c => [c.id, c])).values()
-    )
+    const uniqueCandidates = this.mergeCandidates(candidates)
 
     console.log(`[Engine] ${uniqueCandidates.length} unique candidates`)
 
@@ -1071,7 +1144,9 @@ export class RecommendationEngine {
     // Calculate talent scores for each candidate based on reference titles
     const titlesWithTalentScores = safe.map(title => ({
       ...title,
-      talentMatchScore: referenceTitles.length > 0
+      talentMatchScore: preferences.detectedCreators?.length
+        ? (this.getCreatorTier(title, preferences) === 0 ? 1 : this.getCreatorTier(title, preferences) === 1 ? 0.6 : 0)
+        : referenceTitles.length > 0
         ? TalentMatcher.findTalentMatch(title, referenceTitles).combinedScore
         : (preferences.detectedActors && preferences.detectedActors.length > 0)
           ? (title.requestedActorHit
@@ -1149,13 +1224,20 @@ export class RecommendationEngine {
           preferences.isContrastiveReference ? 0 : 1
         )
       : []
-    const finalCandidates = actorMatches.length > 0
+    let finalCandidates = actorMatches.length > 0
       ? [...selectedActorMatches, ...selectedOtherMatches]
       : this.selectFinalResults(
           effectiveRanked,
           limit,
           preferences.isContrastiveReference ? 0 : 1
         )
+    if (preferences.detectedCreators?.length) {
+      const primary = ranked.filter(title => this.getCreatorTier(title, preferences) === 0)
+      const fallback = ranked.filter(title => this.getCreatorTier(title, preferences) === 1)
+      const selectedPrimary = this.selectFinalResults(primary, Math.min(limit, primary.length))
+      const selectedFallback = this.selectFinalResults(fallback, Math.min(limit - selectedPrimary.length, fallback.length))
+      finalCandidates = [...selectedPrimary, ...selectedFallback]
+    }
     const final = await this.resolveImdbIds(finalCandidates)
 
     this.lastRetrievalDiagnostics = {
@@ -1168,7 +1250,7 @@ export class RecommendationEngine {
 
     // Generate LLM explanations in batch if available
     let llmExplanations = new Map<string, string>()
-    if (llmClient.isEnabled() && final.length > 0) {
+    if (llmClient.isEnabled() && final.length > 0 && !preferences.detectedCreators?.length) {
       try {
         // === PHASE 4 ENHANCEMENT: Provide scoring context for better explanations ===
         const titlesForLLM = final.map(item => ({
@@ -1184,6 +1266,7 @@ export class RecommendationEngine {
             compositeScore: item.scoringFactors.composite
           }),
           talentMatchScore: item.talentMatchScore,
+          creatorCredits: this.getCreatorCredits(item),
           // Pass user context
           referenceTitles: preferences.referenceTitle,
           excludedGenres: preferences.excludedGenres
@@ -1435,7 +1518,9 @@ export class RecommendationEngine {
     const heistKeywords = /\bheist\b|\btheft\b|\brobbery\b|\bcaper\b|\bsteal|\brob\b|\bloot\b|\bgem\b|\bdiamond\b|\bbank\b|\bjewel\b|\bburglary\b/i
 
     // Filter titles: must have at least one core genre
-    let filtered = titles
+    let filtered = preferences.detectedCreators?.length
+      ? titles.filter(title => this.getCreatorTier(title, preferences) < 2)
+      : titles
 
     // Suppress any explicitly-mentioned anchor title by default unless user asks for a rewatch.
     const hasRewatchIntent = /(rewatch|watch again|same movie|the original|again)/i.test(
@@ -2001,7 +2086,7 @@ export class RecommendationEngine {
     // Use LLM-generated explanation if available, otherwise fallback to rule-based
     const llmWhyThis = llmExplanations?.get(item.title)
     const whyThis =
-      llmWhyThis && llmWhyThis.trim() && llmWhyThis.trim().toLowerCase() !== 'null'
+      !preferences.detectedCreators?.length && llmWhyThis && llmWhyThis.trim() && llmWhyThis.trim().toLowerCase() !== 'null'
         ? llmWhyThis
         : this.generateWhyThis(item, preferences)
 
@@ -2044,6 +2129,17 @@ export class RecommendationEngine {
    * Generate explanation for why this title was recommended
    */
   private generateWhyThis(item: any, preferences: ParsedPreferences): string {
+    if (preferences.detectedCreators?.length) {
+      const phrases = preferences.detectedCreators.map(creator => {
+        const credit = this.getCreatorCredits(item).find(match => match.name.toLowerCase() === creator.name.toLowerCase())
+        const role = credit?.roles.includes(creator.role) ? creator.role : credit?.roles[0]
+        return role === 'director' ? `Directed by ${creator.name}`
+          : role === 'writer' ? `Writing credits include ${creator.name}`
+            : role === 'producer' ? `Producing credits include ${creator.name}`
+              : role === 'creator' ? `Created by ${creator.name}` : ''
+      }).filter(Boolean)
+      if (phrases.length) return `${phrases.join('. ')}.`
+    }
     const primaryReasons: string[] = []
     const supportingReasons: string[] = []
 
