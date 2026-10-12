@@ -88,3 +88,224 @@
     padding-block: var(--editorial-rhythm-4);
   }
 }
+
+.ambient-background {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.ambient-fallback {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 90% at 100% 0%, rgba(255, 214, 150, 0.16), transparent 60%),
+    radial-gradient(90% 70% at 50% 120%, rgba(0, 0, 0, 0.35), transparent 70%);
+  transition: opacity 0.8s ease;
+}
+
+[data-theme='light'] .ambient-fallback {
+  background: radial-gradient(120% 90% at 100% 0%, rgba(255, 228, 180, 0.2), transparent 60%);
+}
+
+.beam-background,
+.beam-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 1.2s ease;
+}
+
+.ambient-background[data-shader-ready='true'] .beam-background,
+.ambient-background[data-shader-ready='true'] .beam-canvas {
+  opacity: 1;
+}
+
+.ambient-background[data-shader-ready='true'] .ambient-fallback {
+  opacity: 0;
+}
+
+/* Glass surfaces: translucent fill, backdrop blur, and a rim split into warm/cool fringes for chromatic aberration. */
+:root {
+  --glass-fill-mix: 52%;
+  --glass-sheen: rgba(255, 255, 255, 0.07);
+  --glass-edge: color-mix(in srgb, var(--color-border) 38%, transparent);
+  --glass-warm: rgba(255, 176, 124, 0.7);
+  --glass-cool: rgba(122, 188, 255, 0.7);
+}
+
+[data-theme='light'] {
+  --glass-fill-mix: 58%;
+  --glass-sheen: rgba(255, 255, 255, 0.55);
+  --glass-edge: color-mix(in srgb, var(--color-border) 70%, transparent);
+  --glass-warm: rgba(255, 128, 96, 0.55);
+  --glass-cool: rgba(70, 140, 255, 0.55);
+}
+
+.glass {
+  --glass-fill: color-mix(in srgb, var(--color-surface) var(--glass-fill-mix), transparent);
+  position: relative;
+  background: linear-gradient(225deg, var(--glass-sheen), transparent 45%), var(--glass-fill);
+  -webkit-backdrop-filter: blur(14px) saturate(1.35);
+  backdrop-filter: blur(14px) saturate(1.35);
+  box-shadow: inset 0 0 0 1px var(--glass-edge);
+  transition: box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.glass--accent {
+  --glass-fill: color-mix(in srgb, var(--color-accent) 78%, transparent);
+  --glass-sheen: rgba(255, 255, 255, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.glass::before,
+.glass::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+/* The rim catches light from the top-right, where the beam originates. */
+.glass::before {
+  background: linear-gradient(225deg, var(--glass-warm), transparent 38%, transparent 70%, var(--glass-warm));
+  transform: translate(0.8px, -0.4px);
+  opacity: 0.8;
+}
+
+.glass::after {
+  background: linear-gradient(225deg, var(--glass-cool), transparent 38%, transparent 70%, var(--glass-cool));
+  transform: translate(-0.8px, 0.4px);
+  opacity: 0.8;
+}
+
+.glass:hover::before,
+.glass:focus-visible::before,
+.glass:focus-within::before {
+  opacity: 1;
+  transform: translate(1.4px, -0.7px);
+}
+
+.glass:hover::after,
+.glass:focus-visible::after,
+.glass:focus-within::after {
+  opacity: 1;
+  transform: translate(-1.4px, 0.7px);
+}
+
+.glass:hover {
+  --glass-fill-mix: 66%;
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass {
+    --glass-fill-mix: 88%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glass,
+  .glass::before,
+  .glass::after {
+    transition: none;
+  }
+}
+
+.glass-button:not(:disabled):hover,
+.glass-button:not(:disabled):focus-visible {
+  --glass-fill-mix: 88%;
+  --glass-sheen: rgba(255, 255, 255, 0.22);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 75%, transparent),
+    0 0 16px color-mix(in srgb, var(--color-accent) 28%, transparent);
+}
+
+.glass-button:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+/* Cards stay bare at rest; glass and a diffuse dispersion glow appear only on hover/focus. */
+.glass-card {
+  background: transparent;
+  -webkit-backdrop-filter: blur(0);
+  backdrop-filter: blur(0);
+  box-shadow: none;
+  transition: background 0.3s ease, box-shadow 0.3s ease, backdrop-filter 0.3s ease, -webkit-backdrop-filter 0.3s ease,
+    transform 0.2s ease;
+}
+
+.glass-card::before,
+.glass-card::after {
+  display: none;
+}
+
+.glass-card:hover,
+.glass-card:focus-visible {
+  --glass-fill-mix: 14%;
+  background: linear-gradient(225deg, var(--glass-sheen), transparent 55%), var(--glass-fill);
+  -webkit-backdrop-filter: blur(3px) saturate(1.15);
+  backdrop-filter: blur(3px) saturate(1.15);
+  box-shadow:
+    inset 12px -12px 26px -20px var(--glass-warm),
+    inset -12px 12px 26px -20px var(--glass-cool);
+}
+
+/* The shader lens replaces the CSS hover treatment when it is running. */
+[data-glass-shader='on'] .glass-card:hover,
+[data-glass-shader='on'] .glass-card:focus-visible {
+  background: transparent;
+  -webkit-backdrop-filter: blur(0);
+  backdrop-filter: blur(0);
+  box-shadow: none;
+}
+
+/* Let results scroll under the sticky header and to the viewport bottom instead of clipping at the column box. */
+@media (min-width: 1024px) {
+  .editorial-right-divider {
+    overflow: visible;
+  }
+
+  .editorial-right-divider .editorial-results-scroll {
+    --results-bleed-top: calc(83px + var(--editorial-rhythm-3));
+    height: calc(100% + var(--results-bleed-top) + var(--editorial-rhythm-3));
+    margin-top: calc(-1 * var(--results-bleed-top));
+    margin-bottom: calc(-1 * var(--editorial-rhythm-3));
+    padding-top: calc(var(--results-bleed-top) + var(--editorial-rhythm-4));
+    padding-bottom: calc(var(--editorial-rhythm-3) + var(--editorial-rhythm-4));
+  }
+}
+
+/* Chromium/Safari only: inset the scrollbar track back to the original column height. Firefox cannot inset a native scrollbar. */
+@media (min-width: 1024px) {
+  .editorial-right-divider .editorial-results-scroll::-webkit-scrollbar {
+    width: 12px;
+  }
+
+  .editorial-right-divider .editorial-results-scroll::-webkit-scrollbar-track {
+    background: transparent;
+    margin-top: var(--results-bleed-top);
+    margin-bottom: var(--editorial-rhythm-3);
+  }
+
+  .editorial-right-divider .editorial-results-scroll::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--color-text-muted) 55%, transparent);
+    background-clip: padding-box;
+    border: 3px solid transparent;
+    border-radius: 999px;
+  }
+
+  .editorial-right-divider .editorial-results-scroll::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--color-text-muted) 85%, transparent);
+    background-clip: padding-box;
+  }
+}

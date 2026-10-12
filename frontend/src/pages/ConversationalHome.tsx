@@ -293,7 +293,7 @@ export default function ConversationalHome({
         : 'Finding your best matches.'
 
   return (
-    <div className="conversational-home flex h-full flex-col bg-bg text-text">
+    <div className="conversational-home flex h-full flex-col text-text">
 
       {/* Messages Container */}
       <div className="editorial-conversation-scroll flex-1 overflow-y-auto px-4">
@@ -330,8 +330,8 @@ export default function ConversationalHome({
               <div
                 className={`max-w-xs lg:max-w-md px-4 py-3 rounded-lg ${
                   msg.role === 'user'
-                    ? 'bg-accent text-accent-contrast rounded-br-none shadow-card'
-                    : 'bg-surface/88 text-text rounded-bl-none border border-border/45 shadow-none'
+                    ? 'glass glass--accent text-accent-contrast rounded-br-none'
+                    : 'glass text-text rounded-bl-none'
                 }`}
               >
                 <p className="text-sm">{msg.text}</p>
@@ -389,7 +389,7 @@ export default function ConversationalHome({
           {state.isLoading && (
             <div className="flex justify-start">
               <div
-                className="max-w-xs rounded-lg rounded-bl-none border border-border/45 bg-surface/88 px-4 py-3 text-text shadow-none"
+                className="glass max-w-xs rounded-lg rounded-bl-none px-4 py-3 text-text"
                 aria-live="polite"
                 role="status"
               >
@@ -433,22 +433,24 @@ export default function ConversationalHome({
       </div>
 
       {/* Input Area */}
-      <div className="editorial-composer-band border-t border-border/50 bg-surface/90 px-4 backdrop-blur-sm">
+      <div className="editorial-composer-band border-t border-border/30 px-4">
         <div className="mx-auto max-w-4xl">
           <div className="editorial-composer-row flex">
-            <textarea
-              value={inputValue}
-              onChange={e => setInputValue(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder={
-                showClarification
-                  ? 'Add your note or select a direction...'
-                  : 'Write your viewing brief...'
-              }
-              disabled={state.isLoading}
-              rows={3}
-              className="flex-1 resize-none rounded-lg bg-surface-2 px-4 py-3 text-text placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-focus disabled:opacity-50"
-            />
+            <div className="glass flex-1 rounded-lg focus-within:ring-2 focus-within:ring-focus">
+              <textarea
+                value={inputValue}
+                onChange={e => setInputValue(e.target.value)}
+                onKeyPress={handleKeyPress}
+                placeholder={
+                  showClarification
+                    ? 'Add your note or select a direction...'
+                    : 'Write your viewing brief...'
+                }
+                disabled={state.isLoading}
+                rows={3}
+                className="block w-full resize-none rounded-lg bg-transparent px-4 py-3 text-text placeholder-text-muted focus:outline-none disabled:opacity-50"
+              />
+            </div>
             <button
               onClick={handleSubmitMessage}
               disabled={!inputValue.trim() || state.isLoading}

@@ -1102,7 +1102,7 @@ export default function ResultsPage({
                 {sessionHighlights.map((item) => (
                   <article
                     key={item.id}
-                    className="group space-y-3 rounded-md p-1 -m-1 cursor-pointer transition-colors hover:bg-surface-2/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+                    className="glass glass-card group space-y-3 rounded-lg p-2 -m-2 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
                     role="button"
                     tabIndex={0}
                     aria-label={`Open highlight details for ${item.title}`}
@@ -1179,7 +1179,8 @@ export default function ResultsPage({
             {results.map((rec, index) => (
               <article
                 key={rec.id}
-                className="group rounded-lg shadow-none cursor-pointer transition-all duration-200 hover:-translate-y-[1px] hover:bg-surface-2/35 hover:shadow-[0_8px_18px_rgba(4,4,7,0.26)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+                className="glass glass-card group rounded-lg cursor-pointer transition-all duration-200 hover:-translate-y-[1px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+                data-glass-unclipped
                 role="button"
                 tabIndex={0}
                 aria-label={`Open more details for ${rec.title}`}

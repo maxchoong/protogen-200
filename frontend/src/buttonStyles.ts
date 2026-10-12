@@ -20,10 +20,10 @@ const sizeClasses: Record<ButtonSize, string> = {
 
 const variantClasses: Record<ButtonVariant, string> = {
   primary: 'bg-accent text-accent-contrast hover:opacity-90',
-  secondary: 'border border-border bg-surface text-text hover:border-text-muted hover:bg-surface-2 hover:text-text',
-  subtle: 'border border-border bg-transparent text-text-muted hover:border-text-muted hover:bg-surface-2 hover:text-text',
+  secondary: 'glass glass-button text-text',
+  subtle: 'glass glass-button text-text-muted hover:text-text',
   ghost: 'bg-transparent text-text-muted hover:bg-surface-2 hover:text-text',
-  chip: 'border border-border bg-surface text-text hover:border-text-muted hover:bg-surface-2 hover:text-text',
+  chip: 'glass glass-button text-text',
   link: 'h-auto rounded-none bg-transparent px-0 text-accent underline underline-offset-2 hover:opacity-80'
 }
 

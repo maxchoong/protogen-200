@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import ConversationalHome from './pages/ConversationalHome'
 import ResultsPage from './pages/ResultsPage'
+import AmbientBackground from './components/AmbientBackground'
+import LensTweakPanel from './components/LensTweakPanel'
+import { isTweakPanelEnabled } from './lensTweaks'
 import { useTheme } from './hooks/useTheme'
 import { useConversation } from './hooks/useConversation'
 import { buttonClass } from './buttonStyles'
@@ -191,7 +194,9 @@ function App() {
       : null
 
   return (
-    <div className="app-shell min-h-screen bg-bg text-text">
+    <div className="app-shell relative isolate min-h-screen bg-bg text-text">
+      <AmbientBackground theme={theme} />
+      {isTweakPanelEnabled() && <LensTweakPanel theme={theme} />}
       <header className="app-topbar border-b border-border/80 bg-surface/90 px-4 py-4 backdrop-blur-sm">
         <div className="mx-auto flex w-full max-w-[1400px] items-center justify-between gap-3">
           <div>
@@ -204,7 +209,7 @@ function App() {
               className={buttonClass({
                 variant: showResetConfirm ? 'secondary' : 'subtle',
                 size: 'sm',
-                className: `${showResetConfirm ? 'border-accent' : ''} whitespace-nowrap`
+                className: `${showResetConfirm ? 'glass--accent' : ''} whitespace-nowrap`
               })}
               aria-label="Start a new conversation"
             >

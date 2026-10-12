@@ -1,0 +1,85 @@
+export interface LensParams {
+  magnify: number
+  bend: number
+  splitG: number
+  splitB: number
+  brighten: number
+  fringe: number
+  width: number
+  radius: number
+}
+
+export type LensTheme = 'dark' | 'light'
+
+export const LENS_DEFAULTS: Record<LensTheme, LensParams> = {
+  dark: {
+    magnify: 0.06,
+    bend: 12,
+    splitG: 1.2,
+    splitB: 1.4,
+    brighten: 0.36,
+    fringe: 0.24,
+    width: 8,
+    radius: 12,
+  },
+  light: {
+    magnify: 0.06,
+    bend: 12,
+    splitG: 1.2,
+    splitB: 1.4,
+    brighten: 0.36,
+    fringe: 0.36,
+    width: 8,
+    radius: 12,
+  },
+}
+
+const STORAGE_KEY = 'lumera-lens-tweaks'
+
+type LensStore = Record<LensTheme, LensParams>
+
+const load = (): LensStore => {
+  const fallback = { dark: { ...LENS_DEFAULTS.dark }, light: { ...LENS_DEFAULTS.light } }
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? 'null')
+    if (!saved) return fallback
+    return {
+      dark: { ...LENS_DEFAULTS.dark, ...saved.dark },
+      light: { ...LENS_DEFAULTS.light, ...saved.light },
+    }
+  } catch {
+    return fallback
+  }
+}
+
+let store = load()
+const listeners = new Set<() => void>()
+
+const commit = (next: LensStore) => {
+  store = next
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store))
+  } catch {
+    // Storage can be unavailable (private mode); tweaks then last for the session only.
+  }
+  listeners.forEach(listener => listener())
+}
+
+export const getLensParams = (theme: LensTheme): LensParams => store[theme]
+
+export const setLensParam = (theme: LensTheme, key: keyof LensParams, value: number) =>
+  commit({ ...store, [theme]: { ...store[theme], [key]: value } })
+
+export const resetLensParams = (theme: LensTheme) => commit({ ...store, [theme]: { ...LENS_DEFAULTS[theme] } })
+
+export const getLensStore = () => store
+
+export const isTweakPanelEnabled = () =>
+  import.meta.env.DEV || new URLSearchParams(window.location.search).has('tweak')
+
+export const subscribeLensStore = (listener: () => void) => {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
