@@ -6,6 +6,7 @@ import { PreferenceParser } from './engine/preferenceParser.js'
 import { recommendationEngine } from './engine/recommendationEngine.js'
 import { tmdbClient } from './clients/tmdb.js'
 import { streamingClient } from './clients/streaming.js'
+import { llmClient } from './clients/llm.js'
 
 export const app: Express = express()
 const port = process.env.PORT || 3000
@@ -719,11 +720,30 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
 
     if (clarificationQuestions && !bypassInitialClarification) {
       console.log(`[${new Date().toISOString()}] Clarification suggested with ${clarificationQuestions.length} questions`)
+
+      let activeQuestions = clarificationQuestions
+      let activeContext = 'I can steer this in a few different directions. Choose one, or type your own direction.'
+
+      if (llmClient.isEnabled()) {
+        try {
+          const conversational = await llmClient.generateConversationalClarification(
+            normalizedDescription,
+            clarificationQuestions
+          )
+          if (conversational) {
+            activeQuestions = conversational.questions
+            activeContext = conversational.context
+          }
+        } catch (err) {
+          console.warn('[Server] LLM conversational clarification failed, using fallback:', err)
+        }
+      }
+
       return res.json({
         success: true,
         requiresClarification: {
-          questions: clarificationQuestions,
-          context: 'I can tune this a few ways. Choose one, or type your own direction.',
+          questions: activeQuestions,
+          context: activeContext,
           confidenceScore: parsedPreferences.intentConfidence
         },
         detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence

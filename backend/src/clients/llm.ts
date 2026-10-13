@@ -106,6 +106,7 @@ Use canonical moods: Happy, Sad, Intense, Relaxing, Funny, Thoughtful, Dark, Rom
 Put title similarity anchors in referenceTitles, named performers in actors, and descriptive concepts useful for catalog search in keywords.
 Put named directors, writers, producers, and creators in creators as {"name":"Person Name","role":"director|writer|producer|creator","allowOtherRoles":false}. Do not also put them in actors unless the user explicitly requests their acting. For an unqualified request such as "films by Person Name", use role "director" and allowOtherRoles true. Explicit "directed by", "written by", "produced by", or "created by" requests use their exact role and allowOtherRoles false. Never invent a person not named in the active conversation.
 When a request names a reference and asks for a tonal change, suggest up to five real, specific titles that retain conceptual or narrative appeal while fitting the new tone. Cross genres when the premise supports it (for example, a high-concept memory puzzle can point to thoughtful science fiction). Do not include the reference itself. These titles are search seeds that will be checked against the catalog, not guaranteed matches.
+For an awards, prestige, or Oscar-focused request without a named reference (e.g. "Oscar winning movies", "academy award winners"), put up to five diverse, real, celebrated award-winning title seeds in referenceSuggestions across eras and genres (e.g., Parasite, Everything Everywhere All At Once, No Country for Old Men, The Silence of the Lambs, Moonlight).
 For a broad novelty or indie-discovery request without a named reference, put up to five diverse, real title search seeds in referenceSuggestions. Cover unusual premise or genre shift, atmosphere, quiet character/emotional impact, visual or formal invention, and offbeat satire; include titles from different genres rather than clustering in sci-fi/thriller. For calibration, this range can include The One I Love or Coherence (odd premise), The Vast of Night (atmosphere), The Station Agent or The Rider (character impact), The Fall or A Ghost Story (visual/formal), and Sorry to Bother You (satire/genre shift). These are examples, not a fixed whitelist. Favor distinctive voice and credible quality with modest exposure; do not equate obscurity with quality or limit suggestions to plot twists. The catalog will validate each title.
 Use null for unknown year bounds. Preserve all relevant details from the full conversation.`
         },
@@ -494,6 +495,104 @@ Rules:
     } catch (error: any) {
       console.error('[LLM] Actor title seed generation error:', error.message)
       return []
+    }
+  }
+
+  /**
+   * Generates a warm, conversational clarification question and options
+   * when user intent has multiple interpretations or needs steering.
+   */
+  async generateConversationalClarification(
+    userQuery: string,
+    fallbackQuestions: Array<{
+      id: string
+      question: string
+      type: 'select' | 'text' | 'boolean'
+      options?: string[]
+    }>
+  ): Promise<{
+    context: string
+    questions: Array<{
+      id: string
+      question: string
+      type: 'select' | 'text' | 'boolean'
+      options?: string[]
+    }>
+  } | null> {
+    if (!this.enabled || !fallbackQuestions.length) {
+      return null
+    }
+
+    const cacheKey = `clarification:${userQuery.substring(0, 80)}`
+    const cached = this.getCache(cacheKey)
+    if (cached) {
+      return cached
+    }
+
+    try {
+      const messages: ChatCompletionMessageParam[] = [
+        {
+          role: 'system',
+          content: `You are a warm, knowledgeable film and TV advisor. The user's query is broad or has several good directions, and we need to clarify what they want.
+Return JSON with this exact structure:
+{
+  "context": "A warm, natural 1-sentence opening acknowledging what they asked for and inviting guidance.",
+  "question": "A friendly, conversational question asking which direction or vibe they prefer.",
+  "options": ["Option 1", "Option 2", "Option 3"]
+}
+
+Guidelines:
+- Keep the tone natural, inviting, and conversational (like a friendly film buff at a local video store or festival).
+- Never use robotic system phrasing like "Go mood-first", "Go title-similarity first", or "Select priority axis".
+- Frame options as natural choices matching the user's specific context (e.g. "Recent festival favorites", "Thrilling crowd-pleasers", "Classic deep-cuts").
+- Provide 2 to 4 concise options.
+- No markdown formatting, return pure JSON.`
+        },
+        {
+          role: 'user',
+          content: `User query: "${userQuery}"\nBaseline questions/options: ${JSON.stringify(fallbackQuestions)}`
+        }
+      ]
+
+      const response = await this.client!.chat.completions.create({
+        model: this.model,
+        messages,
+        temperature: 0.5,
+        max_tokens: 250,
+        response_format: { type: 'json_object' }
+      })
+
+      const content = response.choices[0]?.message?.content
+      if (!content) return null
+
+      const parsed = JSON.parse(content) as Record<string, unknown>
+      const context = typeof parsed.context === 'string' && parsed.context.trim()
+        ? parsed.context.trim()
+        : 'I can steer this in a few different directions. What kind of watch are you in the mood for?'
+      const question = typeof parsed.question === 'string' && parsed.question.trim()
+        ? parsed.question.trim()
+        : fallbackQuestions[0].question
+      const options = Array.isArray(parsed.options)
+        ? parsed.options.filter((opt): opt is string => typeof opt === 'string' && opt.trim().length > 0)
+        : fallbackQuestions[0].options
+
+      const result = {
+        context,
+        questions: [
+          {
+            id: fallbackQuestions[0].id,
+            question,
+            type: fallbackQuestions[0].type,
+            options: options && options.length > 0 ? options : fallbackQuestions[0].options
+          }
+        ]
+      }
+
+      this.setCache(cacheKey, result, 3600000)
+      return result
+    } catch (err) {
+      console.warn('[LLM] generateConversationalClarification failed, using fallback:', err)
+      return null
     }
   }
 

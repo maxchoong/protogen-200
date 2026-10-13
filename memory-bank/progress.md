@@ -2,10 +2,19 @@
 
 ## Overall Status
 
-**Updated:** October 12, 2026
+**Updated:** October 13, 2026
 
-- Backend and frontend production builds pass.
-- Backend Jest: 199/199 passing; backend build and lint verified October 12, 2026. Frontend validation was not rerun for this backend-only change.
+- Backend and frontend production builds and lints pass.
+- Backend Jest: 201/201 passing; backend build and lint verified October 13, 2026. Frontend build and lint also pass.
+- Plain language queries & conversational clarification:
+  - Added award and prestige keywords (`oscar`, `academy award`, `bafta`, `palme d'or`) to `CRITICS_KEYWORDS`.
+  - Added calendar and seasonal date window resolution (`this summer`, `last summer`) mapping to `releaseDateRange` (e.g. `2026-05-01` to `2026-08-31`) and seasonal constraints.
+  - Extended TMDB discover to accept `releaseDateGte` and `releaseDateLte` parameters for seasonal release queries.
+  - Filtered broad category/temporal words from literal title keyword queries in `extractSearchTerms` to prevent matching movies titled "Oscar" or "Summer".
+  - Extended LLM prompt with awards and prestige catalog search seeds in `referenceSuggestions`, validated against TMDB/OMDb catalog.
+  - Added conversational clarification generation via `llmClient.generateConversationalClarification()`, turning rigid system menus into friendly film-advisor prompts with context-tailored options.
+  - Updated fallback disambiguation templates to replace internal developer routing phrases ("Go mood-first", "Go title-similarity first") with natural phrasing.
+  - Implemented Results-First gating for unambiguous cultural and blockbuster requests, delivering recommendations directly without false disambiguation traps.
 - Creator discovery: unqualified "films by NAME" selects verified directing credits first, then other verified creator credits if needed. Explicit roles are exact; creator evidence is kept separate from acting credits and preserved through deduplication/hydration. Compatible refinements retain creators, new creator anchors replace them, and hard pivots clear them.
 - Live Cameron query verified four directing matches with separate real cast metadata. Deterministic credit wording prevents producer-only fallbacks being described as directed films. Browser/server-endpoint interaction remains untested for this change.
 - GitHub Models retirement diagnosed from official documentation and DNS failure. Client migrated to configurable OpenAI-compatible providers. Live Gemini parsing and explanation generation pass `npm --prefix backend run check:llm` using `gemini-3.5-flash-lite`; the older 2.5 Flash-Lite setting returned 404. Restart the existing backend to load the corrected model before browser testing.

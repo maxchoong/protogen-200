@@ -819,6 +819,21 @@ export class RecommendationEngine {
       console.log(`[Engine] Resolved ${referenceTitles.length} reference titles`)
     }
 
+    // Hydrate catalog search seeds (e.g. LLM suggestions for awards/indie/prestige queries)
+    if (preferences.referenceSuggestions && preferences.referenceSuggestions.length > 0 && tmdbClient.isEnabled()) {
+      const seedTitlePromises = preferences.referenceSuggestions.slice(0, 5).map(seed => this.fetchReferenceTitle(seed))
+      const seedResults = await Promise.all(seedTitlePromises)
+      const validSeeds = seedResults.filter((r): r is any => r !== null)
+      if (validSeeds.length > 0) {
+        referenceCandidates.push(...validSeeds.map((seed, index) => ({
+          ...seed,
+          referenceSimilarityScore: Math.max(0.75, 0.95 - index * 0.05)
+        })))
+        diagnostics.usedTmdb = true
+        console.log(`[Engine] Ingested ${validSeeds.length} valid catalog seeds from referenceSuggestions`)
+      }
+    }
+
     // Keep parser-combined description (base query + clarification context) for downstream ranking.
 
     // === PHASE 5: Mode-aware search strategy ===
@@ -973,7 +988,9 @@ export class RecommendationEngine {
         {
           includeMovies,
           includeTV,
-          excludeAdult: true
+          excludeAdult: true,
+          releaseDateGte: preferences.releaseDateRange?.gte,
+          releaseDateLte: preferences.releaseDateRange?.lte
         },
         page
       )
@@ -1390,11 +1407,13 @@ export class RecommendationEngine {
   private extractSearchTerms(query: string, genres: string[], maxTerms: number = RecommendationEngine.SEARCH_TERM_LIMIT): string[] {
     const terms = new Set<string>()
 
-    // Remove stop words
+    // Remove stop words and broad category/temporal words that shouldn't be searched as literal titles
     const stopWords = [
-      'a', 'an', 'the', 'like', 'similar', 'to', 'movie', 'film', 'show',
+      'a', 'an', 'the', 'like', 'similar', 'to', 'movie', 'film', 'movies', 'films', 'show',
       'series', 'tv', 'something', 'anything', 'want', 'watch', 'looking',
-      'for', 'about', 'with', 'that', 'has', 'is', 'are', 'in', 'on', 'i'
+      'for', 'about', 'with', 'that', 'has', 'is', 'are', 'in', 'on', 'i',
+      'oscar', 'oscars', 'winning', 'winner', 'winners', 'award', 'awards', 'academy',
+      'summer', 'blockbuster', 'blockbusters', 'hit', 'hits', 'popular', 'best', 'top'
     ]
 
     // Split into words

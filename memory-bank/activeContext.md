@@ -2,42 +2,36 @@
 
 ## Project Status
 
-**Date:** October 12, 2026
-**Phase:** Post-Phase-6 quality hardening and transparency updates
-**Overall Progress:** Conversational recommendations, TMDB enrichment, transparency safeguards, active preference continuity, evidence-weighted reference matching, and director-first creator discovery are implemented. Backend build and lint pass; backend Jest passes 199/199 tests. Frontend validation remains as previously recorded; unrelated frontend work was not modified or revalidated for this backend change.
+**Date:** October 13, 2026
+**Phase:** Plain language queries and conversational disambiguation enhancements
+**Overall Progress:** Plain language queries (cultural/prestige awards, seasonal blockbusters), TMDB date-range discovery, catalog search seed hydration, Results-First gating, and conversational LLM disambiguation are implemented. Backend build and lint pass; backend Jest passes 201/201 tests. Frontend build and lint pass.
 
 ---
 
 ## Current Reality
 
-- **Frontend & Backend:** Both build successfully with no TypeScript errors.
-- **Frontend:** Conversational flow is primary, meta-steering prompt removed, suggestion chips removed.
-- **Backend:** Intent-aware ranking + clarification + transparency safeguards in single endpoint (`POST /recommendations`).
-- **Data sources in practice:** TMDB + OMDb + IMDb-derived fields (via OMDb/FMDb and TMDB mappings), Streaming Availability API, optional LLM explanation generation.
-- **Transparency behavior:** Explicitly states proxy interpretation when user asks for critics-oriented results and explicitly clarifies unsupported external critic sources.
-- **Content safety:** The current TMDB filter blocks titles marked `adult`; rating definitions exist, but detailed certification enforcement is not implemented on this path.
-- **Conversation continuity:** Follow-up API requests carry user turns. Parsing retains compatible active preferences and drops pre-pivot turns; explicit actor matches are ranked before supplemental candidates across intent modes.
-- **Reference contrast:** TMDB relatedness alone no longer qualifies a title. Reference searches prioritize dream, memory, reality, time, and space concepts; whole-word concept matching avoids substring collisions. Direct time-dilation/language bridges and psychologically grounded speculative, constructed-reality, and fate/agency matches receive concept support. Relaxing mood scores discount incidental positive words when a synopsis also has high-stakes urgency; severe violence, survival, peril, and countdown-plus-threat plots are filtered. Softer adventure wildcards remain eligible but are demoted.
-- **Indie discovery:** `Indie` is treated as a soft discovery label rather than a TMDB genre hard filter. Novelty searches use separate quality-filtered keyword groups and catalog-validated LLM title seeds, default to movies unless TV is explicit, and require minimum rating/vote support. Low popularity only boosts titles when rating evidence is credible.
-- **Current validation (October 3, 2026):** Backend build, lint, and all 169 Jest tests pass; frontend build and lint pass. GitHub's official documentation confirms GitHub Models retired July 30, 2026; the old Azure inference hostname fails DNS. The LLM client now uses OPENAI_API_KEY or LLM_API_KEY with LLM_BASE_URL/LLM_MODEL, ignores GITHUB_TOKEN, and blocks retired endpoints. Live Gemini parsing and explanation generation pass `npm --prefix backend run check:llm` with `gemini-3.5-flash-lite` and Google's OpenAI-compatible endpoint. A live `Surprising indie gems` run returned five user-targeted films in its top six: A Ghost Story, Sorry to Bother You, The One I Love, The Vast of Night, and The Station Agent. Other tail titles still vary with LLM seeds and catalog metadata.
-
-### Repository Updates Since May 2026
-- Added a backend content-safety filter and rating enum; current enforcement relies on TMDB's `adult` flag rather than detailed ratings.
-- Archived legacy cleanup/runtime artifacts in the August 21, 2026 commit.
-- Updated `ts-jest` to `29.4.12` on September 1, 2026 to address a Handlebars vulnerability.
-- Development tokens referenced in historical notes were rotated (confirmed October 2, 2026).
+- **Frontend & Backend:** Both build and lint cleanly with zero errors.
+- **Frontend:** Conversational flow is primary with dynamic advisor clarification rendering.
+- **Backend:** Intent-aware ranking + conversational disambiguation + transparency safeguards in `POST /recommendations`.
+- **Plain language handling:** 
+  - Expanded lexicon in `preferenceParser.ts` for award queries (`oscar`, `academy award`, `bafta`, `palme d'or`).
+  - Added relative seasonal date-window resolution (`this summer`, `last summer`) producing concrete release bounds (e.g. `2026-05-01` to `2026-08-31`).
+  - Broad category and temporal terms (`oscar`, `winning`, `summer`, `blockbuster`, `hits`) are removed from literal TMDB search term queries to prevent matching accidental literal titles.
+  - LLM system prompt in `llm.ts` now suggests canonical award-winning catalog seeds in `referenceSuggestions` for prestige queries, which `recommendationEngine.ts` validates and ingests into candidate pools.
+  - TMDB discover methods in `tmdb.ts` support `releaseDateGte` and `releaseDateLte` for accurate seasonal discover paging.
+  - Queries with clear cultural/thematic intent (e.g. Oscar winners, blockbusters) now receive sufficient intent confidence (0.82) to trigger Results-First delivery directly, bypassing unnecessary disambiguation delays.
+- **Conversational disambiguation:**
+  - Implemented `llmClient.generateConversationalClarification()`, transforming rigid developer menus into engaging, film-advisor dialogue with context-tailored options.
+  - Updated deterministic fallback templates in `preferenceParser.ts` and `index.ts` to replace internal system jargon ("Go mood-first", "Go title-similarity first") with natural user-centric choices ("Focus on the mood or vibe", "Match the tone of a specific movie", "Focus on a favorite actor or director").
 
 ---
 
 ## Recently Shipped Changes
 
-### Director-First Creator Discovery (October 12, 2026)
-- Bare "Films by James Cameron" requests are director-primary, with verified writing, producing, or creator credits filling remaining slots only after directed titles. Unrelated titles and acting-only appearances are excluded from creator results.
-- Explicit "directed by", "written by", "produced by", and "created by" requests require that role. Assistant-director credits do not count as directing; screenplay/story and executive-producer jobs map to writing/producing respectively.
-- Creator preferences are separate from actors, survive compatible refinements, and are replaced by a newly named creator or cleared by a hard pivot. "Only ones he directed" disables cross-role fallback.
-- TMDB combined credits preserve cast and crew separately, aggregate duplicate jobs, and use role-aware person resolution/cache keys. Creator role evidence survives candidate deduplication and IMDb hydration; directed results stay ahead of fallback credits through diversity selection.
-- Creator explanations use deterministic verified-credit wording rather than generated claims, and creators are not injected into cast metadata. Existing actor/reference ranking weights are unchanged.
-- Verification: all 199 Jest tests, backend lint, backend build/import checks, and whitespace checks pass. A live engine request with configured TMDB/LLM returned Avatar: Fire and Ash, Avatar: The Way of Water, Titanic, and Billie Eilish - Hit Me Hard and Soft: The Tour (Live in 3D); all four had James Cameron directing credits with actual cast separately populated. Catalog ordering is not a guaranteed title list. Browser/API-server interaction was not exercised in this change.
+### Plain Language Discovery & Conversational Disambiguation (October 13, 2026)
+- Plain language queries without explicit schema fields (awards/prestige, seasonal releases) now resolve through catalog-validated seeds and TMDB temporal release-window filtering.
+- Conversational clarification replaces mechanical developer options with natural advisor questions and options.
+- All 201 Jest tests pass. Frontend and backend build and lint cleanly.
 
 ### Retrieval and Enrichment
 - Added TMDB enrichment for runtime, genres, language, cast, and directors.

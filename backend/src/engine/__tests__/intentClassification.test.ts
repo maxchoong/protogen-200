@@ -86,6 +86,31 @@ describe('Creator intent', () => {
     request.clarificationContext!.userClarification = 'Films by Christopher Nolan instead'
     expect(PreferenceParser.parse(request).detectedCreators?.map(creator => creator.name)).toEqual(['Christopher Nolan'])
   })
+
+  it('correctly parses Oscar winning queries as criticsIntent and provides high confidence', () => {
+    const request: RecommendationRequest = {
+      description: 'Oscar winning movies'
+    }
+    const preferences = PreferenceParser.parse(request)
+    expect(preferences.criticsIntent).toBe(true)
+    expect(preferences.contentType).toBe('movie')
+    expect(preferences.intentConfidence).toBeGreaterThanOrEqual(0.8)
+    expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull()
+  })
+
+  it('correctly parses summer blockbuster queries with seasonal date window and popularity', () => {
+    const request: RecommendationRequest = {
+      description: 'This summer\'s blockbuster hits'
+    }
+    const preferences = PreferenceParser.parse(request)
+    expect(preferences.popularityPreference).toBe('mainstream')
+    expect(preferences.contentType).toBe('movie')
+    expect(preferences.releaseDateRange).toBeDefined()
+    expect(preferences.releaseDateRange?.gte).toMatch(/^\d{4}-05-01$/)
+    expect(preferences.releaseDateRange?.lte).toMatch(/^\d{4}-08-31$/)
+    expect(preferences.intentConfidence).toBeGreaterThanOrEqual(0.8)
+    expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull()
+  })
 })
 
 describe('LLM preference hint merging', () => {
@@ -503,7 +528,7 @@ describe('Phase 5: Intent Classification & Clarification', () => {
       }
 
       expect(clarification[0].id).toBe('mixed_disambiguation')
-      expect(clarification[0].question).toBe('I can tune this a few ways. Which should I prioritise?')
+      expect(clarification[0].question).toBe('I can steer this in a few different directions. What matters most for this watch?')
     })
 
     it('should parse strategy selection as ranking preference without dropping talent anchor', () => {

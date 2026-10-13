@@ -104,6 +104,10 @@ export interface ParsedPreferences {
   turnOperation?: TurnOperation
   wantsMoreResults?: boolean
   blockbusterPage?: number
+  releaseDateRange?: {
+    gte?: string
+    lte?: string
+  }
 }
 
 export interface RecommendationRequest {
@@ -314,7 +318,11 @@ export class PreferenceParser {
     'big hits',
     'widely known',
     'crowd-pleaser',
-    'crowd pleaser'
+    'crowd pleaser',
+    'box office hits',
+    'box office hit',
+    'box office',
+    'hit movies'
   ]
 
   private static readonly CRITICS_KEYWORDS = [
@@ -324,6 +332,22 @@ export class PreferenceParser {
     'acclaimed',
     'award-winning',
     'award winning',
+    'award winner',
+    'award winners',
+    'oscar',
+    'oscars',
+    'oscar-winning',
+    'oscar winning',
+    'oscar winner',
+    'oscar winners',
+    'academy award',
+    'academy awards',
+    'academy award-winning',
+    'academy award winning',
+    'bafta',
+    'palme d\'or',
+    'golden globe',
+    'golden globes',
     'festival favourite',
     'festival favorite',
     'best reviewed',
@@ -687,6 +711,9 @@ export class PreferenceParser {
     if (refinementSignals.yearRange) {
       preferences.yearRange = refinementSignals.yearRange
     }
+    if (refinementSignals.releaseDateRange) {
+      preferences.releaseDateRange = refinementSignals.releaseDateRange
+    }
     if (refinementSignals.rankingStrategyPreference) {
       preferences.rankingStrategyPreference = refinementSignals.rankingStrategyPreference
     }
@@ -792,7 +819,9 @@ export class PreferenceParser {
       this.hasSituationKeywords(description),
       preferences.isContrastiveReference || false,
       preferences.noveltyIntent || false,
-      preferences.detectedCreators
+      preferences.detectedCreators,
+      preferences.criticsIntent || false,
+      preferences.popularityPreference === 'mainstream'
     )
     preferences.discoveryMode = intentClassification.mode
     preferences.intentConfidence = intentClassification.confidence
@@ -951,6 +980,7 @@ export class PreferenceParser {
   private static extractRefinementSignals(description: string): {
     popularityPreference?: 'mainstream' | 'niche'
     yearRange?: { min?: number; max?: number }
+    releaseDateRange?: { gte?: string; lte?: string }
     rankingStrategyPreference?: 'mood_first' | 'reference_first' | 'talent_first'
     resultLimit?: number
     preferTopRated?: boolean
@@ -998,6 +1028,34 @@ export class PreferenceParser {
 
     const uniqueExplicitYears = Array.from(new Set(explicitYears))
 
+    // Seasonal / relative temporal resolution (e.g., "this summer", "last summer")
+    let releaseDateRange: { gte?: string; lte?: string } | undefined
+    const currentDate = new Date()
+    const currentYear = currentDate.getFullYear()
+    const currentMonth = currentDate.getMonth() + 1 // 1-indexed
+
+    const isThisSummer = /\b(?:this\s+summer|summer(?:'s)?\s+blockbuster|summer\s+hits?)\b/i.test(description)
+    const isLastSummer = /\blast\s+summer\b/i.test(description)
+
+    let seasonalYear: number | undefined
+    if (isThisSummer) {
+      // In northern hemisphere cinema calendar, summer box office runs May through August.
+      // If query is run before May (e.g. Jan-Apr), "this summer" or summer hits refers to the most recent completed summer.
+      seasonalYear = currentMonth < 5 ? currentYear - 1 : currentYear
+      releaseDateRange = {
+        gte: `${seasonalYear}-05-01`,
+        lte: `${seasonalYear}-08-31`
+      }
+      constraints.push(`season:summer_${seasonalYear}`)
+    } else if (isLastSummer) {
+      seasonalYear = currentYear - 1
+      releaseDateRange = {
+        gte: `${seasonalYear}-05-01`,
+        lte: `${seasonalYear}-08-31`
+      }
+      constraints.push(`season:summer_${seasonalYear}`)
+    }
+
     const yearRange = uniqueExplicitYears.length > 0
       ? {
           min: Math.min(...uniqueExplicitYears),
@@ -1008,7 +1066,12 @@ export class PreferenceParser {
             min: Math.min(...decades),
             max: Math.max(...decades) + 9
           }
-        : undefined
+        : seasonalYear !== undefined
+          ? {
+              min: seasonalYear,
+              max: seasonalYear
+            }
+          : undefined
 
     if (yearRange?.min !== undefined) {
       if (yearRange.max !== undefined && yearRange.min === yearRange.max) {
@@ -1071,6 +1134,7 @@ export class PreferenceParser {
     return {
       popularityPreference,
       yearRange,
+      releaseDateRange,
       rankingStrategyPreference,
       resultLimit,
       preferTopRated,
@@ -1331,7 +1395,9 @@ export class PreferenceParser {
     hasSituation: boolean,
     isContrastiveReference: boolean,
     noveltyIntent: boolean,
-    creators: CreatorPreference[] = []
+    creators: CreatorPreference[] = [],
+    criticsIntent: boolean = false,
+    mainstreamIntent: boolean = false
   ): IntentClassification {
     const talentNames = [...actors, ...creators.map(creator => creator.name)]
     const signals: IntentSignals = {
@@ -1346,7 +1412,7 @@ export class PreferenceParser {
     let mode: DiscoveryMode = 'mixed'
     let confidence = 0.5
 
-    // Priority order: talent > reference > mood > mixed
+    // Priority order: talent > reference > mood > critics/mainstream concept > mixed
     if (talentNames.length > 0) {
       mode = 'talent'
       confidence = Math.min(1.0, 0.85 + talentNames.length * 0.05)
@@ -1360,6 +1426,10 @@ export class PreferenceParser {
       // Novelty discovery queries should not default to low-confidence mixed.
       mode = 'mood'
       confidence = 0.7
+    } else if (criticsIntent || mainstreamIntent) {
+      // Direct prestige / awards or blockbuster requests have unambiguous intent
+      mode = 'mixed'
+      confidence = 0.82
     } else {
       mode = 'mixed'
       confidence = 0.3  // Low confidence for empty/vague queries
@@ -1464,10 +1534,10 @@ export class PreferenceParser {
         {
           id: 'mixed_disambiguation',
           question: noveltyPrompt
-            ? 'What do you mean by "surprise me"?'
-            : 'I can tune this a few ways. Which should I prioritise?',
+            ? 'What kind of surprise are you looking for?'
+            : 'I can steer this in a few different directions. What matters most for this watch?',
           type: 'select',
-          options: ['Go mood-first', 'Go title-similarity first', 'Go cast/director first']
+          options: ['Focus on the mood or vibe', 'Match the tone of a specific movie', 'Focus on a favorite actor or director']
         }
       ]
     }

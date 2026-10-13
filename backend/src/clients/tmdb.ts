@@ -383,7 +383,10 @@ export class TMDBClient {
 
   async discoverPopularByYear(
     year: number,
-    options: Partial<SearchQuery> = {},
+    options: Partial<SearchQuery> & {
+      releaseDateGte?: string
+      releaseDateLte?: string
+    } = {},
     page: number = 1
   ): Promise<TMDBTitle[]> {
     if (!this.isEnabled()) {
@@ -397,10 +400,10 @@ export class TMDBClient {
     try {
       const [movieResults, tvResults] = await Promise.all([
         includeMovies
-          ? this.fetchDiscoverByYear('movie', year, includeAdult, page)
+          ? this.fetchDiscoverByYear('movie', year, includeAdult, page, options.releaseDateGte, options.releaseDateLte)
           : Promise.resolve([]),
         includeTV
-          ? this.fetchDiscoverByYear('tv', year, includeAdult, page)
+          ? this.fetchDiscoverByYear('tv', year, includeAdult, page, options.releaseDateGte, options.releaseDateLte)
           : Promise.resolve([])
       ])
 
@@ -1074,16 +1077,36 @@ export class TMDBClient {
     mediaType: 'movie' | 'tv',
     year: number,
     includeAdult: string,
-    page: number
+    page: number,
+    releaseDateGte?: string,
+    releaseDateLte?: string
   ): Promise<TMDBTitle[]> {
-    const params = this.applyAuth(new URLSearchParams({
+    const queryParams: Record<string, string> = {
       include_adult: includeAdult,
       sort_by: 'popularity.desc',
       page: String(Math.max(1, page)),
       ...(mediaType === 'movie'
         ? { primary_release_year: String(year) }
         : { first_air_date_year: String(year) })
-    }))
+    }
+
+    if (releaseDateGte) {
+      if (mediaType === 'movie') {
+        queryParams['primary_release_date.gte'] = releaseDateGte
+      } else {
+        queryParams['first_air_date.gte'] = releaseDateGte
+      }
+    }
+
+    if (releaseDateLte) {
+      if (mediaType === 'movie') {
+        queryParams['primary_release_date.lte'] = releaseDateLte
+      } else {
+        queryParams['first_air_date.lte'] = releaseDateLte
+      }
+    }
+
+    const params = this.applyAuth(new URLSearchParams(queryParams))
 
     const response = await fetch(
       `${this.baseUrl}/discover/${mediaType}?${params}`,
