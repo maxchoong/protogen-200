@@ -24,7 +24,7 @@ const CONTROLS: Array<{ key: keyof LensParams; label: string; min: number; max: 
 ]
 
 export default function LensTweakPanel({ theme }: { theme: ThemeMode }) {
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const store = useSyncExternalStore(subscribeLensStore, getLensStore)
   const shaderEnabled = useSyncExternalStore(subscribeShaderEnabled, getShaderEnabled)
