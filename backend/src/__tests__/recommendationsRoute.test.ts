@@ -1,8 +1,13 @@
 import request from 'supertest'
 import { app } from '../index'
 import { recommendationEngine } from '../engine/recommendationEngine'
+import { llmClient } from '../clients/llm'
 
 describe('POST /recommendations route guardrails', () => {
+  beforeEach(() => {
+    jest.spyOn(llmClient, 'generateResultsIntro').mockResolvedValue(null)
+  })
+
   afterEach(() => {
     jest.restoreAllMocks()
   })

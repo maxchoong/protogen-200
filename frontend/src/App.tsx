@@ -32,6 +32,7 @@ interface RecommendationResponse {
   recommendations?: any[]
   appliedConstraints?: string[]
   interpretationNote?: string
+  assistantMessage?: string
   retrievalDiagnostics?: {
     tmdbEnabled: boolean
     usedTmdb: boolean

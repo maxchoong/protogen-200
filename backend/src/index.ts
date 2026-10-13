@@ -90,6 +90,7 @@ interface ApiResponse {
   requiresClarification?: RequiresClarification
   appliedConstraints?: string[]
   interpretationNote?: string
+  assistantMessage?: string
   message?: string
   // Phase 5: Intent metadata (informational)
   detectedIntent?: {
@@ -180,6 +181,49 @@ const buildInterpretationNote = (parsedPreferences: ParsedPreferencesSnapshot): 
   }
 
   return 'Interpreting "critics favourites" using available signals: TMDB/IMDb ratings and vote volume (not Rotten Tomatoes or Metacritic critic scores).'
+}
+
+const describeActiveFilters = (parsedPreferences: ParsedPreferencesSnapshot): string | undefined => {
+  const parts: string[] = []
+  if (parsedPreferences.originalLanguageName) {
+    parts.push(`${parsedPreferences.originalLanguageName}-language`)
+  }
+  if (parsedPreferences.releaseWindowLabel) {
+    parts.push(parsedPreferences.releaseWindowLabel)
+  }
+  return parts.length > 0 ? parts.join(', ') : undefined
+}
+
+const buildAssistantMessage = async (
+  query: string,
+  parsedPreferences: ParsedPreferencesSnapshot,
+  recommendations: Recommendation[],
+  limit: number,
+  hasConstraints: boolean
+): Promise<string | undefined> => {
+  const filters = describeActiveFilters(parsedPreferences)
+  if (!filters && !hasConstraints) {
+    return undefined
+  }
+
+  if (llmClient.isEnabled()) {
+    const intro = await llmClient.generateResultsIntro(
+      query,
+      filters || 'none beyond the request',
+      recommendations.map(rec => `${rec.title} (${rec.year})`)
+    )
+    if (intro) return intro
+  }
+
+  if (!filters) {
+    return undefined
+  }
+  const noun = parsedPreferences.contentType === 'tv' ? 'series' : parsedPreferences.contentType === 'movie' ? 'films' : 'titles'
+  const count = recommendations.length
+  const base = `Here ${count === 1 ? 'is 1' : `are ${count}`} ${noun} that fit: ${filters}.`
+  return count < limit
+    ? `${base} That is everything I found for those filters. Want me to widen the window?`
+    : base
 }
 
 const shouldPreferResultsFirst = (
@@ -830,6 +874,9 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
       recommendations,
       appliedConstraints,
       interpretationNote,
+      assistantMessage: recommendations.length > 0
+        ? await buildAssistantMessage(normalizedDescription, parsedPreferences, recommendations, recommendationLimit, appliedConstraints.length > 0)
+        : undefined,
       detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence !== undefined
         ? {
             mode: parsedPreferences.discoveryMode,

@@ -119,6 +119,8 @@ export interface SearchQuery {
   genres: string[]
   excludedGenres?: string[]
   yearRange?: { min?: number; max?: number }
+  releaseDateRange?: { gte?: string; lte?: string }
+  originalLanguage?: string
   keywordPages?: number
   keywordLimit?: number
   separateKeywordQueries?: boolean
@@ -245,6 +247,22 @@ export class TMDBClient {
       return [...movies, ...tv]
     } catch (error) {
       console.error('[TMDB] Discover error:', error)
+      return []
+    }
+  }
+
+  /** Genre-less discovery driven only by language/date filters. */
+  async discoverByFilters(options: Partial<SearchQuery> = {}): Promise<TMDBTitle[]> {
+    if (!this.isEnabled()) return []
+
+    try {
+      const [movies, tv] = await Promise.all([
+        Promise.all([this.discoverMovies('', options, 1), this.discoverMovies('', options, 2)]).then(r => r.flat()),
+        Promise.all([this.discoverTV('', options, 1), this.discoverTV('', options, 2)]).then(r => r.flat())
+      ])
+      return [...movies, ...tv]
+    } catch (error) {
+      console.error('[TMDB] Discover by filters error:', error)
       return []
     }
   }
@@ -971,15 +989,16 @@ export class TMDBClient {
     if (options.includeMovies === false) return []
 
     const params = this.applyAuth(new URLSearchParams({
-      with_genres: genreIds,
       include_adult: String(!options.excludeAdult),
       sort_by: 'popularity.desc',
       page: String(page)
     }))
+    if (genreIds) params.set('with_genres', genreIds)
     const excludedGenreIds = (options.excludedGenres || []).map(genre => GENRE_MAP[genre]).filter(Boolean)
     if (excludedGenreIds.length > 0) params.set('without_genres', excludedGenreIds.join('|'))
     if (options.yearRange?.min) params.set('primary_release_date.gte', `${options.yearRange.min}-01-01`)
     if (options.yearRange?.max) params.set('primary_release_date.lte', `${options.yearRange.max}-12-31`)
+    this.applyReleaseAndLanguage(params, 'movie', options)
 
     const response = await fetch(
       `${this.baseUrl}/discover/movie?${params}`,
@@ -1006,15 +1025,16 @@ export class TMDBClient {
     if (options.includeTV === false) return []
 
     const params = this.applyAuth(new URLSearchParams({
-      with_genres: genreIds,
       include_adult: String(!options.excludeAdult),
       sort_by: 'popularity.desc',
       page: String(page)
     }))
+    if (genreIds) params.set('with_genres', genreIds)
     const excludedGenreIds = (options.excludedGenres || []).map(genre => TV_GENRE_MAP[genre]).filter(Boolean)
     if (excludedGenreIds.length > 0) params.set('without_genres', excludedGenreIds.join('|'))
     if (options.yearRange?.min) params.set('first_air_date.gte', `${options.yearRange.min}-01-01`)
     if (options.yearRange?.max) params.set('first_air_date.lte', `${options.yearRange.max}-12-31`)
+    this.applyReleaseAndLanguage(params, 'tv', options)
 
     const response = await fetch(
       `${this.baseUrl}/discover/tv?${params}`,
@@ -1060,6 +1080,7 @@ export class TMDBClient {
     if (options.yearRange?.max) {
       params.set(mediaType === 'tv' ? 'first_air_date.lte' : 'primary_release_date.lte', `${options.yearRange.max}-12-31`)
     }
+    this.applyReleaseAndLanguage(params, mediaType, options)
     const response = await fetch(`${this.baseUrl}/discover/${mediaType}?${params}`, {
       signal: AbortSignal.timeout(5000),
       headers: this.buildAuthHeaders()
@@ -1071,6 +1092,17 @@ export class TMDBClient {
       (data.results || []).map(item => ({ ...item, media_type: item.media_type || mediaType })),
       options
     )
+  }
+
+  private applyReleaseAndLanguage(
+    params: URLSearchParams,
+    mediaType: 'movie' | 'tv',
+    options: Partial<SearchQuery>
+  ): void {
+    const dateKey = mediaType === 'tv' ? 'first_air_date' : 'primary_release_date'
+    if (options.releaseDateRange?.gte) params.set(`${dateKey}.gte`, options.releaseDateRange.gte)
+    if (options.releaseDateRange?.lte) params.set(`${dateKey}.lte`, options.releaseDateRange.lte)
+    if (options.originalLanguage) params.set('with_original_language', options.originalLanguage)
   }
 
   private async fetchDiscoverByYear(

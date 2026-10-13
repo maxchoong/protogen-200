@@ -108,6 +108,9 @@ export interface ParsedPreferences {
     gte?: string
     lte?: string
   }
+  originalLanguage?: string
+  originalLanguageName?: string
+  releaseWindowLabel?: string
 }
 
 export interface RecommendationRequest {
@@ -309,6 +312,12 @@ export class PreferenceParser {
     'unexpected',
     'unusual'
   ]
+
+  private static readonly LANGUAGE_CODES: Record<string, string> = {
+    french: 'fr', spanish: 'es', german: 'de', italian: 'it', japanese: 'ja', korean: 'ko',
+    hindi: 'hi', mandarin: 'zh', chinese: 'zh', portuguese: 'pt', swedish: 'sv', danish: 'da',
+    norwegian: 'no', russian: 'ru', turkish: 'tr', thai: 'th', arabic: 'ar', polish: 'pl'
+  }
 
   private static readonly MAINSTREAM_KEYWORDS = [
     'blockbuster',
@@ -714,6 +723,13 @@ export class PreferenceParser {
     if (refinementSignals.releaseDateRange) {
       preferences.releaseDateRange = refinementSignals.releaseDateRange
     }
+    if (refinementSignals.originalLanguage) {
+      preferences.originalLanguage = refinementSignals.originalLanguage.code
+      preferences.originalLanguageName = refinementSignals.originalLanguage.name
+    }
+    if (refinementSignals.releaseWindowLabel) {
+      preferences.releaseWindowLabel = refinementSignals.releaseWindowLabel
+    }
     if (refinementSignals.rankingStrategyPreference) {
       preferences.rankingStrategyPreference = refinementSignals.rankingStrategyPreference
     }
@@ -981,6 +997,8 @@ export class PreferenceParser {
     popularityPreference?: 'mainstream' | 'niche'
     yearRange?: { min?: number; max?: number }
     releaseDateRange?: { gte?: string; lte?: string }
+    originalLanguage?: { code: string; name: string }
+    releaseWindowLabel?: string
     rankingStrategyPreference?: 'mood_first' | 'reference_first' | 'talent_first'
     resultLimit?: number
     preferTopRated?: boolean
@@ -1056,6 +1074,64 @@ export class PreferenceParser {
       constraints.push(`season:summer_${seasonalYear}`)
     }
 
+    // Relative windows ("last 6 months", "last year", "recent"): TMDB gets exact dates, ranking gets the year span.
+    let releaseWindowLabel: string | undefined
+    if (!releaseDateRange && uniqueExplicitYears.length === 0 && decades.length === 0) {
+      const toIso = (date: Date) =>
+        `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+      const monthsBack = (months: number) => {
+        const start = new Date(currentDate)
+        start.setMonth(start.getMonth() - months)
+        return { gte: toIso(start), lte: toIso(currentDate) }
+      }
+      const words: Record<string, number> = {
+        a: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, nine: 9, twelve: 12
+      }
+      const monthsMatch = description.match(
+        /\b(?:last|past|previous)\s+(\d{1,2}|a|one|two|three|four|five|six|nine|twelve)\s+months?\b/
+      )
+      const fewMonths = /\b(?:last|past)\s+(?:few|couple\s+of)\s+months\b/.test(description)
+
+      if (monthsMatch) {
+        const months = words[monthsMatch[1]] ?? parseInt(monthsMatch[1], 10)
+        if (Number.isFinite(months) && months >= 1 && months <= 24) {
+          releaseDateRange = monthsBack(months)
+          releaseWindowLabel = months === 1 ? 'released in the last month' : `released in the last ${months} months`
+        }
+      } else if (fewMonths) {
+        releaseDateRange = monthsBack(3)
+        releaseWindowLabel = 'released in the last few months'
+      } else if (/\b(?:last|past)\s+month\b/.test(description)) {
+        releaseDateRange = monthsBack(1)
+        releaseWindowLabel = 'released in the last month'
+      } else if (/\blast\s+year\b/.test(description)) {
+        releaseDateRange = { gte: `${currentYear - 1}-01-01`, lte: `${currentYear - 1}-12-31` }
+        releaseWindowLabel = `released last year (${currentYear - 1})`
+      } else if (/\bthis\s+year\b/.test(description)) {
+        releaseDateRange = { gte: `${currentYear}-01-01`, lte: toIso(currentDate) }
+        releaseWindowLabel = 'released this year'
+      } else if (/\b(?:past|previous)\s+(?:year|12\s+months)\b/.test(description)) {
+        releaseDateRange = monthsBack(12)
+        releaseWindowLabel = 'released in the last 12 months'
+      } else if (/\b(?:recent|recently|latest|newly\s+released|new\s+releases?|just\s+released)\b/.test(description)) {
+        releaseDateRange = monthsBack(12)
+        releaseWindowLabel = 'recent releases (last 12 months)'
+      }
+
+      if (releaseWindowLabel) {
+        constraints.push(`window:${releaseDateRange!.gte}..${releaseDateRange!.lte}`)
+      }
+    }
+
+    let originalLanguage: { code: string; name: string } | undefined
+    for (const [name, code] of Object.entries(this.LANGUAGE_CODES)) {
+      if (new RegExp(`\\b${name}(?:-language)?\\b`).test(description)) {
+        originalLanguage = { code, name: name.charAt(0).toUpperCase() + name.slice(1) }
+        constraints.push(`language:${code}`)
+        break
+      }
+    }
+
     const yearRange = uniqueExplicitYears.length > 0
       ? {
           min: Math.min(...uniqueExplicitYears),
@@ -1071,9 +1147,14 @@ export class PreferenceParser {
               min: seasonalYear,
               max: seasonalYear
             }
-          : undefined
+          : releaseWindowLabel !== undefined && releaseDateRange?.gte && releaseDateRange.lte
+            ? {
+                min: parseInt(releaseDateRange.gte.slice(0, 4), 10),
+                max: parseInt(releaseDateRange.lte.slice(0, 4), 10)
+              }
+            : undefined
 
-    if (yearRange?.min !== undefined) {
+    if (yearRange?.min !== undefined && releaseWindowLabel === undefined) {
       if (yearRange.max !== undefined && yearRange.min === yearRange.max) {
         constraints.push(`year:${yearRange.min}`)
       } else {
@@ -1135,6 +1216,8 @@ export class PreferenceParser {
       popularityPreference,
       yearRange,
       releaseDateRange,
+      originalLanguage,
+      releaseWindowLabel,
       rankingStrategyPreference,
       resultLimit,
       preferTopRated,

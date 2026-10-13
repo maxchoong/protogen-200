@@ -597,6 +597,52 @@ Guidelines:
   }
 
   /**
+   * One short conversational sentence introducing results (small token budget).
+   */
+  async generateResultsIntro(
+    userQuery: string,
+    facts: string,
+    titles: string[]
+  ): Promise<string | null> {
+    if (!this.enabled || titles.length === 0) {
+      return null
+    }
+
+    const cacheKey = `intro:${userQuery.substring(0, 80)}:${titles.slice(0, 3).join('|')}`
+    const cached = this.getCache(cacheKey)
+    if (cached) {
+      return cached
+    }
+
+    try {
+      const response = await this.client!.chat.completions.create({
+        model: this.model,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a friendly film advisor. Write 1-2 short sentences (max 40 words) introducing the results to the user. British English. Mention the verified filters given, name at most two titles from the list, add no facts beyond those supplied, no markdown, no lists.'
+          },
+          {
+            role: 'user',
+            content: `Request: "${userQuery}"\nVerified filters: ${facts}\nTitles: ${titles.slice(0, 5).join('; ')}`
+          }
+        ],
+        temperature: 0.6,
+        max_tokens: 80
+      })
+
+      const text = response.choices[0]?.message?.content?.trim()
+      if (!text) return null
+
+      this.setCache(cacheKey, text, 3600000)
+      return text
+    } catch (err) {
+      console.warn('[LLM] generateResultsIntro failed, using fallback:', err)
+      return null
+    }
+  }
+
+  /**
    * Get cached value if still valid
    */
   private getCache(key: string): any | null {

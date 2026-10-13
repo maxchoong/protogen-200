@@ -51,6 +51,7 @@ export interface ConversationMessage {
   timestamp: number
   detectedIntent?: DetectedIntent
   clarificationQuestions?: ClarificationQuestion[]
+  clarificationResponse?: { text: string; questionId?: string }
   recommendations?: any[]
   turnOperation?: TurnOperation
 }
@@ -96,6 +97,17 @@ export function useConversation() {
 
   const setLoading = useCallback((isLoading: boolean) => {
     setState(prev => ({ ...prev, isLoading }))
+  }, [])
+
+  const answerClarification = useCallback((messageId: string, text: string, questionId?: string) => {
+    setState(prev => ({
+      ...prev,
+      messages: prev.messages.map(message =>
+        message.id === messageId && !message.clarificationResponse
+          ? { ...message, clarificationResponse: { text, questionId } }
+          : message
+      )
+    }))
   }, [])
 
   const setError = useCallback((error: string | null) => {
@@ -165,6 +177,7 @@ export function useConversation() {
   return {
     state,
     addMessage,
+    answerClarification,
     setLoading,
     setError,
     updateClarificationRound,

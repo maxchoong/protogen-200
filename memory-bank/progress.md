@@ -1,5 +1,12 @@
 # Progress – Granular Task List
 
+## Clarification Option UX (October 13, 2026)
+
+- Options sit outside, below the assistant question bubble and reuse the shared pill radius with auto-height multiline labels and a 44px minimum target.
+- Message-scoped clarification responses keep answered choices disabled permanently. Selected options receive a quiet outline and accessible selected label; free-text replies resolve the group without marking a choice.
+- A synchronous submission guard blocks repeat clicks. Retry does not duplicate the user reply, and cancellation does not reactivate answered choices.
+- Verification: frontend build/lint and editor diagnostics pass. Browser checks at 390px/1440px in dark/light themes cover wrapping, selection, free-text replies, new rounds, simulated failure/retry, cancellation, and confirmed conversation reset. Browser request mocks were removed afterward.
+
 ## Overall Status
 
 **Updated:** October 13, 2026

@@ -31,6 +31,7 @@ interface ConversationalHomeProps {
     }
     appliedConstraints?: string[]
     interpretationNote?: string
+    assistantMessage?: string
     retrievalDiagnostics?: {
       tmdbEnabled: boolean
       usedTmdb: boolean
@@ -76,6 +77,7 @@ export default function ConversationalHome({
   const [pendingPhase, setPendingPhase] = useState<PendingPhase>(null)
   const [lastSubmittedText, setLastSubmittedText] = useState('')
   const activeRequestRef = useRef(0)
+  const inFlightRef = useRef(false)
   const slowTimerRef = useRef<number>()
   const delayedTimerRef = useRef<number>()
 
@@ -98,16 +100,18 @@ export default function ConversationalHome({
 
   const stopPendingState = () => {
     clearPendingTimers()
+    inFlightRef.current = false
     setPendingPhase(null)
     conversation.setLoading(false)
   }
 
   const submitMessage = async (
     rawText: string,
-    options: { appendUserMessage?: boolean; forceFollowUp?: boolean } = {}
+    options: { appendUserMessage?: boolean; forceFollowUp?: boolean; questionId?: string } = {}
   ) => {
     const trimmed = rawText.trim()
-    if (!trimmed) return
+    if (!trimmed || inFlightRef.current || state.isLoading) return
+    inFlightRef.current = true
 
     const shouldAppendUserMessage = options.appendUserMessage ?? true
     const shouldTreatAsFollowUp = options.forceFollowUp ?? false
@@ -116,6 +120,10 @@ export default function ConversationalHome({
     const submittedAt = Date.now()
 
     if (shouldAppendUserMessage) {
+      const currentMessage = state.messages[state.messages.length - 1]
+      if (currentMessage?.clarificationQuestions?.length && !currentMessage.clarificationResponse) {
+        conversation.answerClarification(currentMessage.id, trimmed, options.questionId)
+      }
       conversation.addMessage({
         role: 'user',
         text: trimmed,
@@ -199,7 +207,11 @@ export default function ConversationalHome({
       } else if (response.recommendations && response.recommendations.length > 0) {
         conversation.addMessage({
           role: 'assistant',
-          text: response.interpretationNote
+          text: response.assistantMessage
+            ? response.interpretationNote
+              ? `${response.assistantMessage} ${response.interpretationNote}`
+              : response.assistantMessage
+            : response.interpretationNote
             ? `Here are ${response.recommendations.length} recommendations you might like. ${response.interpretationNote}`
             : `Here are ${response.recommendations.length} recommendations you might like.`,
           timestamp: Date.now(),
@@ -255,12 +267,13 @@ export default function ConversationalHome({
     await submitMessage(inputValue)
   }
 
-  const handleClarificationSelect = async (optionText: string) => {
-    if (state.isLoading) {
+  const handleClarificationSelect = async (optionText: string, messageId: string, questionId: string) => {
+    const currentMessage = state.messages[state.messages.length - 1]
+    if (state.isLoading || inFlightRef.current || currentMessage?.id !== messageId || currentMessage.clarificationResponse) {
       return
     }
 
-    await submitMessage(optionText, { forceFollowUp: true })
+    await submitMessage(optionText, { forceFollowUp: true, questionId })
   }
 
   const handleCancelPending = () => {
@@ -325,64 +338,67 @@ export default function ConversationalHome({
           {state.messages.map(msg => (
             <div
               key={msg.id}
-              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              className={`flex flex-col gap-3 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
             >
               <div
-                className={`max-w-xs lg:max-w-md px-4 py-3 rounded-lg ${
+                className={`max-w-full w-fit lg:max-w-md px-4 py-3 rounded-lg ${
                   msg.role === 'user'
                     ? 'glass glass--accent text-accent-contrast rounded-br-none'
                     : 'glass text-text rounded-bl-none'
                 }`}
               >
                 <p className="text-sm">{msg.text}</p>
+              </div>
 
-                {msg.detectedIntent && (
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-text-muted">
-                    <span className="rounded-pill border border-border/50 bg-surface-2/50 px-2.5 py-1">
-                      Intent: <span className="font-semibold text-text">{msg.detectedIntent.mode}</span>
-                    </span>
-                    <span className="rounded-pill border border-border/50 bg-surface-2/50 px-2.5 py-1">
-                      Confidence {(msg.detectedIntent.confidence * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                )}
-
-                {msg.turnOperation && (
-                  <div className="mt-2 text-xs text-text-muted">
-                    Turn: {msg.turnOperation.continuity.replace('_', ' ')} + {msg.turnOperation.operation}
-                    {' '}({Math.round(msg.turnOperation.confidence * 100)}%)
-                  </div>
-                )}
-
-                {msg.clarificationQuestions && msg.clarificationQuestions.length > 0 && (
-                  <div className="mt-4 space-y-3">
-                    {msg.clarificationQuestions.map(q => (
-                      <div key={q.id} className="rounded-lg border border-border/45 bg-surface-2/55 p-3">
-                        <p className="mb-2 text-sm font-semibold text-text">{q.question}</p>
-                        {q.type === 'select' && q.options && (
-                          <div className="space-y-2">
-                            {q.options.map((option, i) => (
+              {msg.clarificationQuestions && msg.clarificationQuestions.length > 0 && (
+                <div className="w-full max-w-full space-y-3 lg:max-w-md">
+                  {msg.clarificationQuestions.map(question => (
+                    <div key={question.id} className="space-y-3" role="group" aria-labelledby={`${msg.id}-${question.id}`}>
+                      <div className="glass rounded-lg rounded-bl-none px-4 py-3 text-text">
+                        <p id={`${msg.id}-${question.id}`} className="text-sm font-medium text-text">{question.question}</p>
+                      </div>
+                      {question.type === 'select' && question.options && (
+                        <div className="space-y-2">
+                          {question.options.map((option, optionIndex) => {
+                            const isSelected = msg.clarificationResponse?.questionId === question.id &&
+                              msg.clarificationResponse.text === option
+                            return (
                               <button
-                                key={i}
-                                onClick={() => handleClarificationSelect(option)}
-                                disabled={state.isLoading}
+                                key={optionIndex}
+                                onClick={() => handleClarificationSelect(option, msg.id, question.id)}
+                                disabled={state.isLoading || !!msg.clarificationResponse || msg.id !== latestMessage?.id}
+                                aria-label={isSelected ? `${option} (selected)` : undefined}
                                 className={buttonClass({
                                   variant: 'chip',
                                   size: 'sm',
                                   fullWidth: true,
-                                  className: 'justify-start text-left'
+                                  className: `clarification-option justify-start text-left${isSelected ? ' clarification-option-selected' : ''}`
                                 })}
                               >
                                 {option}
                               </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {(msg.detectedIntent || msg.turnOperation) && (
+                <div className="flex max-w-full flex-wrap gap-x-3 gap-y-1 px-1 text-[11px] text-text-muted">
+                  {msg.detectedIntent && (
+                    <span>Intent: {msg.detectedIntent.mode} / Confidence {(msg.detectedIntent.confidence * 100).toFixed(0)}%</span>
+                  )}
+                  {msg.turnOperation && (
+                    <span>
+                      Turn: {msg.turnOperation.continuity.replace('_', ' ')} + {msg.turnOperation.operation}
+                      {' '}({Math.round(msg.turnOperation.confidence * 100)}%)
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           ))}
 

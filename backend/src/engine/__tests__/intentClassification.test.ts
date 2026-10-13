@@ -111,6 +111,35 @@ describe('Creator intent', () => {
     expect(preferences.intentConfidence).toBeGreaterThanOrEqual(0.8)
     expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull()
   })
+
+  it('parses a language and a relative month window', () => {
+    const preferences = PreferenceParser.parse({ description: 'I want French movies in the last 6 months' })
+
+    expect(preferences.originalLanguage).toBe('fr')
+    expect(preferences.originalLanguageName).toBe('French')
+    expect(preferences.releaseWindowLabel).toBe('released in the last 6 months')
+    expect(preferences.releaseDateRange?.gte).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(preferences.releaseDateRange!.gte! < preferences.releaseDateRange!.lte!).toBe(true)
+    expect(preferences.contentType).toBe('movie')
+    expect(PreferenceParser.needsClarification(preferences, 0)).toBeNull()
+  })
+
+  it.each([
+    ['thrillers from last year', /^released last year/],
+    ['recent horror movies', /^recent releases/],
+    ['comedies released this year', /^released this year/],
+    ['something from the past few months', /last few months/],
+    ['good movies from 1999 recently', undefined]
+  ])('parses relative release phrases: %s', (description, label) => {
+    const preferences = PreferenceParser.parse({ description })
+
+    if (label) {
+      expect(preferences.releaseWindowLabel).toMatch(label)
+      expect(preferences.releaseDateRange?.gte).toBeDefined()
+    } else {
+      expect(preferences.releaseWindowLabel).toBeUndefined()
+    }
+  })
 })
 
 describe('LLM preference hint merging', () => {

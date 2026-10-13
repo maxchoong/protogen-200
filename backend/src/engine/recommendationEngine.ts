@@ -84,12 +84,14 @@ export class RecommendationEngine {
     preferredGenres: string[] = [],
     keywords: string[] = [],
     excludedGenres: string[] = [],
-    yearRange?: ParsedPreferences['yearRange']
+    yearRange?: ParsedPreferences['yearRange'],
+    filters: { originalLanguage?: string; releaseDateRange?: { gte?: string; lte?: string } } = {}
   ): Promise<any[]> {
     if (!tmdbClient.isEnabled()) {
       return []
     }
 
+    const hasFilters = Boolean(filters.originalLanguage || filters.releaseDateRange)
     const includeMovies = typeFilter !== 'series'
     const includeTV = typeFilter !== 'movie'
     const isNoveltyDiscovery = discoveryMode === 'mood' && preferredGenres.some(
@@ -124,13 +126,25 @@ export class RecommendationEngine {
           includeTV,
           excludeAdult: true,
           excludedGenres,
-          yearRange
+          yearRange,
+          ...filters
         }
       )
       if (discoveryMode !== 'reference') {
         tmdbResultSets.push(genreDiscoverResults)
       }
       console.log(`[Engine] TMDB genre discovery yielded ${genreDiscoverResults.length} titles`)
+    } else if (hasFilters) {
+      const filterResults = await tmdbClient.discoverByFilters({
+        includeMovies,
+        includeTV,
+        excludeAdult: true,
+        excludedGenres,
+        yearRange,
+        ...filters
+      })
+      tmdbResultSets.push(filterResults)
+      console.log(`[Engine] TMDB filter discovery yielded ${filterResults.length} titles`)
     }
 
     if (keywords.length > 0) {
@@ -140,6 +154,7 @@ export class RecommendationEngine {
         excludeAdult: true,
         excludedGenres,
         yearRange,
+        ...filters,
           keywordLimit: discoveryMode === 'reference' || isNoveltyDiscovery ? 16 : 8,
           keywordPages: 2,
           separateKeywordQueries: discoveryMode === 'reference' || isNoveltyDiscovery,
@@ -155,7 +170,7 @@ export class RecommendationEngine {
       tmdbResultSets.push(genreDiscoverResults)
     }
 
-    if (discoveryMode !== 'reference' && !isNoveltyDiscovery) {
+    if (discoveryMode !== 'reference' && !isNoveltyDiscovery && !hasFilters) {
       tmdbResultSets.push(...tmdbTitleSearchResults)
     }
 
@@ -333,7 +348,8 @@ export class RecommendationEngine {
     preferredGenres: string[] = [],
     keywords: string[] = [],
     excludedGenres: string[] = [],
-    yearRange?: ParsedPreferences['yearRange']
+    yearRange?: ParsedPreferences['yearRange'],
+    filters: { originalLanguage?: string; releaseDateRange?: { gte?: string; lte?: string } } = {}
   ): Promise<{ results: any[]; source: 'tmdb' | 'omdb' }> {
     if (searchTerms.length === 0 && preferredGenres.length === 0 && keywords.length === 0) {
       return { results: [], source: tmdbClient.isEnabled() ? 'tmdb' : 'omdb' }
@@ -354,7 +370,8 @@ export class RecommendationEngine {
         preferredGenres,
         keywords,
         excludedGenres,
-        yearRange
+        yearRange,
+        filters
       )
       if (results.length > 0) {
         console.log(`[Engine] Found ${results.length} raw results from TMDB`)
@@ -1050,7 +1067,8 @@ export class RecommendationEngine {
         preferences.genres || [],
         discoveryKeywords,
         preferences.excludedGenres || [],
-        preferences.yearRange
+        preferences.yearRange,
+        { originalLanguage: preferences.originalLanguage, releaseDateRange: preferences.releaseWindowLabel ? preferences.releaseDateRange : undefined }
       )
       if (searched.source === 'tmdb') {
         diagnostics.usedTmdb = true
@@ -1084,7 +1102,8 @@ export class RecommendationEngine {
           preferences.genres || [],
           discoveryKeywords,
           preferences.excludedGenres || [],
-          preferences.yearRange
+          preferences.yearRange,
+          { originalLanguage: preferences.originalLanguage, releaseDateRange: preferences.releaseWindowLabel ? preferences.releaseDateRange : undefined }
         )
         if (backfill.source === 'tmdb') {
           diagnostics.usedTmdb = true
@@ -1616,6 +1635,14 @@ export class RecommendationEngine {
       })
       if (filtered.length < beforeCount) {
         console.log(`[Engine.Rank] Excluded ${beforeCount - filtered.length} titles by genre`)
+      }
+    }
+
+    if (preferences.originalLanguage) {
+      const beforeCount = filtered.length
+      filtered = filtered.filter(title => !title.originalLanguage || title.originalLanguage === preferences.originalLanguage)
+      if (beforeCount !== filtered.length) {
+        console.log(`[Engine.Rank] Language filter removed ${beforeCount - filtered.length} titles`)
       }
     }
 
