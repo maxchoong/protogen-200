@@ -1,5 +1,7 @@
 # Film & TV Advisor – Project Brief (As Built)
 
+Status: current product scope; acceptance goals are not implementation guarantees.
+
 ## Executive Summary
 
 **Product:** Film & TV Advisor  
@@ -33,7 +35,7 @@
 
 1. **Conversational input**
    - Freeform query + freeform follow-ups.
-   - Clarification appears only when needed.
+   - Concrete structured directions try results first; asking only useful questions remains an acceptance goal.
 
 2. **Intent-aware recommendation engine**
    - Supports mood/reference/talent/mixed intent modes.
@@ -50,7 +52,8 @@
 
 5. **Transparent uncertainty handling**
    - Critics-style prompts can run in proxy mode using available rating/vote signals.
-   - Explicit unsupported critic-source requests trigger clarification instead of fabricated support.
+   - Unsupported critic sources in the original query trigger clarification;
+     follow-up/consent limitations are recorded in the engine design.
 
 ---
 
@@ -60,7 +63,7 @@
 - **Frontend:** React 18 + TypeScript + Vite + Tailwind.
 - **Backend:** Node.js + Express + TypeScript.
 - **Retrieval/enrichment:** TMDB + OMDb/FMDb pathway.
-- **LLM (optional):** GitHub Models `gpt-4o-mini` for parsing/explanations.
+- **LLM (optional):** configurable OpenAI-compatible provider for structured request understanding, clarification wording, explanations and intros. Local October 16 evaluation used Gemini `gemini-3.5-flash-lite`.
 - **Availability:** Streaming Availability API (RapidAPI).
 - **Storage:** No user accounts/persistent profile storage.
 
@@ -76,6 +79,11 @@
 ---
 
 ## Success Criteria (Current)
+
+These are product acceptance goals, not a statement that every live quality
+check passes. As of October 16, saved-spec failures preserve state by asking,
+while live quality, offline understanding parity and latency remain open. See [progress](progress.md) for evidence
+and [the v2 PRD](prd-conversational-engine.md) for agreed targets.
 
 - Users can complete recommendation + refinement in natural language.
 - Follow-up turns behave consistently (no unintended modality drift).

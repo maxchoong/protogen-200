@@ -1,5 +1,7 @@
 # PRD: Recommendation Review Skill
 
+Status: implemented requirements; recorded final sign-off remains pending.
+
 ## Problem
 
 Recommendation lists can look superficially relevant because they share a genre with the prompt while missing the user's requested tone or experience. Generated "why this" copy can also overstate fit. Reviews need to judge the actual titles and catalog evidence consistently, and distinguish what fits the reference from what fits a requested contrast.
@@ -61,4 +63,6 @@ Use a compact table when the list is long. Avoid fabricated citations, unsupport
 
 ## Kiro-Lite State
 
-Phase 0 PRD drafted. Await user approval before creating the design document, task breakdown, or skill implementation.
+PRD, design, implementation and recorded validation are complete. See
+[tasks and validation results](tasks.md). The recorded final `/review complete`
+sign-off remains pending; this documentation refresh does not imply approval.

@@ -1,5 +1,7 @@
 # Design: Recommendation Review Skill
 
+Status: implemented design; recorded final sign-off remains pending.
+
 ## Overview
 
 Create an on-demand VS Code Copilot skill at `.github/skills/recommendation-review/SKILL.md`. It reviews Lumera recommendation output against the user's active request and supporting catalog evidence. It is a review workflow, not an automatic ranking-code modifier.
@@ -108,4 +110,6 @@ After implementation:
 
 ## Kiro-Lite State
 
-Phase 1 design drafted. Await `/approve design` before creating `tasks.md` or implementing `.github/skills/recommendation-review/SKILL.md`.
+Design, implementation and recorded validation are complete. See
+[tasks and validation results](tasks.md). Final `/review complete` sign-off
+remains pending; the implemented skill is not awaiting initial design approval.

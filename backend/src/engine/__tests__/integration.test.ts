@@ -4,7 +4,7 @@
  */
 
 import { PreferenceParser } from '../preferenceParser'
-import { recommendationEngine } from '../recommendationEngine'
+import { recommendationEngine, type LLMUsageDiagnostics } from '../recommendationEngine'
 import { fmdbClient } from '../../clients/fmdb'
 import { llmClient } from '../../clients/llm'
 import { tmdbClient } from '../../clients/tmdb'
@@ -109,6 +109,40 @@ describe('Creator filmography recommendations', () => {
     const recommendations = await recommendationEngine.getRecommendations({ description: 'Films by James Cameron' }, 3)
     expect(recommendations[2].whyThis).toBe('Producing credits include James Cameron.')
     expect(explanationsSpy).not.toHaveBeenCalled()
+  })
+
+  it('reports LLM stages that contribute to recommendations', async () => {
+    jest.mocked(llmClient.isEnabled).mockReturnValue(true)
+    jest.spyOn(llmClient, 'parsePreferences').mockResolvedValue({ mood: ['Relaxing'] })
+    jest.spyOn(llmClient, 'generateWhyThisBatch').mockImplementation(async (_description, titles) =>
+      new Map([[titles[0].title, 'A tailored LLM explanation.']])
+    )
+    const llmDiagnostics: LLMUsageDiagnostics = { used: false, stages: [] }
+
+    const recommendations = await recommendationEngine.getRecommendations(
+      { description: 'A cozy weekend movie' },
+      3,
+      llmDiagnostics
+    )
+
+    expect(llmDiagnostics.used).toBe(true)
+    expect(llmDiagnostics.stages).toEqual(expect.arrayContaining([
+      'preference parsing',
+      'recommendation explanations'
+    ]))
+    expect(recommendations.some(item => item.whyThis === 'A tailored LLM explanation.')).toBe(true)
+  })
+
+  it('reports no LLM usage when the provider is disabled', async () => {
+    const llmDiagnostics: LLMUsageDiagnostics = { used: false, stages: [] }
+
+    await recommendationEngine.getRecommendations(
+      { description: 'Films by James Cameron' },
+      3,
+      llmDiagnostics
+    )
+
+    expect(llmDiagnostics).toEqual({ used: false, stages: [] })
   })
 })
 
@@ -589,7 +623,7 @@ describe('TMDB genre discovery', () => {
     const requestedUrl = new URL(fetchSpy.mock.calls[0][0] as string)
     expect(requestedUrl.searchParams.get('with_genres')).toBe('10759')
     expect(results[0].media_type).toBe('tv')
-    expect(tmdbClient.mapGenreIdsToNames([10759], 'tv')).toEqual(['Action'])
+    expect(tmdbClient.mapGenreIdsToNames([10759], 'tv')).toEqual(['Action', 'Adventure'])
 
     fetchSpy.mockRestore()
     enabledSpy.mockRestore()
@@ -833,6 +867,7 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
     const ranked = (recommendationEngine as any).rankTitles([
       {
         id: 'tmdb:movie:cozy-animation',
+        type: 'movie',
         title: 'A Gentle Animated Story',
         genres: ['Animation'],
         plot: 'A peaceful, cozy journey with a gentle tone.',
@@ -1231,6 +1266,7 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
     const ranked = (recommendationEngine as any).rankTitles([
       {
         id: 'coherence',
+        type: 'movie',
         title: 'Coherence',
         genres: ['Sci-Fi', 'Mystery'],
         plot: 'A dinner party takes an unsettling turn when reality begins to split apart.',
@@ -1240,6 +1276,7 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
       },
       {
         id: 'station-agent',
+        type: 'movie',
         title: 'The Station Agent',
         genres: ['Drama'],
         plot: 'A quiet character story explores loneliness and unexpected friendship.',
@@ -1249,6 +1286,7 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
       },
       {
         id: 'sorry-to-bother-you',
+        type: 'movie',
         title: 'Sorry to Bother You',
         genres: ['Comedy', 'Fantasy', 'Sci-Fi'],
         plot: 'A workplace satire escalates into an increasingly strange story.',
@@ -1258,6 +1296,7 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
       },
       {
         id: 'poorly-rated-obscurity',
+        type: 'movie',
         title: 'Poorly Rated Obscurity',
         genres: ['Comedy'],
         plot: 'An obscure, unusual comedy with an odd premise.',
@@ -1279,6 +1318,7 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
     const ranked = (recommendationEngine as any).rankTitles([
       {
         id: 'coherence',
+        type: 'movie',
         title: 'Coherence',
         genres: ['Sci-Fi', 'Mystery'],
         plot: 'Friends at a dinner party encounter a strange disturbance.',
@@ -1288,6 +1328,7 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
       },
       {
         id: 'generic-drama',
+        type: 'movie',
         title: 'A Family Story',
         genres: ['Drama'],
         plot: 'A family faces a difficult year while supporting one another.',
@@ -1926,6 +1967,37 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
     expect(finalIds).not.toEqual(['tt1', 'tt2', 'tt3', 'tt4'])
   })
 
+  it('does not trade requested-genre matches for off-request variety', () => {
+    const warm = (id: string, composite: number, extra: string[] = []) =>
+      ({ id, genres: ['Comedy', 'Drama', ...extra], year: 2000 + composite * 20, scoringFactors: { composite } })
+    const ranked = [
+      warm('w1', 0.47), warm('w2', 0.42), warm('w3', 0.40, ['Romance']), warm('w4', 0.38), warm('w5', 0.37, ['Family']),
+      { id: 'thriller', genres: ['Thriller', 'Crime', 'Drama'], year: 2024, scoringFactors: { composite: 0.30 } },
+      { id: 'war', genres: ['War', 'Action', 'Drama'], year: 2018, scoringFactors: { composite: 0.28 } }
+    ]
+
+    const withRequest = (recommendationEngine as any).selectFinalResults(ranked, 5, 1, ['Comedy', 'Drama'])
+    expect(withRequest.map((item: any) => item.id)).toEqual(expect.arrayContaining(['w1', 'w2', 'w3', 'w4', 'w5']))
+  })
+
+  it('keeps the most-voted titles when a country catalogue overflows the candidate cap', async () => {
+    const tmdbTitle = (id: number, voteCount: number) => ({
+      id, media_type: 'movie', title: `Title ${id}`, overview: 'A family story.', genre_ids: [35], vote_count: voteCount, vote_average: 7
+    })
+    const newReleases = Array.from({ length: 70 }, (_, index) => tmdbTitle(index + 1, index % 5))
+    const established = [tmdbTitle(900, 754), tmdbTitle(901, 278)]
+    jest.spyOn(tmdbClient, 'isEnabled').mockReturnValue(true)
+    jest.spyOn(tmdbClient, 'discoverByGenres').mockResolvedValue([...newReleases, ...established] as any)
+
+    const results = await (recommendationEngine as any).searchWithTmdbPrimary(
+      [], 'movie', 'mood', ['Comedy'], [], [], undefined, { originCountry: 'MY' }
+    )
+
+    expect(results).toHaveLength(60)
+    expect(results.map((item: any) => item.tmdbId)).toEqual(expect.arrayContaining([900, 901]))
+    jest.restoreAllMocks()
+  })
+
   it('should boost mainstream titles when blockbuster refinement is provided', () => {
     const preferences = PreferenceParser.parse({
       description: 'Like Inception but more relaxing',
@@ -1938,6 +2010,7 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
     const titles = [
       {
         id: 'ttA111111',
+        type: 'movie',
         title: 'High Popularity Pick',
         genres: ['Drama', 'Sci-Fi'],
         plot: 'A calm and reflective science-fiction story.',
@@ -1948,6 +2021,7 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
       },
       {
         id: 'ttB222222',
+        type: 'movie',
         title: 'Low Popularity Pick',
         genres: ['Drama', 'Sci-Fi'],
         plot: 'A calm and reflective science-fiction story.',
@@ -1976,6 +2050,7 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
     const titles = [
       {
         id: 'ttC333333',
+        type: 'movie',
         title: '1980s Match',
         genres: ['Drama', 'Sci-Fi'],
         plot: 'A warm and thoughtful science fiction character study.',
@@ -1986,6 +2061,7 @@ describe('Ranking Guardrails - Golden Prompt Behaviors', () => {
       },
       {
         id: 'ttD444444',
+        type: 'movie',
         title: 'Modern Match',
         genres: ['Drama', 'Sci-Fi'],
         plot: 'A warm and thoughtful science fiction character study.',

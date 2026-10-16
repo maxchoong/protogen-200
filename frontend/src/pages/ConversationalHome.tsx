@@ -1,5 +1,10 @@
 import { useRef, useState, type KeyboardEvent } from 'react'
-import { ClarificationQuestion, ConversationController, DetectedIntent } from '../hooks/useConversation'
+import {
+  ClarificationQuestion,
+  ConversationController,
+  DetectedIntent,
+  LLMUsageDiagnostics
+} from '../hooks/useConversation'
 import { buttonClass } from '../buttonStyles'
 import './ConversationalHome.css'
 
@@ -14,7 +19,8 @@ interface ConversationalHomeProps {
       previousRecommendationIds?: string[]
       cumulativeConstraints?: string[]
       userTurns?: string[]
-    }
+    },
+    spec?: unknown
   ) => Promise<{
     recommendations?: any[]
     requiresClarification?: {
@@ -31,7 +37,9 @@ interface ConversationalHomeProps {
     }
     appliedConstraints?: string[]
     interpretationNote?: string
+    llmDiagnostics?: LLMUsageDiagnostics
     assistantMessage?: string
+    spec?: unknown
     retrievalDiagnostics?: {
       tmdbEnabled: boolean
       usedTmdb: boolean
@@ -53,6 +61,7 @@ interface ConversationalHomeProps {
       }
       appliedConstraints?: string[]
       interpretationNote?: string
+      llmDiagnostics?: LLMUsageDiagnostics
       retrievalDiagnostics?: {
         tmdbEnabled: boolean
         usedTmdb: boolean
@@ -187,7 +196,8 @@ export default function ConversationalHome({
               cumulativeConstraints,
               userTurns
             }
-          : undefined
+          : undefined,
+        isFollowUp ? state.requestSpec : undefined
       )
 
       // Ignore stale responses from canceled or superseded requests.
@@ -195,13 +205,16 @@ export default function ConversationalHome({
         return
       }
 
+      conversation.setRequestSpec(response.spec)
+
       if (response.requiresClarification) {
         conversation.addMessage({
           role: 'assistant',
           text: response.requiresClarification.context,
           timestamp: Date.now(),
           clarificationQuestions: response.requiresClarification.questions,
-          detectedIntent: response.detectedIntent
+          detectedIntent: response.detectedIntent,
+          llmDiagnostics: response.llmDiagnostics
         })
         conversation.updateClarificationRound(state.clarificationRound + 1)
       } else if (response.recommendations && response.recommendations.length > 0) {
@@ -217,7 +230,8 @@ export default function ConversationalHome({
           timestamp: Date.now(),
           recommendations: response.recommendations,
           detectedIntent: response.detectedIntent,
-          turnOperation: response.turnOperation
+          turnOperation: response.turnOperation,
+          llmDiagnostics: response.llmDiagnostics
         })
 
         conversation.updateClarificationRound(0)
@@ -229,6 +243,7 @@ export default function ConversationalHome({
             turnOperation: response.turnOperation,
             appliedConstraints: response.appliedConstraints,
             interpretationNote: response.interpretationNote,
+            llmDiagnostics: response.llmDiagnostics,
             retrievalDiagnostics: response.retrievalDiagnostics
           })
         }
@@ -236,9 +251,12 @@ export default function ConversationalHome({
         // Handle empty results (no recommendations, no clarification)
         conversation.addMessage({
           role: 'assistant',
-          text: "I couldn't find good matches for that. Could you provide more details? For example, try mentioning a mood, genre, or similar title.",
+          text: response.interpretationNote
+            ? `I couldn't find anything matching all of that. ${response.interpretationNote} Try dropping one detail, like the language, format or years, or describe it another way.`
+            : "I couldn't find anything matching all of that. Try dropping one detail, like the language, format or years, or describe it another way.",
           timestamp: Date.now(),
-          detectedIntent: response.detectedIntent
+          detectedIntent: response.detectedIntent,
+          llmDiagnostics: response.llmDiagnostics
         })
         conversation.updateClarificationRound(0)
       }
@@ -386,7 +404,7 @@ export default function ConversationalHome({
                 </div>
               )}
 
-              {(msg.detectedIntent || msg.turnOperation) && (
+              {(msg.detectedIntent || msg.turnOperation || msg.llmDiagnostics) && (
                 <div className="flex max-w-full flex-wrap gap-x-3 gap-y-1 px-1 text-[11px] text-text-muted">
                   {msg.detectedIntent && (
                     <span>Intent: {msg.detectedIntent.mode} / Confidence {(msg.detectedIntent.confidence * 100).toFixed(0)}%</span>
@@ -395,6 +413,13 @@ export default function ConversationalHome({
                     <span>
                       Turn: {msg.turnOperation.continuity.replace('_', ' ')} + {msg.turnOperation.operation}
                       {' '}({Math.round(msg.turnOperation.confidence * 100)}%)
+                    </span>
+                  )}
+                  {msg.llmDiagnostics && (
+                    <span>
+                      LLM: {msg.llmDiagnostics.used
+                        ? `used${msg.llmDiagnostics.stages.length > 0 ? ` (${msg.llmDiagnostics.stages.join(', ')})` : ''}`
+                        : 'not used'}
                     </span>
                   )}
                 </div>

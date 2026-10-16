@@ -235,8 +235,86 @@ describe('RankingScorer - Phase 3 Tests', () => {
       expect(RankingScorer.popularityScore(null as any)).toBe(0.5)
     })
 
-    it('should handle 0 votes', () => {
-      expect(RankingScorer.popularityScore(0)).toBe(0.5)
+    it('scores a known count of 0 votes below any rated title', () => {
+      expect(RankingScorer.popularityScore(0)).toBe(0)
+      expect(RankingScorer.popularityScore(16)).toBeGreaterThan(0)
+    })
+  })
+
+  describe('adjustedRating', () => {
+    it('pulls ratings with few votes towards the prior', () => {
+      expect(RankingScorer.adjustedRating(8.0, 4)!).toBeCloseTo(6.28, 1)
+      expect(RankingScorer.adjustedRating(7.7, 17)!).toBeCloseTo(6.69, 1)
+      expect(RankingScorer.adjustedRating(8.5, 40000)!).toBeCloseTo(8.5, 2)
+    })
+
+    it('uses the prior for unrated titles and keeps raw ratings when votes are unknown', () => {
+      expect(RankingScorer.adjustedRating(undefined, 0)).toBe(RankingScorer.RATING_PRIOR)
+      expect(RankingScorer.adjustedRating(7.2, undefined)).toBe(7.2)
+    })
+  })
+
+  describe('toneGenreConflictMultiplier', () => {
+    const warm: ParsedPreferences = { ...defaultPrefs, genres: ['Comedy', 'Drama'], mood: ['Happy'] }
+
+    it('penalises horror and war titles for warm, light requests', () => {
+      expect(RankingScorer.toneGenreConflictMultiplier(['Drama', 'Horror'], warm)).toBe(0.55)
+      expect(RankingScorer.toneGenreConflictMultiplier(['Action', 'War'], warm)).toBe(0.8)
+      expect(RankingScorer.toneGenreConflictMultiplier(['Comedy', 'Family'], warm)).toBe(1)
+    })
+
+    it('keeps genres the user asked for and darker moods unpenalised', () => {
+      expect(RankingScorer.toneGenreConflictMultiplier(['Comedy', 'Horror'], { ...warm, genres: ['Comedy', 'Horror'] })).toBe(1)
+      expect(RankingScorer.toneGenreConflictMultiplier(['Thriller'], { ...warm, mood: ['Happy', 'Suspenseful'] })).toBe(1)
+      expect(RankingScorer.toneGenreConflictMultiplier(['Horror'], { ...defaultPrefs, mood: [] })).toBe(1)
+    })
+
+    it('ranks a warm drama above a horror drama for a heartfelt request', () => {
+      const ranked = RankingScorer.rankTitles([
+        { id: 'roh', title: 'Roh', genres: ['Drama', 'Horror'], rating: 6.5, voteCount: 40, year: 2020, plot: 'A family in the jungle.' },
+        { id: 'mukhsin', title: 'Mukhsin', genres: ['Drama', 'Comedy'], rating: 6.9, voteCount: 16, year: 2007, plot: 'A family in a village.' }
+      ], warm)
+      expect(ranked[0].id).toBe('mukhsin')
+    })
+  })
+
+  describe('vote-aware ranking in small catalogues', () => {
+    const base = { genres: ['Comedy', 'Drama'], plot: 'A warm family story.', talentMatchScore: 0 }
+    const malaysianPool = [
+      { ...base, id: 'home', title: 'Home, Almost', year: 2026, rating: undefined, voteCount: 0 },
+      { ...base, id: 'dance', title: 'Dance of the Damned', year: 2026, rating: 8.0, voteCount: 4 },
+      { ...base, id: 'sandiwara', title: 'Sandiwara', year: 2026, rating: 6.2, voteCount: 6 },
+      { ...base, id: 'mukhsin', title: 'Mukhsin', year: 2007, rating: 6.9, voteCount: 16 },
+      { ...base, id: 'olabola', title: 'Ola Bola', year: 2016, rating: 7.7, voteCount: 17 },
+      { ...base, id: 'paskal', title: 'Paskal', year: 2018, rating: 7.6, voteCount: 82 }
+    ]
+
+    it('ranks established titles above barely-rated new releases', () => {
+      const order = RankingScorer.rankTitles(malaysianPool, defaultPrefs).map(title => title.id)
+      expect(order.slice(0, 2)).toEqual(['paskal', 'olabola'])
+      expect(order.indexOf('mukhsin')).toBeLessThan(order.indexOf('home'))
+      expect(order[order.length - 1]).toBe('home')
+    })
+
+    it('uses pool percentiles only for small catalogues', () => {
+      expect(RankingScorer.buildPoolContext(malaysianPool).relativeWeight).toBe(1)
+      const bigMarket = [3000, 8000, 12000, 25000, 400000].map(voteCount => ({ voteCount }))
+      expect(RankingScorer.buildPoolContext(bigMarket).relativeWeight).toBe(0)
+    })
+
+    it('keeps the recency boost when the user asks for recent releases', () => {
+      const newRelease = malaysianPool[0]
+      const general = RankingScorer.calculateCompositeScore(newRelease, defaultPrefs)
+      const recent = RankingScorer.calculateCompositeScore(newRelease, { ...defaultPrefs, releaseWindowLabel: 'this month' })
+      expect(general.recencyBoost).toBe(0.5)
+      expect(recent.recencyBoost).toBe(1.0)
+    })
+
+    it('does not treat unrated titles as hidden gems', () => {
+      const noveltyPrefs: ParsedPreferences = { ...defaultPrefs, noveltyIntent: true }
+      const unrated = RankingScorer.calculateCompositeScore(malaysianPool[0], noveltyPrefs)
+      const gem = RankingScorer.calculateCompositeScore({ ...base, id: 'gem', year: 2026, rating: 7.8, voteCount: 300 }, noveltyPrefs)
+      expect(gem.composite).toBeGreaterThan(unrated.composite)
     })
   })
 

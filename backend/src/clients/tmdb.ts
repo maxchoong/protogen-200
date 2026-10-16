@@ -1,5 +1,6 @@
 import { config } from '../config.js'
 import type { CreatorCredit, CreatorPreference, CreatorRole } from '../engine/preferenceParser.js'
+import { expandGenresForSeries } from '../engine/genreTaxonomy.js'
 
 /**
  * TMDB Genre mappings - Maps UI genre names to TMDB genre IDs
@@ -25,8 +26,12 @@ const GENRE_MAP: Record<string, number> = {
   'Family': 10751
 }
 
+// TMDB TV genres differ from film genres; combined TV genres (e.g. "Sci-Fi & Fantasy")
+// serve several canonical names. Romance (10749) is a film ID that TMDB still
+// returns on some series, so it is kept for discovery.
 const TV_GENRE_MAP: Record<string, number> = {
   'Action': 10759,
+  'Adventure': 10759,
   'Animation': 16,
   'Comedy': 35,
   'Crime': 80,
@@ -36,8 +41,13 @@ const TV_GENRE_MAP: Record<string, number> = {
   'Mystery': 9648,
   'Romance': 10749,
   'Sci-Fi': 10765,
-  'War': 10768
+  'Fantasy': 10765,
+  'War': 10768,
+  'Western': 37
 }
+
+const tvGenreIdsFor = (genres: string[]): number[] =>
+  Array.from(new Set(expandGenresForSeries(genres).map(genre => TV_GENRE_MAP[genre]).filter(Boolean)))
 
 export interface TMDBTitle {
   id: number
@@ -54,6 +64,8 @@ export interface TMDBTitle {
   vote_count?: number
   adult: boolean
   original_language: string
+  /** ISO 3166-1 codes; TMDB returns this for TV results and title details. */
+  origin_country?: string[]
   personCredit?: { cast: boolean; roles: CreatorRole[] }
   creatorCredits?: CreatorCredit[]
 }
@@ -121,6 +133,10 @@ export interface SearchQuery {
   yearRange?: { min?: number; max?: number }
   releaseDateRange?: { gte?: string; lte?: string }
   originalLanguage?: string
+  /** ISO 3166-1 country of origin, e.g. MY; "|" joins alternatives (MY|ID). */
+  originCountry?: string
+  /** Internal: false sends several origins as one OR query instead of one query each. */
+  fanOut?: boolean
   keywordPages?: number
   keywordLimit?: number
   separateKeywordQueries?: boolean
@@ -229,17 +245,19 @@ export class TMDBClient {
 
     try {
       const movieGenreIds = genres.map(genre => GENRE_MAP[genre]).filter(Boolean).join('|')
-      const tvGenreIds = genres.map(genre => TV_GENRE_MAP[genre]).filter(Boolean).join('|')
+      const tvGenreIds = tvGenreIdsFor(genres).join('|')
       const moviePromise = movieGenreIds && options.includeMovies !== false
         ? Promise.all([
             this.discoverMovies(movieGenreIds, options, 1),
-            this.discoverMovies(movieGenreIds, options, 2)
+            this.discoverMovies(movieGenreIds, options, 2),
+            ...this.establishedTitlePages(options, opts => this.discoverMovies(movieGenreIds, opts, 1))
           ]).then(results => results.flat())
         : Promise.resolve([])
       const tvPromise = tvGenreIds && options.includeTV !== false
         ? Promise.all([
             this.discoverTV(tvGenreIds, options, 1),
-            this.discoverTV(tvGenreIds, options, 2)
+            this.discoverTV(tvGenreIds, options, 2),
+            ...this.establishedTitlePages(options, opts => this.discoverTV(tvGenreIds, opts, 1))
           ]).then(results => results.flat())
         : Promise.resolve([])
 
@@ -251,14 +269,36 @@ export class TMDBClient {
     }
   }
 
+  /**
+   * Country catalogues outside the big markets are small, and popularity order
+   * favours new, barely-rated releases. Also fetch the most-voted titles so
+   * established favourites are candidates.
+   */
+  private establishedTitlePages(
+    options: Partial<SearchQuery>,
+    fetchPage: (options: Partial<SearchQuery>) => Promise<TMDBTitle[]>
+  ): Array<Promise<TMDBTitle[]>> {
+    return options.originCountry && !options.sortBy
+      ? [fetchPage({ ...options, sortBy: 'vote_count.desc' })]
+      : []
+  }
+
   /** Genre-less discovery driven only by language/date filters. */
   async discoverByFilters(options: Partial<SearchQuery> = {}): Promise<TMDBTitle[]> {
     if (!this.isEnabled()) return []
 
     try {
       const [movies, tv] = await Promise.all([
-        Promise.all([this.discoverMovies('', options, 1), this.discoverMovies('', options, 2)]).then(r => r.flat()),
-        Promise.all([this.discoverTV('', options, 1), this.discoverTV('', options, 2)]).then(r => r.flat())
+        Promise.all([
+          this.discoverMovies('', options, 1),
+          this.discoverMovies('', options, 2),
+          ...this.establishedTitlePages(options, opts => this.discoverMovies('', opts, 1))
+        ]).then(r => r.flat()),
+        Promise.all([
+          this.discoverTV('', options, 1),
+          this.discoverTV('', options, 2),
+          ...this.establishedTitlePages(options, opts => this.discoverTV('', opts, 1))
+        ]).then(r => r.flat())
       ])
       return [...movies, ...tv]
     } catch (error) {
@@ -771,17 +811,13 @@ export class TMDBClient {
       return []
     }
 
-    const reverseGenreMap = new Map<number, string>()
+    const reverseGenreMap = new Map<number, string[]>()
     const genreMap = mediaType === 'tv' ? TV_GENRE_MAP : GENRE_MAP
     for (const [name, id] of Object.entries(genreMap)) {
-      reverseGenreMap.set(id, name)
+      reverseGenreMap.set(id, [...(reverseGenreMap.get(id) || []), name])
     }
 
-    return Array.from(new Set(
-      genreIds
-        .map(id => reverseGenreMap.get(id))
-        .filter((name): name is string => Boolean(name))
-    ))
+    return Array.from(new Set(genreIds.flatMap(id => reverseGenreMap.get(id) || [])))
   }
 
   /**
@@ -981,16 +1017,54 @@ export class TMDBClient {
     return titles
   }
 
+  /**
+   * Several origins ("MY|ID", "ko|ja") are fetched one at a time and interleaved,
+   * so a large catalogue (Indonesia) does not crowd out a small one (Malaysia)
+   * and movie results can be tagged with the country that was actually queried.
+   */
+  private async fetchPerOrigin(
+    options: Partial<SearchQuery>,
+    fetchOne: (options: Partial<SearchQuery>) => Promise<TMDBTitle[]>
+  ): Promise<TMDBTitle[]> {
+    const countries = options.originCountry?.split('|') ?? [undefined]
+    const languages = options.originalLanguage?.split('|') ?? [undefined]
+    const combinations = countries.flatMap(originCountry =>
+      languages.map(originalLanguage => ({ ...options, originCountry, originalLanguage }))
+    )
+    if (combinations.length > TMDBClient.MAX_ORIGIN_FAN_OUT) {
+      // Too many to fetch separately: let TMDB OR them in one query.
+      return fetchOne({ ...options, fanOut: false })
+    }
+    const results = await Promise.all(combinations.map(fetchOne))
+    const interleaved: TMDBTitle[] = []
+    for (let index = 0; index < Math.max(...results.map(list => list.length)); index++) {
+      for (const list of results) {
+        if (list[index]) interleaved.push(list[index])
+      }
+    }
+    return interleaved
+  }
+
+  private static readonly MAX_ORIGIN_FAN_OUT = 4
+
+  private hasMultipleOrigins(options: Partial<SearchQuery>): boolean {
+    return options.fanOut !== false &&
+      Boolean(options.originCountry?.includes('|') || options.originalLanguage?.includes('|'))
+  }
+
   private async discoverMovies(
     genreIds: string,
     options: Partial<SearchQuery>,
     page: number
   ): Promise<TMDBTitle[]> {
+    if (this.hasMultipleOrigins(options)) {
+      return this.fetchPerOrigin(options, opts => this.discoverMovies(genreIds, opts, page))
+    }
     if (options.includeMovies === false) return []
 
     const params = this.applyAuth(new URLSearchParams({
       include_adult: String(!options.excludeAdult),
-      sort_by: 'popularity.desc',
+      sort_by: options.sortBy || 'popularity.desc',
       page: String(page)
     }))
     if (genreIds) params.set('with_genres', genreIds)
@@ -1022,11 +1096,14 @@ export class TMDBClient {
     options: Partial<SearchQuery>,
     page: number
   ): Promise<TMDBTitle[]> {
+    if (this.hasMultipleOrigins(options)) {
+      return this.fetchPerOrigin(options, opts => this.discoverTV(genreIds, opts, page))
+    }
     if (options.includeTV === false) return []
 
     const params = this.applyAuth(new URLSearchParams({
       include_adult: String(!options.excludeAdult),
-      sort_by: 'popularity.desc',
+      sort_by: options.sortBy || 'popularity.desc',
       page: String(page)
     }))
     if (genreIds) params.set('with_genres', genreIds)
@@ -1059,6 +1136,9 @@ export class TMDBClient {
     options: Partial<SearchQuery>,
     page: number
   ): Promise<TMDBTitle[]> {
+    if (this.hasMultipleOrigins(options)) {
+      return this.fetchPerOrigin(options, opts => this.discoverByKeywordIds(mediaType, keywordIds, opts, page))
+    }
     const params = this.applyAuth(new URLSearchParams({
       with_keywords: keywordIds,
       include_adult: String(!options.excludeAdult),
@@ -1103,6 +1183,7 @@ export class TMDBClient {
     if (options.releaseDateRange?.gte) params.set(`${dateKey}.gte`, options.releaseDateRange.gte)
     if (options.releaseDateRange?.lte) params.set(`${dateKey}.lte`, options.releaseDateRange.lte)
     if (options.originalLanguage) params.set('with_original_language', options.originalLanguage)
+    if (options.originCountry) params.set('with_origin_country', options.originCountry)
   }
 
   private async fetchDiscoverByYear(
@@ -1167,7 +1248,15 @@ export class TMDBClient {
     const includeMovies = options.includeMovies ?? true
     const includeTV = options.includeTV ?? true
 
-    return titles.filter(title => {
+    // Discover results requested with an origin country are guaranteed to match it,
+    // but movie results do not carry origin_country, so record it for later filters.
+    const tagged = options.originCountry
+      ? titles.map(title => title.origin_country?.length
+          ? title
+          : { ...title, origin_country: options.originCountry!.split('|') })
+      : titles
+
+    return tagged.filter(title => {
       // Filter by type
       if (title.media_type === 'movie' && !includeMovies) return false
       if (title.media_type === 'tv' && !includeTV) return false
@@ -1214,7 +1303,12 @@ export class TMDBClient {
       vote_average: data.vote_average || 0,
       vote_count: data.vote_count || 0,
       adult: data.adult || false,
-      original_language: data.original_language || 'en'
+      original_language: data.original_language || 'en',
+      origin_country: Array.isArray(data.origin_country) && data.origin_country.length > 0
+        ? data.origin_country
+        : Array.isArray(data.production_countries) && data.production_countries.length > 0
+          ? data.production_countries.map((country: { iso_3166_1: string }) => country.iso_3166_1)
+          : undefined
     }
   }
 

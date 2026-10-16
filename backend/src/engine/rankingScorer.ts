@@ -5,6 +5,7 @@
  */
 
 import { ParsedPreferences, DiscoveryMode } from './preferenceParser.js'
+import { matchableGenres } from './genreTaxonomy.js'
 
 export interface ScoringFactors {
   genreScore: number
@@ -14,6 +15,13 @@ export interface ScoringFactors {
   popularityScore: number
   recencyBoost: number
   composite: number
+}
+
+export interface PoolContext {
+  /** log10(votes + 1) for every candidate with a known vote count, ascending. */
+  sortedLogVotes: number[]
+  /** 0 = global popularity scale only, 1 = percentile within the pool only. */
+  relativeWeight: number
 }
 
 export interface RankingConfig {
@@ -291,14 +299,43 @@ export class RankingScorer {
     return result
   }
 
+  /** Typical rating assumed for a title before its votes say otherwise. */
+  static readonly RATING_PRIOR = 6.0
+  /** Votes needed before a title's own average outweighs the prior. */
+  static readonly RATING_PRIOR_VOTES = 25
+  /** Votes needed for a release to earn its full recency boost. */
+  static readonly ESTABLISHED_VOTES = 20
+
+  private static hasVoteData(voteCount: number | undefined | null): voteCount is number {
+    return typeof voteCount === 'number' && Number.isFinite(voteCount) && voteCount >= 0
+  }
+
+  /** Share of a title's rating that comes from its own votes rather than the prior (0-1). */
+  static voteEvidence(voteCount: number | undefined | null): number {
+    if (!this.hasVoteData(voteCount)) return 1
+    return voteCount / (voteCount + this.RATING_PRIOR_VOTES)
+  }
+
+  /**
+   * Bayesian average: a few enthusiastic votes (8.0 from 4) are pulled towards
+   * the prior, while well-rated titles (7.7 from 40,000) keep their rating.
+   * Titles with unknown vote counts (non-TMDB sources) keep their raw rating.
+   */
+  static adjustedRating(rating: number | undefined | null, voteCount: number | undefined | null): number | undefined {
+    if (!this.hasVoteData(voteCount)) return rating ?? undefined
+    const own = rating && rating > 0 ? rating : this.RATING_PRIOR
+    return (voteCount * own + this.RATING_PRIOR_VOTES * this.RATING_PRIOR) / (voteCount + this.RATING_PRIOR_VOTES)
+  }
+
   /**
    * Calculate popularity score (0-1)
-   * Uses vote count if available, otherwise returns neutral score
-   * More votes = higher popularity
+   * Unknown vote counts are neutral (0.5); a known count of 0 means nobody has
+   * rated the title yet and scores 0.
    * Assumes vote counts typically range 100 - 1,000,000+
    */
   static popularityScore(voteCount: number | undefined | null): number {
-    if (voteCount === undefined || voteCount === null || voteCount === 0) return 0.5 // neutral default
+    if (voteCount === undefined || voteCount === null) return 0.5 // unknown: neutral default
+    if (voteCount <= 0) return 0
 
     // Log scale to compress large vote counts
     // Examples:
@@ -334,11 +371,92 @@ export class RankingScorer {
   }
 
   /**
+   * Vote distribution of the candidate pool. In small catalogues (Malaysian
+   * film) every title looks obscure on the global scale, so popularity there is
+   * blended with the title's percentile within the pool. Big-market pools
+   * (median 1,000+ votes) keep the global scale unchanged.
+   */
+  static buildPoolContext(titles: any[]): PoolContext {
+    const logVotes = titles
+      .map(title => title.voteCount)
+      .filter((votes): votes is number => this.hasVoteData(votes))
+      .map(votes => Math.log10(votes + 1))
+      .sort((a, b) => a - b)
+    if (logVotes.length < 5) return { sortedLogVotes: logVotes, relativeWeight: 0 }
+
+    const median = logVotes[Math.floor(logVotes.length / 2)]
+    const wellKnown = Math.log10(1000)
+    const niche = Math.log10(50)
+    const relativeWeight = Math.max(0, Math.min(1, (wellKnown - median) / (wellKnown - niche)))
+    return { sortedLogVotes: logVotes, relativeWeight }
+  }
+
+  private static poolPopularity(voteCount: number | undefined | null, pool?: PoolContext): number {
+    const absolute = this.popularityScore(voteCount)
+    if (!pool || pool.relativeWeight === 0 || !this.hasVoteData(voteCount)) return absolute
+
+    const logVotes = Math.log10(voteCount + 1)
+    const below = pool.sortedLogVotes.filter(value => value < logVotes).length
+    const percentile = pool.sortedLogVotes.length > 1 ? below / (pool.sortedLogVotes.length - 1) : 0.5
+    return (1 - pool.relativeWeight) * absolute + pool.relativeWeight * Math.min(1, percentile)
+  }
+
+  /**
+   * Recency only counts in full once a release has an audience; otherwise a
+   * brand-new title with no votes outranks established favourites on newness
+   * alone. Skipped when the user asked for recent releases.
+   */
+  private static evidencedRecency(title: any, preferences: ParsedPreferences): number {
+    const raw = Number(this.recencyBoost(title.year)) || 0
+    const wantsRecent = Boolean(preferences.releaseWindowLabel) ||
+      (preferences.yearRange?.min !== undefined && preferences.yearRange.min >= new Date().getFullYear() - 1)
+    if (wantsRecent || raw <= 0.5 || !this.hasVoteData(title.voteCount)) return raw
+    const audience = Math.min(1, title.voteCount / this.ESTABLISHED_VOTES)
+    return 0.5 + (raw - 0.5) * audience
+  }
+
+  private static readonly LIGHT_MOODS = ['Happy', 'Relaxing', 'Funny', 'Romantic']
+  private static readonly DARK_MOODS = ['Dark', 'Intense', 'Suspenseful']
+  private static readonly TONE_CONFLICT_GENRES: Record<string, number> = {
+    horror: 0.55,
+    war: 0.8,
+    thriller: 0.8,
+    crime: 0.85,
+    action: 0.9
+  }
+
+  /**
+   * A heartwarming or relaxing request shouldn't surface horror or war films
+   * just because they also carry a Drama or Comedy tag. Genres the user asked
+   * for, or any darker mood they mentioned, switch the penalty off.
+   */
+  static toneGenreConflictMultiplier(titleGenres: string[], preferences: ParsedPreferences): number {
+    const moods = [...(preferences.mood || []), ...(preferences.boostedMoods || [])]
+    if (!moods.some(mood => this.LIGHT_MOODS.includes(mood))) return 1
+    if (moods.some(mood => this.DARK_MOODS.includes(mood))) return 1
+
+    const requested = new Set(
+      [...(preferences.genres || []), ...(preferences.explicitGenres || []), ...(preferences.referenceGenres || [])]
+        .map(genre => genre.toLowerCase())
+    )
+    return titleGenres.reduce((multiplier, genre) => {
+      const key = genre.toLowerCase()
+      const penalty = this.TONE_CONFLICT_GENRES[key]
+      return penalty !== undefined && !requested.has(key) ? Math.min(multiplier, penalty) : multiplier
+    }, 1)
+  }
+
+  /**
    * Calculate composite ranking score
    * Combines all factors with configured weights
    * Returns: { individual factor scores + composite (0-1) }
    */
-  static calculateCompositeScore(title: any, preferences: ParsedPreferences, config: Partial<RankingConfig> = {}): ScoringFactors {
+  static calculateCompositeScore(
+    title: any,
+    preferences: ParsedPreferences,
+    config: Partial<RankingConfig> = {},
+    pool?: PoolContext
+  ): ScoringFactors {
     const finalConfig: RankingConfig = {
       weights: { ...this.DEFAULT_CONFIG.weights, ...config.weights }
     }
@@ -351,12 +469,13 @@ export class RankingScorer {
     const noveltyGenres = preferences.noveltyIntent
       ? preferences.genres.filter(genre => genre.toLowerCase() !== 'indie')
       : preferences.genres
+    const titleGenres = matchableGenres(title)
     const genreScore = referenceGenres.length > 0
       ? additionalGenres.length > 0
-        ? this.genreMatchScore(title.genres || [], referenceGenres) * 0.45 +
-          this.genreMatchScore(title.genres || [], additionalGenres) * 0.55
-        : this.genreMatchScore(title.genres || [], referenceGenres)
-      : this.genreMatchScore(title.genres || [], noveltyGenres)
+        ? this.genreMatchScore(titleGenres, referenceGenres) * 0.45 +
+          this.genreMatchScore(titleGenres, additionalGenres) * 0.55
+        : this.genreMatchScore(titleGenres, referenceGenres)
+      : this.genreMatchScore(titleGenres, noveltyGenres)
     const moodScore = Number(
       this.moodMatchScore(
         title.plot,
@@ -368,22 +487,23 @@ export class RankingScorer {
       )
     ) || 0
     const talentScore = Number(this.talentMatchScore(title.talentMatchScore)) || 0
-    const ratingScore = Number(this.ratingScore(title.rating)) || 0
-    const popularityScore = Number(this.popularityScore(title.voteCount)) || 0
-    const recencyBoost = Number(this.recencyBoost(title.year)) || 0
+    const ratingScore = Number(this.ratingScore(this.adjustedRating(title.rating, title.voteCount))) || 0
+    const popularityScore = Number(this.poolPopularity(title.voteCount, pool)) || 0
+    const recencyBoost = Number(this.evidencedRecency(title, preferences)) || 0
 
-    // Calculate composite score
+    // Hidden gems are well-rated titles few people know, not titles nobody has rated.
     const popularitySignal = preferences.noveltyIntent
-      ? (1 - popularityScore) * ratingScore
+      ? (1 - popularityScore) * ratingScore * this.voteEvidence(title.voteCount)
       : popularityScore
 
-    const composite =
+    const composite = (
       genreScore * finalConfig.weights.genre +
       moodScore * finalConfig.weights.mood +
       talentScore * finalConfig.weights.talent +
       ratingScore * finalConfig.weights.rating +
       popularitySignal * finalConfig.weights.popularity +
       recencyBoost * finalConfig.weights.recency
+    ) * this.toneGenreConflictMultiplier(titleGenres, preferences)
 
     return {
       genreScore: Number(genreScore) || 0,
@@ -406,9 +526,10 @@ export class RankingScorer {
     config: Partial<RankingConfig> = {}
   ): any[] {
     // Calculate composite scores for each title
+    const pool = this.buildPoolContext(titles)
     const titlesWithScores = titles.map(title => ({
       ...title,
-      scoringFactors: this.calculateCompositeScore(title, preferences, config)
+      scoringFactors: this.calculateCompositeScore(title, preferences, config, pool)
     }))
 
     // Sort by composite score descending

@@ -1,5 +1,7 @@
 # Product Context – Film & TV Advisor (As Built)
 
+Status: current product reference.
+
 ## Product Vision
 
 Help users decide what to watch in a few conversational turns, then move directly to action with clear rationale, trailer access, and platform availability.
@@ -19,12 +21,18 @@ Help users decide what to watch in a few conversational turns, then move directl
 
 ## Current Experience Shape
 
+As built October 16, 2026. Intended behaviour is described below; remaining
+quality and reliability gaps are tracked in [progress](progress.md).
+
 1. Conversation-first flow
    - Users can start broad and refine in plain language.
-   - Clarification is used only when confidence/quality signals require it.
+   - Concrete validated requests try results first; vague and origin/format-only requests can clarify. Catalogue-built clarification options are planned, not yet implemented.
 2. Freeform follow-up refinement
    - No meta-steering choice UI.
    - Follow-up intent is inferred directly from user text.
+   - Successful LLM understanding updates a structured request passed between
+     client and server. Unusable/failed saved-spec updates ask for clarification
+     while preserving the request, rather than silently applying rules.
 3. Transparent recommendation rounds
    - Responses can include applied constraints and interpretation notes.
    - Cards include concise "why this" reasoning.
@@ -34,9 +42,11 @@ Help users decide what to watch in a few conversational turns, then move directl
 ## What The Product Currently Delivers
 
 - Intent parsing across mood/genre/reference/talent signals.
-- Robust genre alias handling and follow-up mapping.
+- Genre alias handling and follow-up mapping, with known continuity/enforcement gaps in the [engine design](design-conversational-engine.md).
 - Mode-aware retrieval and ranking (including critics-style proxy mode).
-- Safety filtering and weak-result clarifications.
+- Metadata-dependent safety filtering; weak non-empty sets are returned as best
+  available results, while empty retrieval offers widening. The weak-set branch
+  builds an internal clarification candidate but does not send that question.
 - Region-aware streaming availability enrichment.
 - Trailer links and richer metadata display (rating, votes, runtime, cast/director, language).
 
@@ -45,11 +55,12 @@ Help users decide what to watch in a few conversational turns, then move directl
 ## Trust and Transparency Rules
 
 1. No fabricated source support
-   - If a user explicitly requests unsupported external critic sources, the system asks for clarification.
+   - The original description is checked for unsupported critic sources; follow-up detection and proxy-consent handling have gaps tracked in the engine design.
 2. Proxy behavior must be explicit
    - When critics-style intent is satisfied via internal proxy signals, the system communicates that interpretation.
 3. Explanation fallback must remain clean
    - If LLM explanations fail, deterministic fallback text is shown.
+   - Some API result paths omit the assistant intro; the frontend supplies generic text. A consistent fact-grounded reply is still planned.
 
 ---
 

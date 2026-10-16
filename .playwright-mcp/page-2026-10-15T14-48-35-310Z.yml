@@ -1,0 +1,52 @@
+- generic [ref=e3]:
+  - button "Lens tweaks (light)" [ref=e106] [cursor=pointer]:
+    - generic [aria-hidden] [ref=e7]: +
+  - banner [ref=e8]:
+    - generic [ref=e9]:
+      - generic [ref=e10]:
+        - heading "Lumera" [level=1] [ref=e11]
+        - paragraph [ref=e12]: One conversation, evolving curation
+      - generic [ref=e13]:
+        - button "Start a new conversation" [ref=e14] [cursor=pointer]: New chat
+        - switch "Dark mode" [active] [ref=e15] [cursor=pointer]
+  - main [ref=e16]:
+    - generic [ref=e18]:
+      - generic [ref=e21]:
+        - paragraph [ref=e22]: What are you in the mood for?
+        - paragraph [ref=e23]: "Try a prompt:"
+        - generic [ref=e24]:
+          - button "Something funny with Ryan Gosling" [ref=e25] [cursor=pointer]
+          - button "Like Inception but more relaxing" [ref=e26] [cursor=pointer]
+          - button "A cozy weekend movie" [ref=e27] [cursor=pointer]
+          - button "Surprising indie gems" [ref=e28] [cursor=pointer]
+      - generic [ref=e30]:
+        - generic [ref=e31]:
+          - textbox "Write your viewing brief..." [ref=e33]
+          - button "Submit" [disabled] [ref=e34]
+        - paragraph [ref=e35]: Press Enter to submit, Shift+Enter for a new line.
+    - status [ref=e39]:
+      - list "Session highlight titles" [ref=e65]:
+        - button "Open highlight details for Digger" [ref=e66] [cursor=pointer]:
+          - img "Digger poster" [ref=e69]
+          - paragraph [ref=e70]: Digger
+          - paragraph [ref=e71]: 2026 • Film • 7.5
+        - 'button "Open highlight details for Spider-Man: Brand New Day" [ref=e72] [cursor=pointer]':
+          - 'img "Spider-Man: Brand New Day poster" [ref=e75]'
+          - paragraph [ref=e76]: "Spider-Man: Brand New Day"
+          - paragraph [ref=e77]: 2026 • Film • 8.5
+        - button "Open highlight details for Matchbox the Movie" [ref=e78] [cursor=pointer]:
+          - img "Matchbox the Movie poster" [ref=e81]
+          - paragraph [ref=e82]: Matchbox the Movie
+          - paragraph [ref=e83]: 2026 • Film • 7.9
+        - button "Open highlight details for Animals" [ref=e84] [cursor=pointer]:
+          - img "Animals poster" [ref=e87]
+          - paragraph [ref=e88]: Animals
+          - paragraph [ref=e89]: 2026 • Film • 7.2
+        - button "Open highlight details for Resident Evil" [ref=e90] [cursor=pointer]:
+          - img "Resident Evil poster" [ref=e93]
+          - paragraph [ref=e94]: Resident Evil
+          - paragraph [ref=e95]: 2026 • Film • 7.3
+        - 'button "Open highlight details for Fall 2: Deadpoint" [ref=e96] [cursor=pointer]':
+          - 'img "Fall 2: Deadpoint poster" [ref=e99]'
+          - paragraph [ref=e100]: "Fall 2: Deadpoint"
+          - paragraph [ref=e101]: 2026 • Film • 7.3

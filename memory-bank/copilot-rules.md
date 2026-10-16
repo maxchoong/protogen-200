@@ -1,3 +1,5 @@
+Status: current project rules.
+
 ## 🚨 Never Upload Secrets
 
 - Do not store API keys or `.env` in repo.

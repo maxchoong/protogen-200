@@ -1,5 +1,7 @@
 # Tasks: Recommendation Review Skill
 
+Status: implementation/validation recorded; final sign-off pending.
+
 ## RR-1: Implement Review Skill
 
 - **Description:** Create `.github/skills/recommendation-review/SKILL.md` with discoverable frontmatter and the approved evidence-based review workflow.

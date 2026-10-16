@@ -1,0 +1,2 @@
+eval/reports/*.json
+!eval/reports/baseline-*.json

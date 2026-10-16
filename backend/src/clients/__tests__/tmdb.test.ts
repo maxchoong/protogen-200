@@ -70,3 +70,20 @@ describe('Role-aware person filmographies', () => {
     expect(await client.searchTitlesForPerson('Unknown Person', { creator })).toEqual([])
   })
 })
+describe('Title details', () => {
+  const originalFetch = global.fetch
+  afterAll(() => { global.fetch = originalFetch })
+
+  it.each([
+    [{ origin_country: ['KR'], production_countries: [{ iso_3166_1: 'US' }] }, ['KR']],
+    [{ origin_country: [], production_countries: [{ iso_3166_1: 'MY' }, { iso_3166_1: 'ID' }] }, ['MY', 'ID']],
+    [{}, undefined]
+  ])('keeps origin countries from details %#', async (countries, expected) => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 7, title: 'Film', overview: 'A film', genres: [{ id: 18 }], original_language: 'ko', ...countries })
+    }) as any
+    const details = await new TMDBClient().getTitleDetails(7, 'movie')
+    expect(details?.origin_country).toEqual(expected)
+  })
+})

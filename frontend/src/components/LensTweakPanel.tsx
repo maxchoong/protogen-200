@@ -1,5 +1,6 @@
 import { useState, useSyncExternalStore } from 'react'
 import type { ThemeMode } from '../hooks/useTheme'
+import { buttonClass } from '../buttonStyles'
 import {
   LENS_DEFAULTS,
   getLensStore,
@@ -12,7 +13,9 @@ import {
   type LensParams,
 } from '../lensTweaks'
 
-const CONTROLS: Array<{ key: keyof LensParams; label: string; min: number; max: number; step: number }> = [
+type Control = { key: keyof LensParams; label: string; min: number; max: number; step: number }
+
+const CONTROLS: Control[] = [
   { key: 'magnify', label: 'Magnify', min: 0, max: 0.25, step: 0.005 },
   { key: 'bend', label: 'Edge bend (px)', min: 0, max: 120, step: 1 },
   { key: 'splitG', label: 'Green split', min: 1, max: 2, step: 0.01 },
@@ -21,6 +24,16 @@ const CONTROLS: Array<{ key: keyof LensParams; label: string; min: number; max: 
   { key: 'fringe', label: 'Edge glow', min: 0, max: 0.6, step: 0.005 },
   { key: 'width', label: 'Lens width (px)', min: 8, max: 120, step: 1 },
   { key: 'radius', label: 'Corner radius (px)', min: 0, max: 32, step: 1 },
+]
+
+const BEAM_CONTROLS: Control[] = [
+  { key: 'rays', label: 'Picture rays', min: 0, max: 1, step: 0.01 },
+  { key: 'rayDrift', label: 'Ray drift', min: 0, max: 0.5, step: 0.01 },
+  { key: 'scene', label: 'Scene brightness shift', min: 0, max: 0.4, step: 0.01 },
+  { key: 'sceneLength', label: 'Scene length (s)', min: 2, max: 20, step: 0.5 },
+  { key: 'hazeFlow', label: 'Smoke flow', min: 0, max: 0.3, step: 0.005 },
+  { key: 'swirl', label: 'Smoke swirl', min: 0, max: 2, step: 0.05 },
+  { key: 'gateFlicker', label: 'Gate flicker (24fps)', min: 0, max: 0.1, step: 0.005 },
 ]
 
 export default function LensTweakPanel({ theme }: { theme: ThemeMode }) {
@@ -36,12 +49,37 @@ export default function LensTweakPanel({ theme }: { theme: ThemeMode }) {
     window.setTimeout(() => setCopied(false), 1500)
   }
 
+  const renderControl = ({ key, label, min, max, step }: Control) => (
+    <label key={key} className="block">
+      <span className="flex justify-between text-text-muted">
+        <span>{label}</span>
+        <span className="tabular-nums text-text">
+          {params[key]}
+          {params[key] !== LENS_DEFAULTS[theme][key] ? ' *' : ''}
+        </span>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={params[key]}
+        onChange={e => setLensParam(theme, key, Number(e.target.value))}
+        className="w-full accent-[var(--color-accent)]"
+      />
+    </label>
+  )
+
   return (
     <div className="fixed bottom-3 left-3 z-50 w-64 rounded-lg border border-border bg-surface p-3 text-xs text-text shadow-card">
       <button
         type="button"
         onClick={() => setOpen(value => !value)}
-        className="flex w-full items-center justify-between font-semibold"
+        className={buttonClass({
+          variant: 'ghost',
+          size: 'sm',
+          className: 'w-full justify-between font-semibold'
+        })}
         aria-expanded={open}
       >
         <span>Lens tweaks ({theme})</span>
@@ -49,7 +87,7 @@ export default function LensTweakPanel({ theme }: { theme: ThemeMode }) {
       </button>
 
       {open && (
-        <div className="mt-3 space-y-2">
+        <div className="mt-3 max-h-[70vh] space-y-2 overflow-y-auto pr-1">
           <label className="flex items-center justify-between">
             <span>Shaders enabled</span>
             <input
@@ -59,38 +97,21 @@ export default function LensTweakPanel({ theme }: { theme: ThemeMode }) {
               className="h-4 w-4 accent-[var(--color-accent)]"
             />
           </label>
-          {CONTROLS.map(({ key, label, min, max, step }) => (
-            <label key={key} className="block">
-              <span className="flex justify-between text-text-muted">
-                <span>{label}</span>
-                <span className="tabular-nums text-text">
-                  {params[key]}
-                  {params[key] !== LENS_DEFAULTS[theme][key] ? ' *' : ''}
-                </span>
-              </span>
-              <input
-                type="range"
-                min={min}
-                max={max}
-                step={step}
-                value={params[key]}
-                onChange={e => setLensParam(theme, key, Number(e.target.value))}
-                className="w-full accent-[var(--color-accent)]"
-              />
-            </label>
-          ))}
+          {CONTROLS.map(renderControl)}
+          <p className="pt-2 font-semibold">Beam motion</p>
+          {BEAM_CONTROLS.map(renderControl)}
           <div className="flex gap-2 pt-1">
             <button
               type="button"
               onClick={() => resetLensParams(theme)}
-              className="rounded-pill border border-border px-3 py-1 text-text-muted hover:text-text"
+              className={buttonClass({ variant: 'subtle', size: 'xs' })}
             >
               Reset
             </button>
             <button
               type="button"
               onClick={copy}
-              className="rounded-pill border border-border px-3 py-1 text-text-muted hover:text-text"
+              className={buttonClass({ variant: 'subtle', size: 'xs' })}
             >
               {copied ? 'Copied' : 'Copy both themes'}
             </button>

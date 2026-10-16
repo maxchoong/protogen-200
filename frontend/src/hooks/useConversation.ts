@@ -21,6 +21,19 @@ export interface TurnOperation {
   rationaleTags: string[]
 }
 
+export type LLMUsageStage =
+  | 'request understanding'
+  | 'preference parsing'
+  | 'actor title recovery'
+  | 'recommendation explanations'
+  | 'clarification wording'
+  | 'results introduction'
+
+export interface LLMUsageDiagnostics {
+  used: boolean
+  stages: LLMUsageStage[]
+}
+
 export interface RecommendationPass {
   id: string
   query: string
@@ -31,6 +44,7 @@ export interface RecommendationPass {
   turnOperation?: TurnOperation
   appliedConstraints?: string[]
   interpretationNote?: string
+  llmDiagnostics?: LLMUsageDiagnostics
   retrievalDiagnostics?: {
     tmdbEnabled: boolean
     usedTmdb: boolean
@@ -54,6 +68,7 @@ export interface ConversationMessage {
   clarificationResponse?: { text: string; questionId?: string }
   recommendations?: any[]
   turnOperation?: TurnOperation
+  llmDiagnostics?: LLMUsageDiagnostics
 }
 
 export interface ConversationState {
@@ -66,6 +81,8 @@ export interface ConversationState {
   lastIntent?: DetectedIntent
   recommendationPasses: RecommendationPass[]
   activePassIndex: number
+  /** Structured request returned by the backend, sent back with the next turn. */
+  requestSpec?: unknown
 }
 
 const generateMessageId = () => `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
@@ -126,6 +143,10 @@ export function useConversation() {
     setState(prev => ({ ...prev, lastIntent: intent }))
   }, [])
 
+  const setRequestSpec = useCallback((requestSpec: unknown) => {
+    setState(prev => ({ ...prev, requestSpec }))
+  }, [])
+
   const markInitialRequestComplete = useCallback(() => {
     setState(prev => ({ ...prev, hasCompletedInitialRequest: true }))
   }, [])
@@ -184,6 +205,7 @@ export function useConversation() {
     updateLastQuery,
     updateLastIntent,
     markInitialRequestComplete,
+    setRequestSpec,
     addRecommendationPass,
     setActivePassIndex,
     reset

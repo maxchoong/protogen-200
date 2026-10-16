@@ -1,11 +1,13 @@
 import request from 'supertest'
 import { app } from '../index'
-import { recommendationEngine } from '../engine/recommendationEngine'
+import { recommendationEngine, type Recommendation } from '../engine/recommendationEngine'
 import { llmClient } from '../clients/llm'
 
 describe('POST /recommendations route guardrails', () => {
   beforeEach(() => {
+    jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue(null)
     jest.spyOn(llmClient, 'generateResultsIntro').mockResolvedValue(null)
+    jest.spyOn(recommendationEngine, 'estimateAvailableTitles').mockResolvedValue(undefined)
   })
 
   afterEach(() => {
@@ -130,6 +132,10 @@ describe('POST /recommendations route guardrails', () => {
     expect(response.body.success).toBe(true)
     expect(response.body.requiresClarification).toBeUndefined()
     expect(response.body.recommendations).toHaveLength(2)
+    expect(response.body.llmDiagnostics).toEqual({
+      used: false,
+      stages: []
+    })
   })
 
   it('should forward iterative refinement context to recommendation engine', async () => {
@@ -196,7 +202,9 @@ describe('POST /recommendations route guardrails', () => {
           cumulativeConstraints: ['show me movies from the 80s']
         })
       }),
-      10
+      10,
+      expect.objectContaining({ used: false, stages: [] }),
+      expect.any(Object)
     )
   })
 
@@ -256,7 +264,9 @@ describe('POST /recommendations route guardrails', () => {
           userClarification: 'Show me the top 3 rated titles'
         })
       }),
-      3
+      3,
+      expect.objectContaining({ used: false, stages: [] }),
+      expect.any(Object)
     )
   })
 
@@ -548,5 +558,312 @@ describe('POST /recommendations route guardrails', () => {
     expect(response.body.success).toBe(true)
     expect(response.body.requiresClarification).toBeUndefined()
     expect(response.body.recommendations).toHaveLength(6)
+  })
+
+  it('explains when the genre filter was relaxed for this request only', async () => {
+    const recs = Array.from({ length: 6 }, (_, index) => ({
+      id: `tt80000${index}`,
+      title: `Series ${index}`,
+      year: '2020',
+      type: 'tv',
+      synopsis: 'A tense drama.',
+      score: 7.5,
+      scoringFactors: { composite: 0.6 }
+    }))
+
+    jest
+      .spyOn(recommendationEngine, 'getRecommendations')
+      .mockImplementation(async (req, _limit, _llm, rankingDiagnostics) => {
+        if (rankingDiagnostics && /western/i.test(req.clarificationContext?.userClarification || '')) {
+          rankingDiagnostics.genreFilterRelaxed = ['Western']
+        }
+        return recs as any
+      })
+
+    const send = (clarification: string) => request(app)
+      .post('/recommendations')
+      .send({
+        description: 'Korean series',
+        region: 'US',
+        clarificationContext: {
+          clarificationRound: 1,
+          userClarification: clarification,
+          askedQuestionIds: [],
+          previousRecommendationIds: [],
+          cumulativeConstraints: [],
+          userTurns: ['Korean series', clarification]
+        }
+      })
+
+    const [relaxed, normal] = await Promise.all([send('westerns'), send('comedies')])
+
+    expect(relaxed.body.interpretationNote).toBe(
+      "I couldn't find Korean series tagged as western, so these are the closest matches from the same search."
+    )
+    expect(relaxed.body.retrievalDiagnostics?.genreFilterRelaxed).toEqual(['Western'])
+    expect(normal.body.interpretationNote).toBeUndefined()
+    expect(normal.body.retrievalDiagnostics?.genreFilterRelaxed).toBeUndefined()
+  })
+
+  it('drops clarification options that would return no results', async () => {
+    jest.spyOn(llmClient, 'isEnabled').mockReturnValue(true)
+    jest.spyOn(llmClient, 'generateConversationalClarification').mockResolvedValue({
+      context: 'Spanish series, great choice.',
+      questions: [{
+        id: 'direction',
+        question: 'What kind of story?',
+        type: 'select',
+        options: ['Gritty crime thrillers', 'Feel-good comedies', 'Other (type your own)']
+      }]
+    })
+    jest.spyOn(recommendationEngine, 'estimateAvailableTitles').mockImplementation(async prefs =>
+      prefs.genres.includes('Comedy') ? 0 : 12
+    )
+    const getRecommendationsSpy = jest.spyOn(recommendationEngine, 'getRecommendations')
+
+    const response = await request(app).post('/recommendations').send({ description: 'Spanish series', region: 'US' })
+
+    expect(response.body.requiresClarification?.questions[0].options).toEqual([
+      'Gritty crime thrillers',
+      'Other (type your own)'
+    ])
+    expect(getRecommendationsSpy).not.toHaveBeenCalled()
+  })
+
+  it('skips clarification when no offered direction has results', async () => {
+    jest.spyOn(llmClient, 'isEnabled').mockReturnValue(false)
+    jest.spyOn(recommendationEngine, 'estimateAvailableTitles').mockResolvedValue(0)
+    const recs = Array.from({ length: 6 }, (_, index) => ({
+      id: `tt81000${index}`, title: `Series ${index}`, year: '2020', type: 'tv',
+      synopsis: 'A drama.', score: 7.5, scoringFactors: { composite: 0.6 }
+    }))
+    jest.spyOn(recommendationEngine, 'getRecommendations').mockResolvedValue(recs as any)
+
+    const response = await request(app).post('/recommendations').send({ description: 'Spanish series', region: 'US' })
+
+    expect(response.body.requiresClarification).toBeUndefined()
+    expect(response.body.recommendations).toHaveLength(6)
+  })
+
+  it('explains empty results and offers only validated ways to widen the search', async () => {
+    jest.spyOn(llmClient, 'isEnabled').mockReturnValue(false)
+    jest.spyOn(recommendationEngine, 'getRecommendations').mockResolvedValue([])
+    jest.spyOn(recommendationEngine, 'estimateAvailableTitles').mockImplementation(async prefs =>
+      prefs.originalLanguage ? 0 : 25
+    )
+
+    const response = await request(app)
+      .post('/recommendations')
+      .send({
+        description: 'Korean series',
+        region: 'US',
+        clarificationContext: {
+          clarificationRound: 1,
+          userClarification: 'westerns',
+          askedQuestionIds: [],
+          previousRecommendationIds: [],
+          cumulativeConstraints: [],
+          userTurns: ['Korean series', 'westerns']
+        }
+      })
+
+    expect(response.body.recommendations).toEqual([])
+    expect(response.body.requiresClarification.context).toBe("I couldn't find any Korean western series in the catalog.")
+    expect(response.body.requiresClarification.questions[0].options).toEqual([
+      'Show me western series in any language instead'
+    ])
+  })
+})
+
+describe('POST /recommendations structured request', () => {
+  const results: Recommendation[] = [
+    { id: 'tt1', title: 'Headshot', year: '2016', type: 'movie', score: 8, scoringFactors: { composite: 0.7 } },
+    { id: 'tt2', title: 'Photocopier', year: '2021', type: 'movie', score: 8, scoringFactors: { composite: 0.68 } }
+  ].map(item => ({
+    ...item,
+    type: 'movie',
+    synopsis: 'A strongly relevant recommendation.',
+    posterUrl: '',
+    scoringFactors: {
+      genreScore: 0.7, moodScore: 0.7, talentScore: 0.7,
+      ratingScore: 0.7, popularityScore: 0.7, recencyBoost: 0,
+      ...item.scoringFactors
+    }
+  }))
+
+  beforeEach(() => {
+    jest.spyOn(llmClient, 'isEnabled').mockReturnValue(true)
+    jest.spyOn(llmClient, 'generateResultsIntro').mockResolvedValue(null)
+    jest.spyOn(llmClient, 'generateConversationalClarification').mockResolvedValue(null)
+    jest.spyOn(recommendationEngine, 'estimateAvailableTitles').mockResolvedValue(undefined)
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  it.each([
+    { description: 'Indonesian horror films', spec: { countries: ['ID'], format: 'movie', genres: ['Horror'] } },
+    { description: 'Spanish-language crime shows', spec: { languages: ['es'], format: 'tv', genres: ['Crime'] } },
+    { description: 'comedy movies but no romance', spec: { format: 'movie', genres: ['Comedy'], excludeGenres: ['Romance'] } },
+    { description: 'German films about World War II', spec: { countries: ['DE'], format: 'movie', themes: ['world war ii'] } },
+    { description: 'horror movies released this month', spec: { format: 'movie', genres: ['Horror'], releasedWithinDays: 31 } }
+  ])('tries results before clarifying a concrete request: $description', async ({ description, spec }) => {
+    jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue({ operation: 'new', spec })
+    const engineSpy = jest.spyOn(recommendationEngine, 'getRecommendations').mockResolvedValue(results)
+
+    const response = await request(app).post('/recommendations').send({ description })
+
+    expect(response.status).toBe(200)
+    expect(response.body.requiresClarification).toBeUndefined()
+    expect(response.body.recommendations).toHaveLength(2)
+    expect(engineSpy).toHaveBeenCalledTimes(1)
+    expect(llmClient.generateConversationalClarification).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { description: 'Malaysian movies', spec: { countries: ['MY'], format: 'movie' } },
+    { description: 'something good to watch', spec: {} }
+  ])('still clarifies an undirected request: $description', async ({ description, spec }) => {
+    jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue({ operation: 'new', spec })
+    const engineSpy = jest.spyOn(recommendationEngine, 'getRecommendations').mockResolvedValue(results)
+
+    const response = await request(app).post('/recommendations').send({ description })
+
+    expect(response.body.requiresClarification.questions.length).toBeGreaterThan(0)
+    expect(engineSpy).not.toHaveBeenCalled()
+  })
+
+  it('offers widening when a concrete structured search has no results', async () => {
+    jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue({
+      operation: 'new',
+      spec: { countries: ['KR'], format: 'tv', genres: ['Western'] }
+    })
+    jest.spyOn(recommendationEngine, 'getRecommendations').mockResolvedValue([])
+
+    const response = await request(app).post('/recommendations').send({ description: 'Korean western series' })
+
+    expect(response.body.recommendations).toEqual([])
+    expect(response.body.requiresClarification.context).toContain("I couldn't find")
+    expect(response.body.spec.countries).toEqual(['KR'])
+  })
+
+  it('understands a follow-up against the previous request and returns the updated spec', async () => {
+    const parseSpy = jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue({
+      operation: 'add',
+      spec: { countries: ['MY', 'ID', 'ZZ'], format: 'movie' }
+    })
+    const engineSpy = jest.spyOn(recommendationEngine, 'getRecommendations').mockResolvedValue(results as any)
+
+    const response = await request(app)
+      .post('/recommendations')
+      .send({
+        description: 'Malaysian movies',
+        spec: { countries: ['MY'], format: 'movie' },
+        clarificationContext: {
+          clarificationRound: 1,
+          userClarification: 'What about Indonesian films too?',
+          userTurns: ['Malaysian movies', 'What about Indonesian films too?'],
+          previousRecommendationIds: ['tt9']
+        }
+      })
+
+    expect(response.status).toBe(200)
+    expect(parseSpy).toHaveBeenCalledWith(expect.objectContaining({
+      latestTurn: 'What about Indonesian films too?',
+      earlierTurns: ['Malaysian movies'],
+      previousSpec: expect.objectContaining({ countries: ['MY'] })
+    }))
+    expect(response.body.spec).toEqual(expect.objectContaining({ countries: ['MY', 'ID'], format: 'movie' }))
+    expect(response.body.turnOperation).toEqual(expect.objectContaining({ operation: 'widen' }))
+    expect(response.body.llmDiagnostics.stages).toContain('request understanding')
+    expect(engineSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: expect.objectContaining({ countries: ['MY', 'ID'] }),
+        previousSpec: expect.objectContaining({ countries: ['MY'] }),
+        specOperation: 'add'
+      }),
+      expect.any(Number), expect.anything(), expect.anything()
+    )
+  })
+
+  it.each([true, false])('preserves saved state and asks rather than applying an uncertain follow-up (LLM enabled: %s)', async enabled => {
+    jest.spyOn(llmClient, 'isEnabled').mockReturnValue(enabled)
+    jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue(null)
+    const engineSpy = jest.spyOn(recommendationEngine, 'getRecommendations').mockResolvedValue(results as any)
+
+    const response = await request(app)
+      .post('/recommendations')
+      .send({
+        description: 'Malaysian movies',
+        spec: { countries: ['MY'], format: 'movie' },
+        clarificationContext: { clarificationRound: 1, userClarification: 'only recent ones' }
+      })
+
+    expect(response.status).toBe(200)
+    expect(response.body.spec).toEqual(expect.objectContaining({ countries: ['MY'] }))
+    expect(response.body.requiresClarification.context).toContain('previous request unchanged')
+    expect(response.body.requiresClarification.questions[0].type).toBe('text')
+    expect(response.body.recommendations).toBeUndefined()
+    expect(response.body.llmDiagnostics.used).toBe(false)
+    expect(engineSpy).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    {},
+    { operation: 'refine', spec: {} },
+    { operation: 'refine', spec: { genres: ['Comedy'], format: 'movie' } },
+    { operation: 'refine', spec: { countries: [], genres: ['Comedy'], format: 'movie' } }
+  ])('does not apply unusable understanding: %j', async raw => {
+    jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue(raw)
+    const engineSpy = jest.spyOn(recommendationEngine, 'getRecommendations')
+    const response = await request(app).post('/recommendations').send({
+      description: 'Malaysian movies',
+      spec: { countries: ['MY'], format: 'movie' },
+      clarificationContext: { clarificationRound: 1, userClarification: 'heartwarming comedies' }
+    })
+    expect(response.body.spec.countries).toEqual(['MY'])
+    expect(response.body.requiresClarification.questions[0].id).toBe('request_update_retry')
+    expect(engineSpy).not.toHaveBeenCalled()
+  })
+
+  it('allows explicit constraint removal without restoring the old country', async () => {
+    jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue({
+      operation: 'remove', spec: { countries: [], format: 'movie', genres: ['Comedy'] }
+    })
+    const engineSpy = jest.spyOn(recommendationEngine, 'getRecommendations').mockResolvedValue(results)
+    const response = await request(app).post('/recommendations').send({
+      description: 'Malaysian comedy movies',
+      spec: { countries: ['MY'], format: 'movie', genres: ['Comedy'] },
+      clarificationContext: { clarificationRound: 1, userClarification: 'any country is fine' }
+    })
+    expect(response.body.spec.countries).toEqual([])
+    expect(response.body.requiresClarification).toBeUndefined()
+    expect(engineSpy).toHaveBeenCalledWith(expect.objectContaining({
+      specOperation: 'remove', spec: expect.objectContaining({ countries: [] })
+    }), expect.any(Number), expect.anything(), expect.anything())
+  })
+
+  it('retains first-request rule fallback when understanding is unusable', async () => {
+    jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue({})
+    const engineSpy = jest.spyOn(recommendationEngine, 'getRecommendations').mockResolvedValue(results)
+    const response = await request(app).post('/recommendations').send({ description: 'gritty crime thrillers' })
+    expect(response.status).toBe(200)
+    expect(response.body.spec).toBeUndefined()
+    expect(engineSpy).toHaveBeenCalled()
+  })
+
+  it('does not describe unverifiable release dates as certain catalogue absence', async () => {
+    jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue({
+      operation: 'new', spec: { format: 'movie', releasedWithinDays: 31 }
+    })
+    jest.spyOn(recommendationEngine, 'getRecommendations').mockImplementation(async (_req, _limit, _llm, diagnostics) => {
+      if (diagnostics) diagnostics.missingReleaseDates = 4
+      return []
+    })
+    const response = await request(app).post('/recommendations').send({ description: 'movies released this month' })
+    expect(response.body.retrievalDiagnostics.missingReleaseDates).toBe(4)
+    expect(response.body.requiresClarification.context).toContain("couldn't verify their release dates")
+    expect(response.body.requiresClarification.context).not.toContain('in the catalog')
   })
 })

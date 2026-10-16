@@ -1,5 +1,5 @@
 type ButtonVariant = 'primary' | 'secondary' | 'subtle' | 'ghost' | 'chip' | 'link'
-type ButtonSize = 'xs' | 'sm' | 'md' | 'lg' | 'icon' | 'icon-sm'
+type ButtonSize = 'xs' | 'sm' | 'md' | 'lg' | 'icon' | 'icon-sm' | 'switch'
 
 const baseButtonClass = [
   'inline-flex items-center justify-center rounded-pill',
@@ -15,7 +15,8 @@ const sizeClasses: Record<ButtonSize, string> = {
   md: 'h-10 px-4 text-sm',
   lg: 'h-11 px-6 text-sm font-semibold',
   icon: 'h-10 w-10 p-0',
-  'icon-sm': 'h-8 w-8 p-0'
+  'icon-sm': 'h-8 w-8 p-0',
+  switch: 'h-10 w-[72px] p-0'
 }
 
 const variantClasses: Record<ButtonVariant, string> = {

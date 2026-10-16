@@ -1,350 +1,187 @@
-# Progress – Granular Task List
+# Verification ledger and general backlog
 
-## Clarification Option UX (October 13, 2026)
+Status: current evidence owner. Updated: October 16, 2026.
+Implementation checklists belong to [feature tasks](tasks-conversational-engine.md).
+Original detailed checklists remain in the [historical snapshot](archive/2026-10-16/progress.md).
 
-- Options sit outside, below the assistant question bubble and reuse the shared pill radius with auto-height multiline labels and a 44px minimum target.
-- Message-scoped clarification responses keep answered choices disabled permanently. Selected options receive a quiet outline and accessible selected label; free-text replies resolve the group without marking a choice.
-- A synchronous submission guard blocks repeat clicks. Retry does not duplicate the user reply, and cancellation does not reactivate answered choices.
-- Verification: frontend build/lint and editor diagnostics pass. Browser checks at 390px/1440px in dark/light themes cover wrapping, selection, free-text replies, new rounds, simulated failure/retry, cancellation, and confirmed conversation reset. Browser request mocks were removed afterward.
+## Latest verification
 
-## Overall Status
+| Date | Scope | Evidence | Result and boundary |
+|---|---|---|---|
+| October 16, reliability slice | Local backend usable-spec/saved-state and final-candidate gates | `npm --prefix backend test -- --runInBand`; `npm --prefix backend run build`; `npm --prefix backend run lint` | 410/410 tests across 11 suites, build/lint passed. Existing Jest open-handles warning remains. Mocked/local evidence only; no fresh live quality, browser or deployment certification. |
+| October 16, earlier | Local backend, after final candidate-reuse fix | `npm test -- --runInBand`; `npm run lint`; `npm run build` in backend | 375/375 tests, lint and build passed. Superseded locally by the reliability slice below, not by a fresh live-quality evaluation. |
+| Before latest backend-only follow-up | Frontend | Earlier build/lint and browser checks in historical snapshots | No fresh verification of the current dirty frontend worktree; do not infer parity from backend results. |
+| October 16 | Documentation reconciliation | Local-link/fence and documentation diff checks | Passed on the pre-migration docs. No application tests or provider calls made for that refresh. |
 
-**Updated:** October 13, 2026
+Documentation-migration verification is recorded separately below; it must not
+change the date/scope of application or provider verification.
 
-- Backend and frontend production builds and lints pass.
-- Backend Jest: 201/201 passing; backend build and lint verified October 13, 2026. Frontend build and lint also pass.
-- Plain language queries & conversational clarification:
-  - Added award and prestige keywords (`oscar`, `academy award`, `bafta`, `palme d'or`) to `CRITICS_KEYWORDS`.
-  - Added calendar and seasonal date window resolution (`this summer`, `last summer`) mapping to `releaseDateRange` (e.g. `2026-05-01` to `2026-08-31`) and seasonal constraints.
-  - Extended TMDB discover to accept `releaseDateGte` and `releaseDateLte` parameters for seasonal release queries.
-  - Filtered broad category/temporal words from literal title keyword queries in `extractSearchTerms` to prevent matching movies titled "Oscar" or "Summer".
-  - Extended LLM prompt with awards and prestige catalog search seeds in `referenceSuggestions`, validated against TMDB/OMDb catalog.
-  - Added conversational clarification generation via `llmClient.generateConversationalClarification()`, turning rigid system menus into friendly film-advisor prompts with context-tailored options.
-  - Updated fallback disambiguation templates to replace internal developer routing phrases ("Go mood-first", "Go title-similarity first") with natural phrasing.
-  - Implemented Results-First gating for unambiguous cultural and blockbuster requests, delivering recommendations directly without false disambiguation traps.
-- Creator discovery: unqualified "films by NAME" selects verified directing credits first, then other verified creator credits if needed. Explicit roles are exact; creator evidence is kept separate from acting credits and preserved through deduplication/hydration. Compatible refinements retain creators, new creator anchors replace them, and hard pivots clear them.
-- Live Cameron query verified four directing matches with separate real cast metadata. Deterministic credit wording prevents producer-only fallbacks being described as directed films. Browser/server-endpoint interaction remains untested for this change.
-- GitHub Models retirement diagnosed from official documentation and DNS failure. Client migrated to configurable OpenAI-compatible providers. Live Gemini parsing and explanation generation pass `npm --prefix backend run check:llm` using `gemini-3.5-flash-lite`; the older 2.5 Flash-Lite setting returned 404. Restart the existing backend to load the corrected model before browser testing.
-- Follow-up requests preserve user-turn history, reset accumulated constraints after hard pivots, and place active actor matches before supplemental results across intent modes.
-- Contrastive reference retrieval searches a prioritized 16-keyword concept set; whole-word matching, catalog support, and conflict signals prevent related-title and broad-genre bypasses. Concept scoring now recognizes direct time dilation, constructed reality, psychological speculation, and fate/agency evidence.
-- Indie-gem discovery treats Indie as a soft pseudo-genre, searches separate quality-filtered keyword groups, prioritizes catalog-validated title seeds, defaults to movies unless TV is explicit, and only rewards low popularity when rating support is credible.
-- Relaxing reference scoring now discounts incidental calm phrases when paired with stakes/urgency cues, distinguishes moderate stakes from severe peril/survival/violence, and filters explicit countdown-plus-threat plots.
-- The exact relaxing Inception prompt now removes Kill ’em All 2, Chaos Walking, Alive, The Matrix Reloaded, Do I Sound Gay?, Planet of the Apes, and The Saint from the current-source live list while retaining stronger concept matches.
-- Latest live audit (one variable upstream run): Pleasantville, The Martian, Arrival, Eternal Sunshine, Project Hail Mary, and Solaris ranked in the top six; Truman Show ranked ninth and Hoppers was excluded. Interstellar and The Man from Earth remain lower when the catalog synopsis lacks specific time/mind evidence.
-- Latest `Surprising indie gems` audit returned A Ghost Story, Sorry to Bother You, The One I Love, The Vast of Night, and The Station Agent in its top six; remaining results varied across runs and included some broader catalog fits.
-- Latest repository updates include the TMDB `adult`-flag safety filter and a `ts-jest` security update to `29.4.12`.
-- Detailed age/certification enforcement is not implemented by the current TMDB safety filter; see the safety checklist below.
-- [x] Development tokens referenced in historical notes were rotated (confirmed October 2, 2026).
+## Evaluation record
 
-- [x] Phase 1 complete: frontend/backend skeleton and API wiring
-- [x] Phase 2 complete: OMDb catalog integration and safety filters
-- [x] Phase 3 complete: GitHub Models integration with fallback
-- [x] Phase 4 complete: availability, trailers, loading/error states, accessibility work
-- [x] Phase 5 complete: Intent classification, conversational UI, multi-turn clarification
-- [x] Phase 6 complete: End-to-end testing, API integration validation
-- [x] Recommendation-quality refinement complete: dynamic clarification, anchor suppression, and reference-flow ranking improvements
-- [x] Active preference continuity added with hard-pivot reset and actor-first result ordering across intent modes
-- [x] Director-first creator queries implemented with role-aware TMDB lookup, explicit-role filtering, verified fallback credits, and parser/client/integration regressions
-- [x] Follow-up reliability improvements shipped: deterministic blockbuster paging + TV-drift fix for "show me more"
-- [x] Genre intent parsing generalized (aliases/plurals/hyphenated forms)
-- [x] Meta-steering prompt removed from UX
-- [x] Refinement suggestion chips removed from UX
-- [x] Transparency policy implemented for critics-style requests (proxy explanation + unsupported-source guardrail)
-- [x] Editorial details panel redesign iteration complete (hero narrative, metadata rail, motion, and typography pass)
-- [x] Shared button/link style utility pass complete across primary frontend interaction surfaces
-- [x] Memory-bank status and design references aligned with current implementation
-- [x] Frontend/backend lint configured and enforced in CI
-- [ ] TMDB configured locally for trailer verification
+| Run | Cases passing | Hard checks | Genre checks | Tone checks | Clarification | Follow-up cases | p50 / p90 |
+|---|---:|---:|---:|---:|---:|---:|---|
+| October 15 baseline, 52 cases | 69% | 91% | 89% | 92% | 62% | 85% | 4.8 s / 11.2 s |
+| October 16 phase2b, 52 cases | 65% | 96% | 84% | 77% | 62% | 77% | 12.8 s / 26.8 s |
+| October 16 phase2c, 52 cases | 79% | 93% | 97% | 85% | 90% | 69% | 24.9 s / 41.3 s |
 
----
+All three ended with non-empty final lists, sometimes after automatically
+answering clarification/widening options. This does not prove that the original
+request always returns matches. Checks are proxies, not a semantic judge or a
+pure intent-understanding measurement. Baseline concurrency was 2; October 16
+full runs used 1. Initial clarification fell from 40% baseline to 13% in phase2c.
 
-## Phase 1 – Skeleton MVP
+Reports in `backend/eval/reports/` (local evidence, not required documentation links):
 
-- [x] React + TypeScript + Vite frontend initialized
-- [x] Node.js + TypeScript + Express backend initialized
-- [x] Home page with free-text input and optional preferences panel
-- [x] Results page shell implemented
-- [x] `POST /recommendations` endpoint wired to frontend
-- [x] Frontend proxy configured for local development
+- `baseline-2026-10-15.json`: baseline in the uncommitted worktree.
+- `2026-10-15T13-33-39-549Z-phase2.json`: earlier 60% pass run, contaminated
+  by 429s and fallback; not a reliable quality comparison.
+- `2026-10-16T09-32-52-596Z-phase2b.json`: two understanding timeouts, no 429s.
+- `2026-10-16T10-07-37-543Z-phase2c.json`: 22 understanding failures/73 turns;
+  20 timeout and 8 HTTP 503 errors across LLM stages, no 429s.
+- `2026-10-16T10-12-17-864Z-phase2d-followups.json`: 1/2 cases pass after the
+  candidate-reuse fix. 90s sci-fi passes; French follow-up encountered 503/429
+  and fell back.
 
----
+Only baseline reports are eligible for version control; other runs are
+ignored local files. These summaries persist independently of those files.
+No full live evaluation covers the final reuse fix. The provider has not been
+rechecked since the final 503/429; quota reset and continuing health are unknown.
+Quality/latency acceptance remains open. Run instructions and harness limitations
+belong to the [backend README](../backend/README.md) and [design](design-conversational-engine.md).
 
-## Phase 2 – Catalog Integration
+## General backlog
 
-### Catalog
-- [x] Evaluate catalog options and move from FM-DB plan to OMDb implementation
-- [x] Implement OMDb client in `backend/src/clients/fmdb.ts`
-- [x] Search titles by query and type
-- [x] Fetch title details by IMDb ID
-- [x] Convert OMDb payloads into internal recommendation format
-- [x] Handle timeouts and upstream failures gracefully
+These are carried-forward open items, not new acceptance claims. Engine work
+is tracked separately in feature tasks; do not maintain duplicate checklists.
 
-### Recommendation Engine
-- [x] Implement rule-based preference parser
-- [x] Extract search terms from user description
-- [x] Search OMDb across multiple candidate terms
-- [x] Deduplicate by IMDb ID
-- [x] Rank results by genre fit and IMDb rating
-- [x] Return dynamic recommendations instead of mock-only data
+- Detailed certification/max-rating enforcement and consistent final safety
+  checks across recommendations, references, highlights and details. Existing
+  rating-label blocks help only when metadata is present; see
+  [current safety boundaries](systemPatterns.md#validation-and-safety-pattern).
+- Spoiler-safe synopsis helpers are not fully wired into the response guarantee.
+- Automated critics-proxy/unsupported-source and interpretation-note regressions.
+- Automated highlight-details route and frontend cache/fallback coverage.
+- Browser cache freshness, country-aware availability keys and retry after
+  failed enrichment; session-cached empty/fallback values currently outlive
+  backend TTLs. See [frontend behaviour](../frontend/README.md#state-and-lazy-enrichment).
+- Runtime request-shape validation (beyond empty/minimum-length checks) and a
+  production-configurable, reliable OMDb fallback; fixed testing configuration
+  is not a production availability guarantee.
+- Full multi-turn browser/deployed smoke pass and conversational-naturalness
+  checks after recent engine changes, plus an accessibility audit.
+- UI visual/interaction regressions: clarification states, shared button
+  variants across themes, highlight hover lift/edge clipping, and details panels.
+- Reassess metadata-rail density; consider a typed shared Button component only
+  if useful, not as an incidental refactor.
+- Earlier trailer/availability paths were exercised, but local configuration
+  and end-to-end deployment coverage must be checked when working on them;
+  old unchecked TMDB setup items are not silently marked done.
+- Superseded setup summaries were reconciled; future changes must update their
+  owners. Legacy snapshots remain historical rather than endlessly refreshed.
+- Accounts, long-term profiles and watchlists remain outside current scope.
+  Broader future features require their own product decision.
+- Recommendation-review skill implementation/validation exists; its recorded
+  final sign-off remains pending in [review tasks](recommendation-review-skill/tasks.md).
 
-### Content Safety
-- [x] Filter titles marked adult by TMDB
-- [ ] Enforce unrated / X / NC-17 / TV-MA exclusions using detailed certification data
-- [x] Log filtering behavior for debugging
+## Documentation migration
 
----
+Scope: workspace documentation, agent context routing and a dependency-free
+documentation checker only; no application changes or live provider calls.
+Preservation evidence: [snapshot manifest and recovery map](archive/2026-10-16/README.md).
 
-## Phase 3 – LLM Integration
+October 16 local verification:
 
-### GitHub Models
-- [x] Add GitHub Models client using `gpt-4o-mini`
-- [x] Parse natural-language preferences with LLM enhancement
-- [x] Add batch explanation generation
-- [x] Add in-memory caching for LLM outputs
-- [x] Fall back to rule-based parsing and template explanations when LLM is unavailable
+- `npm --prefix backend run test:docs`: 13/13 tests pass, including broken
+  links/fences, missing owners/status, tampered/missing snapshots and context
+  budget warnings. Tests create and remove isolated temporary fixtures.
+- `npm --prefix backend run check:docs`: 31 Markdown documents checked, all six
+  original snapshot hashes match; no errors or budget warnings.
+- Default entry set at migration completion (workspace instructions, index,
+  rules, handoff): 1,382
+  whitespace-delimited words, versus the former 20,368-word root-memory read-all
+  set (about 93% less startup text, before task-specific loading).
+  Active context is 557 words, down from 3,920.
+- Scoped `git diff --check` passes. Existing unrelated application/frontend
+  edits remain untouched; no commit or fresh application/provider certification.
+- [CI](../.github/workflows/ci.yml) now runs checker tests and the documentation
+  audit in a dependency-free Node 20 job on push/pull request. The job is
+  configured, not claimed to have run on GitHub.
 
-### Notes
-- [x] Use GitHub Models instead of OpenAI as the active integration
-- [x] Keep spoiler-safe synopsis generation implemented but not required for v1
+Checks cover simple local inline links (historical snapshot links use original
+source paths), fence balance, current memory-owner discoverability and status,
+snapshot bytes and soft context budgets. They do not prove prose truth, external
+URL/heading validity, complete Markdown/YAML syntax or application/provider
+health. Current owners must be reachable without traversing archived documents.
 
----
+## Code/documentation cross-check
 
-## Phase 4 – Availability & Polish
+Historical findings at review time; the later reliability slice below resolves
+some gaps, without claiming the entire backlog is fixed.
 
-### Availability
-- [x] Evaluate availability providers
-- [x] Select Streaming Availability API via RapidAPI
-- [x] Implement streaming client in `backend/src/clients/streaming.ts`
-- [x] Fix integration to use `GET /shows/{imdbId}`
-- [x] Parse `streamingOptions.<country>[]` into platform/type/link objects
-- [x] Pass region from request into availability lookup
-- [x] Verify live availability data returned from backend
+October 16, after the structure migration: static source/test review of
+recommendation routes, structured spec/parser, retrieval/ranking, LLM/TMDB/OMDb/
+streaming clients, frontend submission/state/details/cache, evaluation scoring,
+package/CI configuration and archived open-item lists.
 
-### Trailer Support
-- [x] Extend TMDB client to fetch trailers by IMDb ID
-- [x] Add trailer URLs to recommendation responses when available
-- [x] Implement frontend trailer modal
-- [ ] Configure `TMDB_API_KEY` locally and verify trailer flow end-to-end
+| Classification | Discrepancy and disposition | Authoritative owner / source evidence |
+|---|---|---|
+| Inaccurate | Availability was described as recommendation-time batch work; it is lazy, details-triggered work. Corrected architecture and documented the previously missing HTTP endpoints. | [Backend API guide](../backend/README.md#api-endpoints), [engine](../backend/src/engine/recommendationEngine.ts), [details UI](../frontend/src/pages/ResultsPage.tsx) |
+| Inaccurate | Validation was overstated as malformed-spec rejection and full request-shape validation. Sanitisation can accept empty/incomplete objects; continuity work now includes this gap. | [Engine design](design-conversational-engine.md), [validator and tests](../backend/src/engine/__tests__/requestSpec.test.ts), [route](../backend/src/index.ts) |
+| Missing | Exact release-date/format enforcement, fallback route/engine divergence and historical constraint-tag limitations were not explicit. Added implementation boundaries and open tasks, not application fixes. | [Engine design](design-conversational-engine.md#enforcement-and-turn-boundary-gaps-source-cross-check-october-16), [engine](../backend/src/engine/recommendationEngine.ts), [parser](../backend/src/engine/preferenceParser.ts) |
+| Inaccurate | Safety summaries hid metadata-dependent label blocking and lack of per-user rating/final-path enforcement. Corrected without claiming a comprehensive safety certification. | [Safety boundaries](systemPatterns.md#validation-and-safety-pattern), [candidate conversion/filtering](../backend/src/engine/recommendationEngine.ts) |
+| Missing | Critic-source checking uses the original query; follow-up consent can loop or be missed. Assistant question/prior-reply context is absent from understanding/intro calls. Tracked as unfinished work. | [Feature tasks](tasks-conversational-engine.md), [route](../backend/src/index.ts), [LLM calls](../backend/src/clients/llm.ts) |
+| Missing | Session-cache failure/region behaviour and local visual controls were absent from current guidance; OMDb's legacy keyless description was misleading. Documented actual behaviour and reliability caveats. | [Frontend guide](../frontend/README.md), [technical context](techContext.md), [OMDb client](../backend/src/clients/fmdb.ts) |
+| Inaccurate | Evaluation pass labels concealed permissive per-title thresholds; some references implied undated lint success or deployment. Added scoring tolerances and separated local implementation from dated verification/deployment. | [Evaluation design](design-conversational-engine.md#evaluation-harness-backendeval), [runner](../backend/eval/run.ts), latest verification above |
+| Historical-only / intentionally omitted | Archived unchecked tasks were accounted for in current feature/general backlogs; detailed tuning constants, old UI iterations and dated diagnoses remain in snapshots/source rather than the startup handoff. No additional lost open item identified in the inspected lists. | [Recovery map](archive/2026-10-16/README.md), [feature tasks](tasks-conversational-engine.md), general backlog above |
 
-### UX and Validation
-- [x] Support description-only flow
-- [x] Support preferences-only flow
-- [x] Reject empty requests with no description and no preferences
-- [x] Reject descriptions shorter than 3 characters when provided
-- [x] Infer region from browser locale in frontend
-- [x] Render availability deep-links in new tabs
-- [x] Show explicit "Availability info not available." fallback text
-- [x] Add loading and error states on home page
+The source review found inaccurate/missing current guidance, not lost snapshot
+bytes. Static evidence is not a fresh behavioural test: existing tests cover
+normalisation, spec round-trip, fallback retaining the prior spec, option
+pruning, request-local genre notes and fresh retrieval on a year refinement.
+They do not establish the newly listed end-to-end guarantees. No application
+tests, live providers, browser journeys or deployed configuration were exercised
+for this cross-check; neither every source line nor every historical claim was
+exhaustively revalidated. Application changes and immutable snapshots were left
+untouched.
 
-### Accessibility and UI
-- [x] Improve ARIA labeling across interactive controls
-- [x] Add keyboard support for trailer modal
-- [x] Add focus styling and semantic structure on results page
-- [x] Keep responsive layout working on desktop and mobile
+Post-audit validation: `npm --prefix backend run check:docs` passed across 31
+documents and all six unchanged snapshots; `npm --prefix backend run test:docs`
+passed 13/13. Scoped `git diff --check` passed. The tracked application-source
+diff fingerprint matched before/after the audit. Default startup text is now
+1,412 words, including a link to this review; the handoff is 587 words.
 
----
+## Reliability implementation slice
 
-## Current Verification (October 3, 2026)
+October 16, after the cross-check. User authorised implementation with caution
+about Gemini quota; **no Gemini/provider probes or live evaluations were made**.
 
-- [x] Backend `npm run build` passes, including explicit `.js` import checks.
-- [x] Frontend `npm run build` passes.
-- [x] Frontend and backend `npm run lint` checks pass.
-- [x] Backend Jest suite passes cleanly (169/169).
-- [x] GitHub Actions runs frontend lint/build and backend lint/build/test on pushes and pull requests.
-- [x] Frontend Browserslist data refreshed; frontend build passes without the stale-data warning.
+- `assessSpecTurn` rejects unusable raw updates before normalisation can
+  replace state: invalid shapes/operation, empty search direction, omitted
+  populated saved fields and implicit hard-constraint loosening on refine/add.
+  Explicit remove/replace/pivot remain available. Reason-level warnings are
+  emitted; complete per-field rejection diagnostics remain open.
+- Failed/unusable understanding on a saved-spec follow-up returns unchanged
+  state and an explicit text clarification without engine retrieval or a second
+  legacy LLM parse. First-request/legacy rule fallback remains. This trades
+  availability of offline refinements for honest state preservation; it does
+  not claim to have applied the failed turn.
+- Exact release/first-air dates are retained or hydrated through cached TMDB
+  details for date-bound candidates. A common gate applies date, format, year,
+  origin, known language and exclusions before ranking and after final detail
+  enrichment. Missing dates are excluded, counted per request and explained
+  without claiming there are certainly no catalogue matches.
+- Added local regressions cover state failure/disabled provider, malformed
+  updates, explicit removal/replacement/pivot, inclusive date bounds, missing
+  evidence, old-result reuse, filmographies, critics-year retrieval, final
+  enrichment changes, TV dates and unchanged no-window behaviour. Existing
+  ranking-only fixtures now include movie type required by the new gate.
+- Validation: backend 410/410 tests, lint/build passed; documentation tests
+  13/13, audit passed over 31 documents and six unchanged snapshots, scoped
+  whitespace checks passed. Default entry set is 1,467 words; active context
+  642 words. No frontend source, credentials, dependencies or archives changed.
 
-## Previously Verified Behavior
-
-- [x] Backend build passes
-- [x] Frontend build passes
-- [x] Backend returns localized availability data for supported titles
-- [x] Frontend can render availability links and fallback messaging
-- [x] Frontend and backend lint scripts pass with compatible TypeScript-ESLint versions.
-- [x] Critics-style query now returns explicit interpretation note when using proxy signals
-- [x] Explicit Rotten Tomatoes / Metacritic requests now trigger clarification instead of fabricated source coverage
-
----
-
-## Phase 5 – Conversational UI & Intent Classification
-
-### Backend Intent Classification
-- [x] Add IntentSignals and IntentClassification types to preferenceParser
-- [x] Implement intent classification with 4 modes: mood | reference | talent | mixed
-- [x] Extract actors from "with X", "starring X", "cast: X" patterns
-- [x] Implement DiscoveryMode-specific ranking weights in RankingScorer
-- [x] Add mood-aware weights (mood: 40%), reference-aware weights (talent: 35%), talent-aware weights (talent: 55%)
-- [x] Implement needsClarification() with confidence threshold 0.65
-- [x] Generate 3 clarification question patterns for ambiguous queries
-- [x] Prevent redundant clarification loops with asked-question tracking and max-turn caps
-
-### Frontend Conversational UI
-- [x] Create useConversation hook with message state and round tracking
-- [x] Create ConversationalHome component with chat thread and input composer
-- [x] Render user/assistant message bubbles with intent metadata display
-- [x] Implement clarification question UI with select/text/boolean options
-- [x] Update App.tsx to handle clarificationContext in API requests
-- [x] Support multi-turn flow: user query → clarification (if needed) → refined results
-- [x] Add loading indicators and error handling
-- [x] Show examples on empty state
-
-### API Contract Extensions
-- [x] Add optional clarificationContext to RecommendationRequest
-- [x] Include requiresClarification with questions array in response
-- [x] Include detectedIntent (mode + confidence) in all responses
-- [x] Maintain backward compatibility with old API format
-
-### Files Created/Modified
-- [x] `/backend/src/engine/preferenceParser.ts` - Intent classification and clarification logic
-- [x] `/backend/src/engine/rankingScorer.ts` - Mode-specific ranking weights
-- [x] `/backend/src/index.ts` - Clarification gating before search
-- [x] `/frontend/src/hooks/useConversation.ts` - State management hook
-- [x] `/frontend/src/pages/ConversationalHome.tsx` - Chat UI component
-- [x] `/frontend/src/pages/ConversationalHome.css` - Styling
-- [x] `/frontend/src/App.tsx` - Component integration and API flow
-
----
-
-## Phase 6 – Testing & Rollout Hardening
-
-### End-to-End Tests
-- [x] Create `test-phase5-conversation-e2e.ts` with 10 comprehensive test cases
-- [x] Test 1: High-confidence mood queries → immediate results
-- [x] Test 2: Talent-focused queries with actor extraction
-- [x] Test 3: Reference-focused queries with title matching
-- [x] Test 4: Ambiguous queries → clarification questions
-- [x] Test 5: Multi-turn flow (ambiguous → clarification → refined results)
-- [x] Test 6: Intent metadata always included in response
-- [x] Test 7: Recommendations include required fields (imdbId, title, plot, rating)
-- [x] Test 8: Talent mode applied for actor-specific queries
-- [x] Test 9: Backward compatibility with old API format
-- [x] Test 10: Clarification loop prevention behavior covered
-
-### Integration Tests
-- [x] Create `src/engine/__tests__/intentClassification.test.ts` with Jest tests
-- [x] Test intent classification accuracy for 4 modes
-- [x] Test actor extraction from multiple patterns
-- [x] Test confidence scoring and thresholds
-- [x] Test clarification question generation and types
-- [x] Test suite compiles and runs without errors
-
----
-
-## Recommendation Quality & Clarification Refinement
-
-### Backend Recommendation Quality
-- [x] Remove static mock recommendation fallback from production responses
-- [x] Suppress explicitly mentioned anchor titles by default for reference-style prompts
-- [x] Reuse reference-title genres earlier in recommendation retrieval and ranking
-- [x] Reduce broad-genre drift for reference flows like "Like Inception but more relaxing"
-- [x] Strengthen pace and mood contrast parsing for calming/slower refinements
-- [x] Add weak-result quality gates before finalizing recommendations
-
-### Dynamic Clarification Flow
-- [x] Track asked clarification IDs in request/response flow
-- [x] Auto-submit clarification options in the conversational UI
-- [x] Auto-submit empty-state example prompts for faster flow testing
-- [x] Replace stage-based weak-match questioning with unresolved-dimension selection
-- [x] Allow one freeform clarification to satisfy multiple latent questions
-- [x] Finalize immediately when enough context has been gathered
-- [x] Cap clarification turns to avoid procedural loops
-
-### Verification at Phase 6 Completion (Historical)
-- [x] Route-level tests updated for dynamic clarification behavior
-- [x] Integration regression added for relaxing-reference ranking behavior
-- [x] Backend Jest suite passing (87/87)
-- [x] Backend `npm run build` passing
-- [x] Frontend `npm run build` passing
-- [x] Changes committed and pushed to `origin/main` (`c3b590e`)
-
-## Post-Phase Hardening (May 2026)
-
-### Retrieval, Parsing, and Metadata
-- [x] TMDB enrichment for runtime, genres, language, cast, and director metadata
-- [x] TMDB IMDb-ID mapping and credits retrieval for richer result cards
-- [x] Deterministic blockbuster pagination via `blockbuster_page`
-- [x] Removed false TV intent trigger from generic "show/show me more" wording
-- [x] Added generalized genre alias parsing (`scifi`, `romcom`, plural/hyphenated variants)
-
-### Editorial UI and Explanation Quality
-- [x] Removed generic highlight fallback rationale text from details panel.
-- [x] Added highlight detail parity behavior so rationale appears only when meaningful detail data exists.
-- [x] Tightened LLM explanation prompts for concise knowledgeable-friend style with British-English leaning wording.
-- [x] Updated template fallback explanation generation to shorter conversational rationale style.
-- [x] Refined details panel to editorial composition with stronger hierarchy and reduced chrome.
-- [x] Tested multiple synopsis/metadata layout permutations and selected asymmetrical narrative + metadata side-rail variant.
-- [x] Converted metadata block to quieter, lower-contrast, list-friendly presentation.
-- [x] Added panel open/close motion (backdrop fade + right slide) with 300ms ease-out timing and reduced-motion fallback.
-- [x] Added responsive panel width behavior to preserve 50:50 intent while improving mid-desktop readability.
-
-### UX Simplification
-- [x] Removed meta-steering "stay close / broaden" prompt and state tracking
-- [x] Removed results-page refinement suggestion chips
-- [x] Shifted all follow-up refinement to freeform user input
-
-### Honesty / Transparency
-- [x] Added critics-intent detection and explicit `ranking:critic_proxy` constraint
-- [x] Added interpretation note for critics-proxy mode (TMDB/IMDb rating + votes)
-- [x] Added unsupported-source guardrail for explicit Rotten Tomatoes / Metacritic / Letterboxd requests
-- [x] Added frontend display for interpretation note (chat + results panel)
-
-### Quality Safeguards
-- [x] Added critics-year retrieval path and quality floor (rating/votes)
-- [x] Added critics-mode ordering by rating then vote count
-- [x] Fixed literal `"null"` explanation leakage with deterministic fallback
-
-### Build Verification
-- [x] Backend `npm run build` passes
-- [x] Frontend `npm run build` passes
-- [x] No TypeScript errors in test files
-- [x] No lint violations
-
-### Editorial Panel and Highlights Enrichment (May 24, 2026)
-- [x] Unified details panel interaction for both recommendation cards and default highlight tiles
-- [x] Moved details panel navigation to top row with lightweight link-style Previous/Next controls
-- [x] Reduced panel metadata redundancy by removing duplicate quality line under poster block
-- [x] Added hover/focus affordances for highlight tiles and recommendation cards while preserving editorial baseline chrome
-- [x] Added backend route `GET /highlights/:type/:id` for enriched highlight metadata
-- [x] Added frontend on-demand fetch + cache for highlight details in panel view
-- [x] Highlight panel now supports synopsis, cast/director, genres/language, runtime/rating, and trailer data when available
-
-### UI Consistency and Reuse (May 24, 2026)
-- [x] Added `frontend/src/buttonStyles.ts` as shared interaction-style utility module
-- [x] Standardized button variants and sizes for header, conversational controls, results actions, and home preference controls
-- [x] Converted icon controls and utility actions to consistent focus-visible ring and disabled-state treatment
-- [x] Added shared `inlineLinkClass` and applied to interactive result links for anchor/button parity
-- [x] Verified frontend `npm run build` passes after migration
-
-### UI Follow-up Fixes (May 24, 2026)
-- [x] Replaced right-panel border divider with centered grid-gap divider (`.editorial-main::after`) to remove visual split imbalance
-- [x] Converted recommendation-card actions (`More details`, `View trailer`) to inline-action controls with no pill padding/height inheritance
-- [x] Converted details-panel `Previous` / `Next` controls to inline-action styling while preserving semantic buttons
-- [x] Fixed hover-state class reliability by replacing unsupported slash-opacity token classes on CSS-variable colors
-- [x] Restored subtle hover treatment to match app-wide visual language after hover-state bug fix
-- [x] Restored highlight poster tile hover lift by moving elevation to an unclipped wrapper
-- [x] Tuned tile hover lift/shadow to increase visibility without reintroducing left/right clipping
-
-### Caching and Panel Rhythm Follow-up (May 24, 2026)
-- [x] Added streaming availability TTL cache layer in `backend/src/clients/streaming.ts` with status-aware negative caching for `rate_limited` and `error` cases
-- [x] Added TMDB TTL caches in `backend/src/clients/tmdb.ts` for detail/credits/videos/external IDs/IMDb mapping/person lookup/person credits/trailer paths
-- [x] Added OMDb/FMDb TTL caches in `backend/src/clients/fmdb.ts` for search and detail requests
-- [x] Persisted frontend `highlightDetailsCache` to sessionStorage in `frontend/src/pages/ResultsPage.tsx`
-- [x] Simplified details-panel media actions to a single wrapping button row without a separate heading label
-- [x] Applied 8/16/24 vertical spacing rhythm updates across details panel sections
-- [x] Unified details-panel micro-label typography and extracted reusable label class constants to prevent style drift
-- [x] Verified backend and frontend builds pass after caching + panel rhythm updates
-
----
-
-## Open Follow-Ups
-
-- [ ] Refresh setup and summary docs that still mention legacy provider assumptions
-- [ ] Add automated regression tests for critics-intent transparency and unsupported-source guardrail
-- [ ] Add automated regression tests for `GET /highlights/:type/:id` and highlight details caching/fallback behavior
-- [ ] Add targeted UI regression coverage for shared `buttonStyles` variants across light/dark themes and key interactive states
-- [ ] Add targeted visual regression coverage for highlight tile hover-lift states (including edge-column clipping checks)
-- [x] Development tokens referenced in historical notes were rotated (confirmed October 2, 2026).
-- [ ] Consider backend pipeline optimization or refactoring if performance becomes an issue
-- [ ] Test full multi-turn flow end-to-end with live API and browser snapshots
-- [ ] Run accessibility audit on new conversational UI
-- [ ] Run live smoke tests focused on conversational naturalness and dynamic follow-up heuristics
-- [ ] Plan v2 features if any (spoiler handling, user accounts, advanced filtering, etc.)
+Catalogue-built/spec-aware options are **not** implemented by this slice.
+Next work remains phase 3 plus latency budgeting; detailed certification,
+proxy-consent state, browser cache issues, first/legacy fallback parity and
+healthy-provider quality acceptance are still outstanding. New date hydration
+can add TMDB work when evidence is missing; latency impact is not live-measured.

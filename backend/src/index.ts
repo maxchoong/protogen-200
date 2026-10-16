@@ -3,7 +3,9 @@ import cors from 'cors'
 import 'dotenv/config'
 import { validateConfig } from './config.js'
 import { PreferenceParser } from './engine/preferenceParser.js'
-import { recommendationEngine } from './engine/recommendationEngine.js'
+import { assessSpecTurn, validateSpec, type RequestSpec, type SpecTurn } from './engine/requestSpec.js'
+import { recommendationEngine, recordLLMUsage } from './engine/recommendationEngine.js'
+import type { LLMUsageDiagnostics, RequestRankingDiagnostics } from './engine/recommendationEngine.js'
 import { tmdbClient } from './clients/tmdb.js'
 import { streamingClient } from './clients/streaming.js'
 import { llmClient } from './clients/llm.js'
@@ -37,7 +39,10 @@ interface RecommendationRequest {
     clarificationIndex?: number          // Which question answered (0-based)
     askedQuestionIds?: string[]
     cumulativeConstraints?: string[]
+    userTurns?: string[]
   }
+  /** The structured request returned with the previous response, sent back unchanged. */
+  spec?: unknown
 }
 
 interface Recommendation {
@@ -45,9 +50,11 @@ interface Recommendation {
   imdbId?: string                       // IMDb ID for availability lookups (optional, especially for highlights)
   title: string
   year: string
+  releaseDate?: string
   type: string
   genres?: string[]
   originalLanguage?: string
+  originCountries?: string[]
   certification?: string
   runtimeMinutes?: number
   rating?: number
@@ -92,6 +99,7 @@ interface ApiResponse {
   interpretationNote?: string
   assistantMessage?: string
   message?: string
+  llmDiagnostics?: LLMUsageDiagnostics
   // Phase 5: Intent metadata (informational)
   detectedIntent?: {
     mode: 'mood' | 'reference' | 'talent' | 'mixed'
@@ -102,6 +110,8 @@ interface ApiResponse {
     usedTmdb: boolean
     usedOmdb: boolean
     omdbFallbackUsed: boolean
+    genreFilterRelaxed?: string[]
+    missingReleaseDates?: number
     streaming?: {
       enabled: boolean
       country: string
@@ -114,6 +124,8 @@ interface ApiResponse {
     confidence: number
     rationaleTags: string[]
   }
+  /** Structured request after this turn; the client returns it with the next turn. */
+  spec?: RequestSpec
 }
 
 interface HighlightTile {
@@ -183,8 +195,165 @@ const buildInterpretationNote = (parsedPreferences: ParsedPreferencesSnapshot): 
   return 'Interpreting "critics favourites" using available signals: TMDB/IMDb ratings and vote volume (not Rotten Tomatoes or Metacritic critic scores).'
 }
 
+const buildGenreRelaxationNote = (
+  parsedPreferences: ParsedPreferencesSnapshot,
+  relaxedGenres: string[] | undefined
+): string | undefined => {
+  if (!relaxedGenres || relaxedGenres.length === 0) {
+    return undefined
+  }
+
+  const genreLabels: Record<string, string> = { History: 'historical', 'Sci-Fi': 'sci-fi' }
+  const genreList = relaxedGenres.map(genre => genreLabels[genre] || genre.toLowerCase())
+  const genreText = genreList.length > 1
+    ? `${genreList.slice(0, -1).join(', ')} or ${genreList[genreList.length - 1]}`
+    : genreList[0]
+  const format = parsedPreferences.contentType === 'tv'
+    ? 'series'
+    : parsedPreferences.contentType === 'movie'
+      ? 'films'
+      : 'titles'
+  const origin = [parsedPreferences.originCountryName, parsedPreferences.originalLanguageName]
+    .filter(Boolean)
+    .map(part => `${part} `)
+    .join('')
+
+  return `I couldn't find ${origin}${format} tagged as ${genreText}, so these are the closest matches from the same search.`
+}
+
+const MIN_VIABLE_OPTION_TITLES = 3
+const OPTION_PROBE_TIMEOUT_MS = 2500
+const NON_DIRECTIONAL_OPTION_PATTERN = /\b(other|type your own|no preference|either|not sure|surprise me|rephrase)\b/i
+const GENRE_PHRASE_LABELS: Record<string, string> = {
+  History: 'historical',
+  'Sci-Fi': 'sci-fi',
+  Animation: 'animated'
+}
+
+type ClarificationContextInput = RecommendationRequest['clarificationContext']
+
+/**
+ * Probes whether a follow-up turn would retrieve enough titles. Unknown
+ * availability (TMDB disabled, timeout or error) counts as viable.
+ */
+const isViableFollowUp = async (
+  description: string,
+  followUp: string,
+  clarificationContext: ClarificationContextInput
+): Promise<boolean> => {
+  const priorTurns = clarificationContext?.userTurns?.length ? clarificationContext.userTurns : [description]
+  const probePreferences = PreferenceParser.parse({
+    description,
+    clarificationContext: {
+      clarificationRound: (clarificationContext?.clarificationRound ?? 0) + 1,
+      userClarification: followUp,
+      userTurns: [...priorTurns, followUp]
+    }
+  })
+  const timeout = new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), OPTION_PROBE_TIMEOUT_MS))
+  const count = await Promise.race([recommendationEngine.estimateAvailableTitles(probePreferences), timeout])
+  return count === undefined || count >= MIN_VIABLE_OPTION_TITLES
+}
+
+/**
+ * Removes select options that would lead to an empty result set. Questions left
+ * without a directional option are dropped entirely.
+ */
+const filterViableClarificationQuestions = async (
+  questions: ClarificationQuestion[],
+  description: string,
+  clarificationContext: ClarificationContextInput
+): Promise<ClarificationQuestion[]> => {
+  const checked = await Promise.all(questions.map(async question => {
+    if (question.type !== 'select' || !question.options?.length) {
+      return question
+    }
+    const viability = await Promise.all(question.options.map(option =>
+      NON_DIRECTIONAL_OPTION_PATTERN.test(option)
+        ? Promise.resolve(true)
+        : isViableFollowUp(description, option, clarificationContext)
+    ))
+    const options = question.options.filter((_, index) => viability[index])
+    const removed = question.options.filter((_, index) => !viability[index])
+    if (removed.length > 0) {
+      console.log(`[${new Date().toISOString()}] Dropped clarification options with no catalog matches: ${removed.join(' | ')}`)
+    }
+    return options.some(option => !NON_DIRECTIONAL_OPTION_PATTERN.test(option))
+      ? { ...question, options }
+      : null
+  }))
+  return checked.filter((question): question is ClarificationQuestion => question !== null)
+}
+
+/**
+ * Explains an empty result set and offers validated ways to widen it. Each
+ * suggestion drops one active constraint and uses "instead" so the parser
+ * treats it as a self-contained request.
+ */
+const buildEmptyResultsClarification = async (
+  parsedPreferences: ParsedPreferencesSnapshot,
+  description: string,
+  clarificationContext: ClarificationContextInput
+): Promise<RequiresClarification> => {
+  const genres = (parsedPreferences.explicitGenres?.length ? parsedPreferences.explicitGenres : parsedPreferences.genres)
+    .slice(0, 2)
+    .map(genre => GENRE_PHRASE_LABELS[genre] || genre.toLowerCase())
+  const genreText = genres.join(' and ')
+  const language = parsedPreferences.originalLanguageName
+  const format = parsedPreferences.contentType === 'tv'
+    ? 'series'
+    : parsedPreferences.contentType === 'movie' ? 'films' : ''
+  const years = parsedPreferences.releaseWindowLabel ||
+    (parsedPreferences.yearRange?.min !== undefined && parsedPreferences.yearRange?.max !== undefined
+      ? parsedPreferences.yearRange.min === parsedPreferences.yearRange.max
+        ? `from ${parsedPreferences.yearRange.min}`
+        : `from ${parsedPreferences.yearRange.min} to ${parsedPreferences.yearRange.max}`
+      : undefined)
+
+  const phrase = (parts: Array<string | undefined>) => parts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim()
+  const country = parsedPreferences.originCountryName
+  const subject = phrase([country, language, genreText, format || 'titles', years])
+
+  const candidates: string[] = []
+  if (country) candidates.push(`Show me ${phrase([language, genreText, format || 'titles', years])} from any country instead`)
+  if (language) candidates.push(`Show me ${phrase([country, genreText, format || 'titles', years])} in any language instead`)
+  if (genreText) candidates.push(`Show me ${phrase([country, language, format || 'titles', years])} in any genre instead`)
+  if (format) candidates.push(`Show me ${phrase([country, language, genreText, 'films and series', years])} instead`)
+  if (years) candidates.push(`Show me ${phrase([country, language, genreText, format || 'titles'])} from any year instead`)
+
+  const viability = await Promise.all(candidates.map(candidate =>
+    isViableFollowUp(description, candidate, clarificationContext)
+  ))
+  const options = candidates.filter((_, index) => viability[index]).slice(0, 3)
+
+  const context = `I couldn't find any ${subject} in the catalog.`
+  if (options.length === 0) {
+    return {
+      context,
+      questions: [{
+        id: 'empty_results_rephrase',
+        question: 'Could you describe it another way, for example a mood, a similar title, or a different genre?',
+        type: 'text'
+      }]
+    }
+  }
+
+  return {
+    context,
+    questions: [{
+      id: 'empty_results_widen',
+      question: 'Want me to widen the search? Pick one, or type a different direction.',
+      type: 'select',
+      options
+    }]
+  }
+}
+
 const describeActiveFilters = (parsedPreferences: ParsedPreferencesSnapshot): string | undefined => {
   const parts: string[] = []
+  if (parsedPreferences.originCountryName) {
+    parts.push(parsedPreferences.originCountryName)
+  }
   if (parsedPreferences.originalLanguageName) {
     parts.push(`${parsedPreferences.originalLanguageName}-language`)
   }
@@ -195,24 +364,30 @@ const describeActiveFilters = (parsedPreferences: ParsedPreferencesSnapshot): st
 }
 
 const buildAssistantMessage = async (
-  query: string,
+  latestMessage: string,
   parsedPreferences: ParsedPreferencesSnapshot,
   recommendations: Recommendation[],
   limit: number,
-  hasConstraints: boolean
+  hasConstraints: boolean,
+  llmDiagnostics: LLMUsageDiagnostics
 ): Promise<string | undefined> => {
   const filters = describeActiveFilters(parsedPreferences)
+  const change = parsedPreferences.originChangeNote
   if (!filters && !hasConstraints) {
     return undefined
   }
 
   if (llmClient.isEnabled()) {
     const intro = await llmClient.generateResultsIntro(
-      query,
+      latestMessage,
       filters || 'none beyond the request',
-      recommendations.map(rec => `${rec.title} (${rec.year})`)
+      recommendations.map(rec => `${rec.title} (${rec.year})`),
+      change
     )
-    if (intro) return intro
+    if (intro) {
+      recordLLMUsage(llmDiagnostics, 'results introduction')
+      return intro
+    }
   }
 
   if (!filters) {
@@ -220,7 +395,7 @@ const buildAssistantMessage = async (
   }
   const noun = parsedPreferences.contentType === 'tv' ? 'series' : parsedPreferences.contentType === 'movie' ? 'films' : 'titles'
   const count = recommendations.length
-  const base = `Here ${count === 1 ? 'is 1' : `are ${count}`} ${noun} that fit: ${filters}.`
+  const base = `${change ? `${change} ` : ''}Here ${count === 1 ? 'is 1' : `are ${count}`} ${noun} that fit: ${filters}.`
   return count < limit
     ? `${base} That is everything I found for those filters. Want me to widen the window?`
     : base
@@ -230,7 +405,8 @@ const shouldPreferResultsFirst = (
   clarificationQuestions: ClarificationQuestion[] | null,
   clarificationRound: number,
   mode: 'mood' | 'reference' | 'talent' | 'mixed' | undefined,
-  confidence: number | undefined
+  confidence: number | undefined,
+  spec: RequestSpec | undefined
 ): boolean => {
   if (!clarificationQuestions || clarificationQuestions.length === 0) {
     return false
@@ -238,6 +414,16 @@ const shouldPreferResultsFirst = (
 
   if (clarificationRound > 0) {
     return false
+  }
+
+  // A concrete search direction is enough to try results; an empty catalogue
+  // can still trigger the widening question after retrieval.
+  if (spec && (
+    spec.genres.length || spec.tones.length || spec.themes.length ||
+    spec.references.length || spec.actors.length || spec.creators.length ||
+    spec.years || spec.releasedWithinDays || spec.dateRange
+  )) {
+    return true
   }
 
   if (!mode) {
@@ -659,9 +845,39 @@ app.get('/highlights/:type/:id', async (req: Request, res: Response<ApiResponse>
   }
 })
 
+/**
+ * LLM understanding of the latest turn as a full structured request. Returns undefined
+ * when the LLM is unavailable or fails, leaving the rule parser in charge.
+ */
+const understandRequest = async (
+  description: string,
+  clarificationContext: ClarificationContextInput,
+  previousSpec: RequestSpec | undefined,
+  llmDiagnostics: LLMUsageDiagnostics
+): Promise<SpecTurn | undefined> => {
+  if (!llmClient.isEnabled()) return undefined
+  const round = clarificationContext?.clarificationRound ?? 0
+  const latestTurn = (round > 0 && clarificationContext?.userClarification?.trim()) || description
+  const userTurns = clarificationContext?.userTurns?.length ? [...clarificationContext.userTurns] : [description]
+  if (userTurns[userTurns.length - 1]?.trim() === latestTurn) userTurns.pop()
+  const earlierTurns = round > 0 ? userTurns : []
+
+  const raw = await llmClient.parseRequestSpec({ latestTurn, earlierTurns, previousSpec })
+  if (!raw) return undefined
+  const assessment = assessSpecTurn(raw, round > 0 ? previousSpec : undefined)
+  if (!assessment.accepted) {
+    console.warn(`[Server] Unusable request understanding: ${assessment.reason}`)
+    return undefined
+  }
+  const { turn } = assessment
+  recordLLMUsage(llmDiagnostics, 'request understanding')
+  console.log(`[Server] Request understood as ${turn.operation}: ${JSON.stringify(turn.spec)}`)
+  return turn
+}
+
 app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) => {
   try {
-    const { description, preferences, region, clarificationContext } = req.body as RecommendationRequest
+    const { description, preferences, region, clarificationContext, spec: rawPreviousSpec } = req.body as RecommendationRequest
     const normalizedDescription = (description || '').trim()
     const hasDescription = normalizedDescription.length > 0
     const hasPreferences = !!(
@@ -707,18 +923,43 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
       maxRating: preferences.maxRating
     } : undefined
 
+    const llmDiagnostics: LLMUsageDiagnostics = { used: false, stages: [] }
+    const previousSpec = rawPreviousSpec ? validateSpec(rawPreviousSpec) : undefined
+    const specTurn = await understandRequest(normalizedDescription, clarificationContext, previousSpec, llmDiagnostics)
+    const responseSpec = specTurn?.spec ?? previousSpec
+    const respond = (body: ApiResponse) => res.json({ ...body, spec: responseSpec })
+
+    if (previousSpec && (clarificationContext?.clarificationRound ?? 0) > 0 && !specTurn) {
+      console.warn('[Server] Follow-up not applied; preserving saved request and asking for clarification')
+      return respond({
+        success: true,
+        requiresClarification: {
+          context: "I couldn't reliably apply that change, so I've kept your previous request unchanged.",
+          questions: [{
+            id: 'request_update_retry',
+            question: 'Please restate the full request, including what you want to keep or change, or try again shortly.',
+            type: 'text'
+          }]
+        },
+        llmDiagnostics
+      })
+    }
+
     const parsedPreferences = PreferenceParser.parse({
       description: normalizedDescription,
       region,
       preferences: preferencesObject,
-      clarificationContext
+      clarificationContext,
+      spec: specTurn?.spec,
+      previousSpec,
+      specOperation: specTurn?.operation
     })
     const appliedConstraints = buildAppliedConstraints(parsedPreferences, clarificationContext)
-    const interpretationNote = buildInterpretationNote(parsedPreferences)
+    let interpretationNote = buildInterpretationNote(parsedPreferences)
 
     const explicitUnsupportedSource = detectUnsupportedCriticSource(normalizedDescription)
     if (explicitUnsupportedSource) {
-      return res.json({
+      return respond({
         success: true,
         requiresClarification: {
           context: `I can't directly rank by ${explicitUnsupportedSource} data in this build. I can continue using TMDB/IMDb rating and vote signals as a proxy if you want.`,
@@ -737,7 +978,8 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
               confidence: parsedPreferences.intentConfidence
             }
           : undefined,
-        turnOperation: parsedPreferences.turnOperation
+        turnOperation: parsedPreferences.turnOperation,
+        llmDiagnostics
       })
     }
 
@@ -759,14 +1001,17 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
       clarificationQuestions,
       clarificationRound,
       parsedPreferences.discoveryMode,
-      parsedPreferences.intentConfidence
+      parsedPreferences.intentConfidence,
+      specTurn?.spec
     )
+
+    let activeQuestions: ClarificationQuestion[] = []
+    let activeContext = 'I can steer this in a few different directions. Choose one, or type your own direction.'
 
     if (clarificationQuestions && !bypassInitialClarification) {
       console.log(`[${new Date().toISOString()}] Clarification suggested with ${clarificationQuestions.length} questions`)
 
-      let activeQuestions = clarificationQuestions
-      let activeContext = 'I can steer this in a few different directions. Choose one, or type your own direction.'
+      activeQuestions = clarificationQuestions
 
       if (llmClient.isEnabled()) {
         try {
@@ -775,6 +1020,7 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
             clarificationQuestions
           )
           if (conversational) {
+            recordLLMUsage(llmDiagnostics, 'clarification wording')
             activeQuestions = conversational.questions
             activeContext = conversational.context
           }
@@ -783,7 +1029,24 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
         }
       }
 
-      return res.json({
+      let viableQuestions = await filterViableClarificationQuestions(
+        activeQuestions,
+        normalizedDescription,
+        clarificationContext
+      )
+      if (viableQuestions.length === 0 && activeQuestions !== clarificationQuestions) {
+        viableQuestions = await filterViableClarificationQuestions(
+          clarificationQuestions,
+          normalizedDescription,
+          clarificationContext
+        )
+        activeContext = 'I can steer this in a few different directions. Choose one, or type your own direction.'
+      }
+      activeQuestions = viableQuestions
+    }
+
+    if (clarificationQuestions && !bypassInitialClarification && activeQuestions.length > 0) {
+      return respond({
         success: true,
         requiresClarification: {
           questions: activeQuestions,
@@ -796,7 +1059,8 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
               confidence: parsedPreferences.intentConfidence
             }
           : undefined,
-        turnOperation: parsedPreferences.turnOperation
+        turnOperation: parsedPreferences.turnOperation,
+        llmDiagnostics
       })
     }
 
@@ -807,6 +1071,7 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
     }
 
     // Use real recommendation engine
+    const rankingDiagnostics: RequestRankingDiagnostics = {}
     const recommendations = await recommendationEngine.getRecommendations({
       description: normalizedDescription,
       region,
@@ -816,9 +1081,55 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
         contentType: preferences.type as 'movie' | 'tv' | 'both' | undefined,
         maxRating: preferences.maxRating
       } : undefined,
-      clarificationContext: clarificationContext
-    }, recommendationLimit)
-    const retrievalDiagnostics = recommendationEngine.getLastRetrievalDiagnostics()
+      clarificationContext: clarificationContext,
+      spec: specTurn?.spec,
+      previousSpec,
+      specOperation: specTurn?.operation
+    }, recommendationLimit, llmDiagnostics, rankingDiagnostics)
+    const retrievalDiagnostics = {
+      ...recommendationEngine.getLastRetrievalDiagnostics(),
+      genreFilterRelaxed: rankingDiagnostics.genreFilterRelaxed,
+      missingReleaseDates: rankingDiagnostics.missingReleaseDates
+    }
+    const dateEvidenceNote = rankingDiagnostics.missingReleaseDates
+      ? "Some candidates were left out because I couldn't verify their release dates."
+      : undefined
+    if (dateEvidenceNote) {
+      interpretationNote = interpretationNote ? `${interpretationNote} ${dateEvidenceNote}` : dateEvidenceNote
+    }
+    const genreRelaxationNote = recommendations.length > 0
+      ? buildGenreRelaxationNote(parsedPreferences, rankingDiagnostics.genreFilterRelaxed)
+      : undefined
+    if (genreRelaxationNote) {
+      interpretationNote = interpretationNote ? `${interpretationNote} ${genreRelaxationNote}` : genreRelaxationNote
+    }
+
+    if (recommendations.length === 0) {
+      console.log(`[${new Date().toISOString()}] No recommendations; offering validated ways to widen the search`)
+      const clarification = await buildEmptyResultsClarification(
+        parsedPreferences,
+        normalizedDescription,
+        clarificationContext
+      )
+      if (dateEvidenceNote) {
+        clarification.context = `I couldn't confirm any matches for that release window. ${dateEvidenceNote}`
+      }
+      return respond({
+        success: true,
+        recommendations: [],
+        requiresClarification: clarification,
+        appliedConstraints,
+        detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence !== undefined
+          ? {
+              mode: parsedPreferences.discoveryMode,
+              confidence: parsedPreferences.intentConfidence
+            }
+          : undefined,
+        retrievalDiagnostics,
+        turnOperation: parsedPreferences.turnOperation,
+        llmDiagnostics
+      })
+    }
 
     const shouldBypassWeakSet = shouldBypassWeakSetForReference(
       recommendations,
@@ -849,7 +1160,7 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
           console.log(
             `[${new Date().toISOString()}] Weak recommendation set detected; returning best available results with refinement suggestions`
           )
-          return res.json({
+          return respond({
             success: true,
             recommendations,
             appliedConstraints,
@@ -861,7 +1172,8 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
                 }
               : undefined,
             retrievalDiagnostics,
-            turnOperation: parsedPreferences.turnOperation
+            turnOperation: parsedPreferences.turnOperation,
+            llmDiagnostics
           })
         }
       }
@@ -869,13 +1181,20 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
       console.log(`[${new Date().toISOString()}] Weak recommendation set persisted after clarification cap; returning best available results`)
     }
 
-    res.json({
+    respond({
       success: true,
       recommendations,
       appliedConstraints,
       interpretationNote,
       assistantMessage: recommendations.length > 0
-        ? await buildAssistantMessage(normalizedDescription, parsedPreferences, recommendations, recommendationLimit, appliedConstraints.length > 0)
+        ? await buildAssistantMessage(
+            clarificationContext?.userClarification?.trim() || normalizedDescription,
+            parsedPreferences,
+            recommendations,
+            recommendationLimit,
+            appliedConstraints.length > 0,
+            llmDiagnostics
+          )
         : undefined,
       detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence !== undefined
         ? {
@@ -884,7 +1203,8 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
           }
         : undefined,
       retrievalDiagnostics,
-      turnOperation: parsedPreferences.turnOperation
+      turnOperation: parsedPreferences.turnOperation,
+      llmDiagnostics
     })
   } catch (error) {
     console.error('Error in /recommendations:', error)

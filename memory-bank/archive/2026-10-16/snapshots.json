@@ -1,0 +1,37 @@
+{
+  "date": "2026-10-16",
+  "status": "historical",
+  "description": "Exact worktree bytes before selective-context migration; original paths define the base for historical relative links.",
+  "files": [
+    {
+      "snapshot": "activeContext.md",
+      "original": "memory-bank/activeContext.md",
+      "sha256": "6d2ae2c4db982ca8da854c4026a38939833a873a5842bc5ad1869ab869408f48"
+    },
+    {
+      "snapshot": "progress.md",
+      "original": "memory-bank/progress.md",
+      "sha256": "d51a24d533819053b0aadcccb739a447b3aa3c192f67e31cc72b430d9168d36c"
+    },
+    {
+      "snapshot": "Film_Advisor_App_AllDocs.md",
+      "original": "memory-bank/Film_Advisor_App_AllDocs.md",
+      "sha256": "f24331a42cefb642d4076f9c29202516eb6e5714f6d14691f2380887810e837a"
+    },
+    {
+      "snapshot": "design.md",
+      "original": "memory-bank/design.md",
+      "sha256": "d1f83968cf942fe90a053e8efe2a9492be1d0f22a62e3f39921ccfe19fafb708"
+    },
+    {
+      "snapshot": "memory-bank-instructions.md",
+      "original": "memory-bank/memory-bank-instructions.md",
+      "sha256": "7753997465d69abd1cf5ebb5a64c01873c579af959e7c6a632ea0f58f2558c77"
+    },
+    {
+      "snapshot": "copilot-instructions.md",
+      "original": ".github/copilot-instructions.md",
+      "sha256": "bd0094189fc060f9c9824a1eb2c515f77e2289de68942e3647acdc82c08c377c"
+    }
+  ]
+}

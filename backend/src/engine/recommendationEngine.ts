@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { fmdbClient } from '../clients/fmdb.js'
 import { llmClient } from '../clients/llm.js'
 import { streamingClient } from '../clients/streaming.js'
@@ -6,6 +7,36 @@ import { PreferenceParser, ParsedPreferences, RecommendationRequest, DiscoveryMo
 import type { CreatorCredit } from './preferenceParser.js'
 import { TalentMatcher } from './talentMatcher.js'
 import { RankingScorer, ScoringFactors } from './rankingScorer.js'
+import { SERIES_KEYWORD_FALLBACKS, titleMatchesAnyGenre } from './genreTaxonomy.js'
+import { diffSpecs, toIsoDate } from './requestSpec.js'
+
+export type LLMUsageStage =
+  | 'request understanding'
+  | 'preference parsing'
+  | 'actor title recovery'
+  | 'recommendation explanations'
+  | 'clarification wording'
+  | 'results introduction'
+
+export interface LLMUsageDiagnostics {
+  used: boolean
+  stages: LLMUsageStage[]
+}
+
+export const recordLLMUsage = (diagnostics: LLMUsageDiagnostics, stage: LLMUsageStage): void => {
+  diagnostics.used = true
+  if (!diagnostics.stages.includes(stage)) {
+    diagnostics.stages.push(stage)
+  }
+}
+
+/** Per-request ranking outcomes; safe under concurrent requests, unlike engine-level "last" state. */
+export interface RequestRankingDiagnostics {
+  genreFilterRelaxed?: string[]
+  missingReleaseDates?: number
+}
+
+const requestRankingContext = new AsyncLocalStorage<RequestRankingDiagnostics>()
 
 export interface StreamingAvailability {
   platform: string
@@ -17,9 +48,11 @@ export interface Recommendation {
   id: string
   title: string
   year: string
+  releaseDate?: string
   type: 'movie' | 'tv'
   genres?: string[]
   originalLanguage?: string
+  originCountries?: string[]
   certification?: string
   runtimeMinutes?: number
   rating?: number
@@ -43,6 +76,8 @@ export interface RetrievalDiagnostics {
   usedTmdb: boolean
   usedOmdb: boolean
   omdbFallbackUsed: boolean
+  /** Required genres whose hard filter was relaxed because it would have removed every title. */
+  genreFilterRelaxed?: string[]
   streaming?: {
     enabled: boolean
     country: string
@@ -57,10 +92,12 @@ export class RecommendationEngine {
   private static readonly SEARCH_TERM_LIMIT = 6
   private static readonly BACKFILL_SEARCH_TERM_LIMIT = 3
   private static readonly MIN_CANDIDATE_POOL = 12
+  private static readonly ESTABLISHED_CANDIDATE_RESERVE = 20
   private static readonly DIVERSITY_WINDOW_MULTIPLIER = 3
 
   // Cache for reference titles (Phase 2.2)
   private referenceTitlesCache: Map<string, any> = new Map()
+  private lastGenreFilterRelaxation: string[] | undefined
   private lastRetrievalDiagnostics: RetrievalDiagnostics = {
     tmdbEnabled: false,
     usedTmdb: false,
@@ -85,13 +122,13 @@ export class RecommendationEngine {
     keywords: string[] = [],
     excludedGenres: string[] = [],
     yearRange?: ParsedPreferences['yearRange'],
-    filters: { originalLanguage?: string; releaseDateRange?: { gte?: string; lte?: string } } = {}
+    filters: { originalLanguage?: string; originCountry?: string; releaseDateRange?: { gte?: string; lte?: string } } = {}
   ): Promise<any[]> {
     if (!tmdbClient.isEnabled()) {
       return []
     }
 
-    const hasFilters = Boolean(filters.originalLanguage || filters.releaseDateRange)
+    const hasFilters = Boolean(filters.originalLanguage || filters.originCountry || filters.releaseDateRange)
     const includeMovies = typeFilter !== 'series'
     const includeTV = typeFilter !== 'movie'
     const isNoveltyDiscovery = discoveryMode === 'mood' && preferredGenres.some(
@@ -134,6 +171,21 @@ export class RecommendationEngine {
         tmdbResultSets.push(genreDiscoverResults)
       }
       console.log(`[Engine] TMDB genre discovery yielded ${genreDiscoverResults.length} titles`)
+
+      if (includeTV) {
+        const seriesKeywordResults = await this.discoverSeriesByGenreKeywords(
+          preferredGenres.slice(0, 3),
+          { excludedGenres, yearRange, ...filters }
+        )
+        if (seriesKeywordResults.length > 0) {
+          if (discoveryMode === 'reference') {
+            genreDiscoverResults = [...genreDiscoverResults, ...seriesKeywordResults]
+          } else {
+            tmdbResultSets.push(seriesKeywordResults)
+          }
+          console.log(`[Engine] TMDB series genre-keyword fallback yielded ${seriesKeywordResults.length} titles`)
+        }
+      }
     } else if (hasFilters) {
       const filterResults = await tmdbClient.discoverByFilters({
         includeMovies,
@@ -175,21 +227,70 @@ export class RecommendationEngine {
     }
 
     const deduped = Array.from(
-      new Map(
-        tmdbResultSets
-          .flat()
-          .map(item => [`${item.media_type}:${item.id}`, item])
-      ).values()
+      tmdbResultSets
+        .flat()
+        .reduce((byKey: Map<string, any>, item: any) => {
+          const key = `${item.media_type}:${item.id}`
+          const existing = byKey.get(key)
+          const genreKeywordMatches = Array.from(new Set([
+            ...(existing?.genreKeywordMatches || []),
+            ...(item.genreKeywordMatches || [])
+          ]))
+          byKey.set(key, genreKeywordMatches.length > 0 ? { ...item, genreKeywordMatches } : item)
+          return byKey
+        }, new Map<string, any>())
+        .values()
     )
 
     const candidatePoolLimit = discoveryMode === 'reference' ? 640 : isNoveltyDiscovery ? 120 : 60
-    const limited = deduped.slice(0, candidatePoolLimit)
+    // Small country/language catalogues return the most-voted page last, so a plain slice
+    // drops established titles in favour of barely-rated new releases.
+    const reservedEstablished = filters.originCountry || filters.originalLanguage
+      ? [...deduped]
+          .sort((a, b) => (Number(b.vote_count) || 0) - (Number(a.vote_count) || 0))
+          .slice(0, RecommendationEngine.ESTABLISHED_CANDIDATE_RESERVE)
+      : []
+    const reservedKeys = new Set(reservedEstablished)
+    const openSlots = Math.max(0, candidatePoolLimit - reservedKeys.size)
+    const kept = new Set([...reservedKeys, ...deduped.filter(item => !reservedKeys.has(item)).slice(0, openSlots)])
+    const limited = deduped.filter(item => kept.has(item))
 
     const converted = await Promise.all(
       limited.map(async item => this.convertTmdbResult(item))
     )
 
     return converted.filter(item => !!item.title && !!item.plot)
+  }
+
+  /**
+   * TMDB TV genres cannot express some genres (e.g. Horror, Thriller, History),
+   * so series for those genres are retrieved via keywords and tagged with the
+   * genre they were retrieved for.
+   */
+  private async discoverSeriesByGenreKeywords(
+    genres: string[],
+    options: {
+      excludedGenres?: string[]
+      yearRange?: ParsedPreferences['yearRange']
+      originalLanguage?: string
+      originCountry?: string
+      releaseDateRange?: { gte?: string; lte?: string }
+    }
+  ): Promise<any[]> {
+    const fallbackGenres = genres.filter(genre => SERIES_KEYWORD_FALLBACKS[genre])
+    if (fallbackGenres.length === 0) return []
+
+    const resultSets = await Promise.all(fallbackGenres.map(async genre => {
+      const results = await tmdbClient.discoverByKeywords(SERIES_KEYWORD_FALLBACKS[genre], {
+        includeMovies: false,
+        includeTV: true,
+        excludeAdult: true,
+        keywordPages: 2,
+        ...options
+      })
+      return results.map(item => ({ ...item, genreKeywordMatches: [genre] }))
+    }))
+    return resultSets.flat()
   }
 
   private async searchWithOmdbFallback(
@@ -218,7 +319,8 @@ export class RecommendationEngine {
   private async buildActorSeedCandidates(
     actors: string[],
     description: string,
-    typeFilter?: 'movie' | 'series'
+    typeFilter?: 'movie' | 'series',
+    llmDiagnostics?: LLMUsageDiagnostics
   ): Promise<any[]> {
     if (actors.length === 0 || !llmClient.isEnabled()) {
       return []
@@ -227,6 +329,9 @@ export class RecommendationEngine {
     const titleSeeds = await llmClient.suggestActorTitleSeeds(actors, description, 8)
     if (titleSeeds.length === 0) {
       return []
+    }
+    if (llmDiagnostics) {
+      recordLLMUsage(llmDiagnostics, 'actor title recovery')
     }
 
     const seedSearches = await Promise.all(
@@ -252,12 +357,15 @@ export class RecommendationEngine {
       tmdbMediaType: mediaType,
       title: item.title || item.name,
       year,
+      releaseDate: toIsoDate(yearRaw),
       type: mediaType === 'tv' ? 'series' : 'movie',
       poster: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : undefined,
       rating: item.vote_average || undefined,
       plot: item.overview || undefined,
       genres: tmdbClient.mapGenreIdsToNames(item.genre_ids || [], mediaType),
+      genreKeywordMatches: item.genreKeywordMatches?.length ? item.genreKeywordMatches : undefined,
       originalLanguage: item.original_language || undefined,
+      originCountries: item.origin_country?.length ? item.origin_country : undefined,
       runtimeMinutes: item.runtime || undefined,
       rated: undefined,
       creatorCredits,
@@ -265,7 +373,8 @@ export class RecommendationEngine {
       director: directors.length > 0 ? directors.join(', ') : undefined,
       actors: actorHints.length > 0 ? actorHints.join(', ') : undefined,
       requestedActorHit: actorHints.length > 0,
-      voteCount: item.vote_count || 0
+      // Keep "unknown" distinct from a real count of 0 votes.
+      voteCount: typeof item.vote_count === 'number' ? item.vote_count : undefined
     }
   }
 
@@ -317,7 +426,11 @@ export class RecommendationEngine {
         director: candidate.director || previous.director,
         directors: candidate.directors?.length ? candidate.directors : previous.directors,
         actors: candidate.actors || previous.actors,
-        requestedActorHit: previous.requestedActorHit || candidate.requestedActorHit
+        requestedActorHit: previous.requestedActorHit || candidate.requestedActorHit,
+        genreKeywordMatches: Array.from(new Set([
+          ...(previous.genreKeywordMatches || []),
+          ...(candidate.genreKeywordMatches || [])
+        ]))
       })
     }
     return [...merged.values()]
@@ -341,6 +454,56 @@ export class RecommendationEngine {
       }))
   }
 
+  private async hydrateReleaseDates(titles: any[], preferences: ParsedPreferences): Promise<any[]> {
+    if (!preferences.releaseDateRange || !tmdbClient.isEnabled()) return titles
+    return Promise.all(titles.map(async title => {
+      if (toIsoDate(title.releaseDate)) return title
+      const type: 'tv' | 'movie' = title.type === 'series' || title.type === 'tv' || title.type === 'episode' ? 'tv' : 'movie'
+      const match = title.tmdbId
+        ? { tmdbId: title.tmdbId, mediaType: type }
+        : this.isImdbId(title.id) ? await tmdbClient.findTitleByImdbId(title.id, type) : null
+      if (!match) return title
+      const details = await tmdbClient.getTitleDetails(match.tmdbId, match.mediaType)
+      const releaseDate = toIsoDate(match.mediaType === 'tv' ? details?.first_air_date : details?.release_date)
+      return { ...title, releaseDate, ...(releaseDate ? { year: Number(releaseDate.slice(0, 4)) } : {}) }
+    }))
+  }
+
+  private filterHardConstraints(titles: any[], preferences: ParsedPreferences): any[] {
+    let missingReleaseDates = 0
+    const filtered = titles.filter(title => {
+      const isTv = title.type === 'tv' || title.type === 'series' || title.type === 'episode'
+      if (preferences.contentType === 'movie' && title.type !== 'movie') return false
+      if (preferences.contentType === 'tv' && !isTv) return false
+      if (!this.matchesOriginalLanguage(title, preferences.originalLanguage) ||
+          !this.matchesOriginCountry(title, preferences.originCountry)) return false
+      if (preferences.excludedGenres?.some(excluded =>
+        (title.genres || []).some((genre: string) => genre.toLowerCase() === excluded.toLowerCase()))) return false
+      if (preferences.yearRange?.min !== undefined || preferences.yearRange?.max !== undefined) {
+        const year = Number(title.year)
+        if (!Number.isFinite(year) ||
+            (preferences.yearRange.min !== undefined && year < preferences.yearRange.min) ||
+            (preferences.yearRange.max !== undefined && year > preferences.yearRange.max)) return false
+      }
+      if (preferences.releaseDateRange) {
+        const date = toIsoDate(title.releaseDate)
+        if (!date) {
+          missingReleaseDates += 1
+          return false
+        }
+        if ((preferences.releaseDateRange.gte && date < preferences.releaseDateRange.gte) ||
+            (preferences.releaseDateRange.lte && date > preferences.releaseDateRange.lte)) return false
+      }
+      return true
+    })
+    if (missingReleaseDates > 0) {
+      console.warn(`[Engine] Excluded ${missingReleaseDates} candidates without verifiable release dates`)
+      const diagnostics = requestRankingContext.getStore()
+      if (diagnostics) diagnostics.missingReleaseDates = (diagnostics.missingReleaseDates || 0) + missingReleaseDates
+    }
+    return filtered
+  }
+
   private async searchCandidates(
     searchTerms: string[],
     typeFilter?: 'movie' | 'series',
@@ -349,7 +512,7 @@ export class RecommendationEngine {
     keywords: string[] = [],
     excludedGenres: string[] = [],
     yearRange?: ParsedPreferences['yearRange'],
-    filters: { originalLanguage?: string; releaseDateRange?: { gte?: string; lte?: string } } = {}
+    filters: { originalLanguage?: string; originCountry?: string; releaseDateRange?: { gte?: string; lte?: string } } = {}
   ): Promise<{ results: any[]; source: 'tmdb' | 'omdb' }> {
     if (searchTerms.length === 0 && preferredGenres.length === 0 && keywords.length === 0) {
       return { results: [], source: tmdbClient.isEnabled() ? 'tmdb' : 'omdb' }
@@ -570,23 +733,26 @@ export class RecommendationEngine {
     return Math.floor(year / 10) * 10
   }
 
-  private scoreDiversityAdjustment(candidate: any, selected: any[]): number {
+  private scoreDiversityAdjustment(candidate: any, selected: any[], requestedGenres: Set<string> = new Set()): number {
     if (selected.length < 2) {
       return 0
     }
 
-    const candidateGenres = (candidate.genres || []).map((genre: string) => genre.toLowerCase())
-    const selectedGenres = new Set(
-      selected.flatMap((item: any) => (item.genres || []).map((genre: string) => genre.toLowerCase()))
-    )
+    // Repeating a genre the user asked for is the point, not a lack of variety;
+    // only the remaining genres count towards diversity.
+    const varietyGenres = (item: any): string[] => (item.genres || [])
+      .map((genre: string) => genre.toLowerCase())
+      .filter((genre: string) => !requestedGenres.has(genre))
+    const candidateGenres = varietyGenres(candidate)
+    const selectedGenres = new Set(selected.flatMap(varietyGenres))
 
     const samePrimaryGenreCount = selected.filter((item: any) => {
-      const selectedPrimaryGenre = item.genres?.[0]?.toLowerCase()
+      const selectedPrimaryGenre = varietyGenres(item)[0]
       return selectedPrimaryGenre && selectedPrimaryGenre === candidateGenres[0]
     }).length
 
     const overlapCount = selected.filter((item: any) => {
-      const itemGenres = (item.genres || []).map((genre: string) => genre.toLowerCase())
+      const itemGenres = varietyGenres(item)
       if (candidateGenres.length === 0 || itemGenres.length === 0) {
         return false
       }
@@ -617,7 +783,12 @@ export class RecommendationEngine {
     return adjustment
   }
 
-  private selectFinalResults(ranked: any[], limit: number, diversityWeight: number = 1): any[] {
+  private selectFinalResults(
+    ranked: any[],
+    limit: number,
+    diversityWeight: number = 1,
+    requestedGenres: string[] = []
+  ): any[] {
     if (ranked.length <= limit) {
       return ranked.slice(0, limit)
     }
@@ -626,6 +797,7 @@ export class RecommendationEngine {
     const candidateWindow = ranked.slice(0, windowSize)
     const remaining = [...candidateWindow]
     const selected: any[] = []
+    const requested = new Set(requestedGenres.map(genre => genre.toLowerCase()))
 
     while (selected.length < limit && remaining.length > 0) {
       let bestIndex = 0
@@ -633,7 +805,7 @@ export class RecommendationEngine {
 
       remaining.forEach((candidate, index) => {
         const composite = candidate.scoringFactors?.composite || 0
-        const adjustedScore = composite + this.scoreDiversityAdjustment(candidate, selected) * diversityWeight
+        const adjustedScore = composite + this.scoreDiversityAdjustment(candidate, selected, requested) * diversityWeight
 
         if (adjustedScore > bestScore) {
           bestScore = adjustedScore
@@ -665,6 +837,8 @@ export class RecommendationEngine {
 
           const runtimeMinutes = title.runtimeMinutes || details?.runtime
           const originalLanguage = title.originalLanguage || details?.original_language
+          const originCountries = title.originCountries || (details?.origin_country?.length ? details.origin_country : undefined)
+          const releaseDate = toIsoDate(match.mediaType === 'tv' ? details?.first_air_date : details?.release_date) || title.releaseDate
           const genres = (title.genres && title.genres.length > 0)
             ? title.genres
             : tmdbClient.mapGenreIdsToNames(details?.genre_ids || [], title.tmdbMediaType === 'tv' ? 'tv' : 'movie')
@@ -680,7 +854,10 @@ export class RecommendationEngine {
             tmdbId: match.tmdbId,
             tmdbMediaType: match.mediaType,
             runtimeMinutes,
+            releaseDate,
+            ...(releaseDate ? { year: Number(releaseDate.slice(0, 4)) } : {}),
             originalLanguage,
+            originCountries,
             genres,
             mainCast,
             directors,
@@ -702,6 +879,8 @@ export class RecommendationEngine {
 
         const runtimeMinutes = title.runtimeMinutes || details?.runtime
         const originalLanguage = title.originalLanguage || details?.original_language
+        const originCountries = title.originCountries || (details?.origin_country?.length ? details.origin_country : undefined)
+        const releaseDate = toIsoDate(mediaType === 'tv' ? details?.first_air_date : details?.release_date) || title.releaseDate
         const genres = (title.genres && title.genres.length > 0)
           ? title.genres
           : tmdbClient.mapGenreIdsToNames(details?.genre_ids || [], mediaType)
@@ -716,7 +895,10 @@ export class RecommendationEngine {
           ...title,
           id: externalIds.imdbId || title.id,
           runtimeMinutes,
+          releaseDate,
+          ...(releaseDate ? { year: Number(releaseDate.slice(0, 4)) } : {}),
           originalLanguage,
+          originCountries,
           genres,
           mainCast,
           directors,
@@ -734,7 +916,20 @@ export class RecommendationEngine {
    */
   async getRecommendations(
     request: RecommendationRequest,
-    limit: number = 10
+    limit: number = 10,
+    llmDiagnostics?: LLMUsageDiagnostics,
+    rankingDiagnostics: RequestRankingDiagnostics = {}
+  ): Promise<Recommendation[]> {
+    return requestRankingContext.run(
+      rankingDiagnostics,
+      () => this.generateRecommendations(request, limit, llmDiagnostics)
+    )
+  }
+
+  private async generateRecommendations(
+    request: RecommendationRequest,
+    limit: number,
+    llmDiagnostics?: LLMUsageDiagnostics
   ): Promise<Recommendation[]> {
         const diagnostics: RetrievalDiagnostics = {
           tmdbEnabled: tmdbClient.isEnabled(),
@@ -742,6 +937,7 @@ export class RecommendationEngine {
           usedOmdb: false,
           omdbFallbackUsed: false
         }
+    this.lastGenreFilterRelaxation = undefined
 
     console.log(`[Engine] Processing request: "${request.description.substring(0, 50)}..."`)
     if (request.clarificationContext) {
@@ -750,9 +946,13 @@ export class RecommendationEngine {
 
     let llmPreferences
     const analysisText = PreferenceParser.buildAnalysisText(request)
-    if (llmClient.isEnabled() && analysisText.trim()) {
+    // A structured spec already carries the LLM's understanding of the request.
+    if (!request.spec && llmClient.isEnabled() && analysisText.trim()) {
       try {
         llmPreferences = await llmClient.parsePreferences(analysisText)
+        if (llmPreferences && llmDiagnostics) {
+          recordLLMUsage(llmDiagnostics, 'preference parsing')
+        }
       } catch {
         console.warn('[Engine] LLM parsing failed, using rule-based fallback')
       }
@@ -1050,11 +1250,18 @@ export class RecommendationEngine {
 
     // On refinement turns, prefer re-ranking prior results before broad retrieval.
     const hasActorAnchor = (preferences.detectedActors?.length || 0) > 0 || (preferences.detectedCreators?.length || 0) > 0
+    const searchScopeChanged = request.spec && (
+      !request.previousSpec ||
+      diffSpecs(request.previousSpec, request.spec).some(change => change.field !== 'tones')
+    )
     if (
       !useBlockbusterPaging &&
       !useCriticsYearProxy &&
       shouldReusePreviousCandidates &&
       previousCandidates.length >= limit &&
+      // Widening ("Indonesian films too") needs fresh retrieval for the new scope.
+      preferences.turnOperation?.operation !== 'widen' &&
+      !searchScopeChanged &&
       !hasActorAnchor
     ) {
       candidates = [...previousCandidates, ...referenceCandidates]
@@ -1068,7 +1275,7 @@ export class RecommendationEngine {
         discoveryKeywords,
         preferences.excludedGenres || [],
         preferences.yearRange,
-        { originalLanguage: preferences.originalLanguage, releaseDateRange: preferences.releaseWindowLabel ? preferences.releaseDateRange : undefined }
+        { originalLanguage: preferences.originalLanguage, originCountry: preferences.originCountry, releaseDateRange: preferences.releaseWindowLabel ? preferences.releaseDateRange : undefined }
       )
       if (searched.source === 'tmdb') {
         diagnostics.usedTmdb = true
@@ -1103,7 +1310,7 @@ export class RecommendationEngine {
           discoveryKeywords,
           preferences.excludedGenres || [],
           preferences.yearRange,
-          { originalLanguage: preferences.originalLanguage, releaseDateRange: preferences.releaseWindowLabel ? preferences.releaseDateRange : undefined }
+          { originalLanguage: preferences.originalLanguage, originCountry: preferences.originCountry, releaseDateRange: preferences.releaseWindowLabel ? preferences.releaseDateRange : undefined }
         )
         if (backfill.source === 'tmdb') {
           diagnostics.usedTmdb = true
@@ -1168,7 +1375,7 @@ export class RecommendationEngine {
     }
 
     // Remove duplicates by ID
-    const uniqueCandidates = this.mergeCandidates(candidates)
+    const uniqueCandidates = await this.hydrateReleaseDates(this.mergeCandidates(candidates), preferences)
 
     console.log(`[Engine] ${uniqueCandidates.length} unique candidates`)
 
@@ -1211,13 +1418,14 @@ export class RecommendationEngine {
       const actorSeedCandidates = await this.buildActorSeedCandidates(
         preferences.detectedActors,
         request.description,
-        typeFilter
+        typeFilter,
+        llmDiagnostics
       )
 
       if (actorSeedCandidates.length > 0) {
         diagnostics.usedOmdb = true
         diagnostics.omdbFallbackUsed = diagnostics.tmdbEnabled
-        const recoveredSafe = this.filterContent(actorSeedCandidates)
+        const recoveredSafe = this.filterContent(await this.hydrateReleaseDates(actorSeedCandidates, preferences))
         const recoveredWithTalent = recoveredSafe.map(title => ({
           ...title,
           talentMatchScore: TalentMatcher.findTalentMatchForActors(
@@ -1248,16 +1456,19 @@ export class RecommendationEngine {
       }
     }
 
+    const requestedGenres = preferences.explicitGenres || []
     const selectedActorMatches = this.selectFinalResults(
       actorMatches,
       Math.min(limit, actorMatches.length),
-      preferences.isContrastiveReference ? 0 : 1
+      preferences.isContrastiveReference ? 0 : 1,
+      requestedGenres
     )
     const selectedOtherMatches = selectedActorMatches.length < limit
       ? this.selectFinalResults(
           effectiveRanked.filter(title => !actorMatches.includes(title)),
           limit - selectedActorMatches.length,
-          preferences.isContrastiveReference ? 0 : 1
+          preferences.isContrastiveReference ? 0 : 1,
+          requestedGenres
         )
       : []
     let finalCandidates = actorMatches.length > 0
@@ -1265,7 +1476,8 @@ export class RecommendationEngine {
       : this.selectFinalResults(
           effectiveRanked,
           limit,
-          preferences.isContrastiveReference ? 0 : 1
+          preferences.isContrastiveReference ? 0 : 1,
+          requestedGenres
         )
     if (preferences.detectedCreators?.length) {
       const primary = ranked.filter(title => this.getCreatorTier(title, preferences) === 0)
@@ -1274,12 +1486,13 @@ export class RecommendationEngine {
       const selectedFallback = this.selectFinalResults(fallback, Math.min(limit - selectedPrimary.length, fallback.length))
       finalCandidates = [...selectedPrimary, ...selectedFallback]
     }
-    const final = await this.resolveImdbIds(finalCandidates)
+    const final = this.filterHardConstraints(await this.resolveImdbIds(finalCandidates), preferences)
 
     this.lastRetrievalDiagnostics = {
       ...diagnostics,
       // Treat this as fallback only when TMDB was available in this run.
-      omdbFallbackUsed: diagnostics.tmdbEnabled && diagnostics.usedOmdb
+      omdbFallbackUsed: diagnostics.tmdbEnabled && diagnostics.usedOmdb,
+      ...(this.lastGenreFilterRelaxation ? { genreFilterRelaxed: this.lastGenreFilterRelaxation } : {})
     }
 
     console.log(`[Engine] Returning ${final.length} recommendations`)
@@ -1313,7 +1526,13 @@ export class RecommendationEngine {
           titlesForLLM
         )
         
-        if (llmExplanations.size > 0) {
+        const hasUsableExplanation = Array.from(llmExplanations.values()).some(
+          explanation => explanation.trim().length > 0 && explanation.trim().toLowerCase() !== 'null'
+        )
+        if (hasUsableExplanation) {
+          if (llmDiagnostics) {
+            recordLLMUsage(llmDiagnostics, 'recommendation explanations')
+          }
           console.log(`[Engine] Generated ${llmExplanations.size} LLM explanations with enhanced context`)
         }
       } catch {
@@ -1376,6 +1595,64 @@ export class RecommendationEngine {
         trailerData
       )
     )
+  }
+
+  /**
+   * Cheap availability check for a parsed request: runs the same TMDB genre/keyword
+   * discovery and language/genre gates as retrieval, without ranking or LLM calls.
+   * Returns undefined when TMDB is unavailable (availability unknown).
+   */
+  async estimateAvailableTitles(preferences: ParsedPreferences): Promise<number | undefined> {
+    if (!tmdbClient.isEnabled()) {
+      return undefined
+    }
+
+    const includeMovies = preferences.contentType !== 'tv'
+    const includeTV = preferences.contentType !== 'movie'
+    const excludedGenres = preferences.excludedGenres || []
+    const genres = (preferences.explicitGenres?.length ? preferences.explicitGenres : preferences.genres).slice(0, 3)
+    const filters = {
+      excludedGenres,
+      yearRange: preferences.yearRange,
+      originalLanguage: preferences.originalLanguage,
+      originCountry: preferences.originCountry,
+      releaseDateRange: preferences.releaseWindowLabel ? preferences.releaseDateRange : undefined
+    }
+
+    try {
+      const [genreResults, keywordResults] = await Promise.all([
+        genres.length > 0
+          ? tmdbClient.discoverByGenres(genres, { includeMovies, includeTV, excludeAdult: true, ...filters })
+          : tmdbClient.discoverByFilters({ includeMovies, includeTV, excludeAdult: true, ...filters }),
+        includeTV && genres.length > 0
+          ? this.discoverSeriesByGenreKeywords(genres, filters)
+          : Promise.resolve([])
+      ])
+
+      const coreGenres = this.inferCoreGenres(
+        preferences.description || '',
+        preferences.explicitGenres || [],
+        excludedGenres
+      )
+      const seen = new Set<string>()
+      return [...genreResults, ...keywordResults]
+        .map(item => this.convertTmdbResult(item))
+        .filter(title => {
+          if (seen.has(title.id)) return false
+          seen.add(title.id)
+          if (!this.matchesOriginalLanguage(title, preferences.originalLanguage)) {
+            return false
+          }
+          if (!this.matchesOriginCountry(title, preferences.originCountry)) {
+            return false
+          }
+          return coreGenres.length === 0 || titleMatchesAnyGenre(title, coreGenres)
+        })
+        .length
+    } catch (error) {
+      console.warn('[Engine] Availability probe failed:', error)
+      return undefined
+    }
   }
 
   getLastRetrievalDiagnostics(): RetrievalDiagnostics {
@@ -1534,6 +1811,53 @@ export class RecommendationEngine {
     return []
   }
 
+  private recordGenreFilterRelaxation(genres: string[]): void {
+    this.lastGenreFilterRelaxation = genres
+    const requestDiagnostics = requestRankingContext.getStore()
+    if (requestDiagnostics) {
+      requestDiagnostics.genreFilterRelaxed = genres
+    }
+  }
+
+  /**
+   * Country of origin is strict: titles without country evidence are excluded,
+   * otherwise unrelated popular titles leak into e.g. "Malaysian movies".
+   */
+  /** Lenient: titles without language data are kept. Codes may be "|"-joined alternatives. */
+  private matchesOriginalLanguage(title: any, originalLanguage?: string): boolean {
+    if (!originalLanguage || !title.originalLanguage) return true
+    return originalLanguage.split('|').includes(title.originalLanguage)
+  }
+
+  private matchesOriginCountry(title: any, originCountry?: string): boolean {
+    if (!originCountry) return true
+    const countries: string[] = title.originCountries || []
+    const wanted = originCountry.toUpperCase().split('|')
+    return countries.some(country => wanted.includes(country.toUpperCase()))
+  }
+
+  /**
+   * Genres named as qualifiers of "drama" ("historical drama", "crime drama").
+   * Plain "drama" matching is too broad for these, so they are preferred first.
+   */
+  private inferQualifiedDramaGenres(query: string, excludedGenres: string[] = []): string[] {
+    const qualifierGenres: Array<[RegExp, string]> = [
+      [/\b(?:historical|history|period|costume)\s+dramas?\b/i, 'History'],
+      [/\bcrime\s+dramas?\b/i, 'Crime'],
+      [/\bwar\s+dramas?\b/i, 'War'],
+      [/\brom(?:antic|ance)\s+dramas?\b/i, 'Romance'],
+      [/\b(?:sci-?fi|science[-\s]fiction)\s+dramas?\b/i, 'Sci-Fi'],
+      [/\bfantasy\s+dramas?\b/i, 'Fantasy'],
+      [/\bfamily\s+dramas?\b/i, 'Family']
+    ]
+    return qualifierGenres
+      .filter(([pattern, genre]) =>
+        pattern.test(query) &&
+        !excludedGenres.some(excluded => excluded.toLowerCase() === genre.toLowerCase())
+      )
+      .map(([, genre]) => genre)
+  }
+
   /**
    * Rank titles by relevance (Phase 3: Multi-factor scoring)
    * Combines: genre, mood, talent, rating, popularity, recency
@@ -1550,15 +1874,19 @@ export class RecommendationEngine {
     const coreGenres = preferences.noveltyIntent
       ? inferredCoreGenres.filter(genre => genre.toLowerCase() !== 'indie')
       : inferredCoreGenres
+    const qualifiedDramaGenres = coreGenres.some(genre => genre.toLowerCase() === 'drama')
+      ? this.inferQualifiedDramaGenres(preferences.description || '', preferences.excludedGenres || [])
+      : []
 
     // Check if query is heist-specific to enable semantic filtering
     const isHeistQuery = (preferences.description || '').toLowerCase().match(/\bheist\b|\btheft\b|\brobbery\b|\bcaper\b/i)
     const heistKeywords = /\bheist\b|\btheft\b|\brobbery\b|\bcaper\b|\bsteal|\brob\b|\bloot\b|\bgem\b|\bdiamond\b|\bbank\b|\bjewel\b|\bburglary\b/i
 
     // Filter titles: must have at least one core genre
+    const constrained = this.filterHardConstraints(titles, preferences)
     let filtered = preferences.detectedCreators?.length
-      ? titles.filter(title => this.getCreatorTier(title, preferences) < 2)
-      : titles
+      ? constrained.filter(title => this.getCreatorTier(title, preferences) < 2)
+      : constrained
 
     // Suppress any explicitly-mentioned anchor title by default unless user asks for a rewatch.
     const hasRewatchIntent = /(rewatch|watch again|same movie|the original|again)/i.test(
@@ -1592,12 +1920,22 @@ export class RecommendationEngine {
       )
     }
 
-    if (coreGenres.length > 0) {
+    if (preferences.noveltyIntent) {
+      const beforeCount = filtered.length
+      filtered = filtered.filter(title =>
+        Number(title.rating) >= 6 && Number(title.voteCount) >= 50
+      )
+      if (filtered.length < beforeCount) {
+        console.log(`[Engine.Rank] Novelty quality floor removed ${beforeCount - filtered.length} low-support titles`)
+      }
+    }
+
+    // Genre filter runs after the other hard constraints so it can be relaxed
+    // safely when no remaining title carries a matching genre.
+    if (coreGenres.length > 0 && filtered.length > 0) {
+      const beforeGenreFilter = filtered
       filtered = filtered.filter(t => {
-        const titleGenres = (t.genres || []).map((g: string) => g.toLowerCase())
-        const hasRequiredGenre = coreGenres.some(cg =>
-          titleGenres.some((tg: string) => tg.toLowerCase() === cg.toLowerCase())
-        )
+        const hasRequiredGenre = titleMatchesAnyGenre(t, coreGenres)
 
         // Additional semantic filtering for heist queries
         if (isHeistQuery && hasRequiredGenre) {
@@ -1617,56 +1955,30 @@ export class RecommendationEngine {
         return hasRequiredGenre
       })
 
-      if (filtered.length < titles.length) {
-        const removed = titles.length - filtered.length
+      if (filtered.length > 0 && qualifiedDramaGenres.length > 0) {
+        const qualified = filtered.filter(t =>
+          titleMatchesAnyGenre(t, qualifiedDramaGenres) && titleMatchesAnyGenre(t, ['Drama'])
+        )
+        if (qualified.length > 0) {
+          filtered = qualified
+        } else {
+          this.recordGenreFilterRelaxation(qualifiedDramaGenres)
+          console.log(
+            `[Engine.Rank] No titles matched qualified drama genres [${qualifiedDramaGenres.join(', ')}]; keeping broader drama matches`
+          )
+        }
+      }
+
+      if (filtered.length === 0) {
+        filtered = beforeGenreFilter
+        this.recordGenreFilterRelaxation(coreGenres)
         console.log(
-          `[Engine.Rank] Hard genre filter: removed ${removed} titles without core genres or heist semantics [${coreGenres.join(', ')}]`
+          `[Engine.Rank] Hard genre filter would remove all ${beforeGenreFilter.length} titles; relaxing to soft genre scoring [${coreGenres.join(', ')}]`
         )
-      }
-    }
-
-    if (preferences.excludedGenres?.length) {
-      const beforeCount = filtered.length
-      filtered = filtered.filter(title => {
-        const titleGenres = (title.genres || []).map((genre: string) => genre.toLowerCase())
-        return !preferences.excludedGenres!.some(excluded =>
-          titleGenres.includes(excluded.toLowerCase())
+      } else if (filtered.length < beforeGenreFilter.length) {
+        console.log(
+          `[Engine.Rank] Hard genre filter: removed ${beforeGenreFilter.length - filtered.length} titles without core genres or heist semantics [${coreGenres.join(', ')}]`
         )
-      })
-      if (filtered.length < beforeCount) {
-        console.log(`[Engine.Rank] Excluded ${beforeCount - filtered.length} titles by genre`)
-      }
-    }
-
-    if (preferences.originalLanguage) {
-      const beforeCount = filtered.length
-      filtered = filtered.filter(title => !title.originalLanguage || title.originalLanguage === preferences.originalLanguage)
-      if (beforeCount !== filtered.length) {
-        console.log(`[Engine.Rank] Language filter removed ${beforeCount - filtered.length} titles`)
-      }
-    }
-
-    if (preferences.yearRange?.min !== undefined || preferences.yearRange?.max !== undefined) {
-      const beforeCount = filtered.length
-      filtered = filtered.filter(title => {
-        const year = Number(title.year)
-        if (!Number.isFinite(year)) return false
-        return (preferences.yearRange?.min === undefined || year >= preferences.yearRange.min) &&
-          (preferences.yearRange?.max === undefined || year <= preferences.yearRange.max)
-      })
-
-      if (beforeCount !== filtered.length) {
-        console.log(`[Engine.Rank] Year-range filter removed ${beforeCount - filtered.length} titles`)
-      }
-    }
-
-    if (preferences.noveltyIntent) {
-      const beforeCount = filtered.length
-      filtered = filtered.filter(title =>
-        Number(title.rating) >= 6 && Number(title.voteCount) >= 50
-      )
-      if (filtered.length < beforeCount) {
-        console.log(`[Engine.Rank] Novelty quality floor removed ${beforeCount - filtered.length} low-support titles`)
       }
     }
 
@@ -2126,7 +2438,7 @@ export class RecommendationEngine {
     availabilityData?: Map<string, StreamingAvailability[]>,
     trailerData?: Map<string, string>
   ): Recommendation {
-    const type = item.type === 'series' ? 'tv' : 'movie'
+    const type = item.type === 'series' || item.type === 'tv' || item.type === 'episode' ? 'tv' : 'movie'
     const year = item.year?.toString() || 'N/A'
 
     // Use LLM-generated explanation if available, otherwise fallback to rule-based
@@ -2149,9 +2461,11 @@ export class RecommendationEngine {
       id: item.id,
       title: item.title,
       year,
+      releaseDate: toIsoDate(item.releaseDate),
       type,
       genres: item.genres || undefined,
       originalLanguage: item.originalLanguage || undefined,
+      originCountries: item.originCountries || undefined,
       certification: item.rated || undefined,
       runtimeMinutes: item.runtimeMinutes || undefined,
       rating: item.rating || undefined,

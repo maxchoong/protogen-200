@@ -129,6 +129,12 @@ describe('Creator intent', () => {
     ['recent horror movies', /^recent releases/],
     ['comedies released this year', /^released this year/],
     ['something from the past few months', /last few months/],
+    ['New horror movies released this month', /last month/],
+    ['what came out this week', /this week/],
+    ['new Korean series', /^recent releases/],
+    ['New horror movies released this month | Supernatural scares', /last month/],
+    ['Recommend a new movie like Inception', undefined],
+    ['new to me films', undefined],
     ['good movies from 1999 recently', undefined]
   ])('parses relative release phrases: %s', (description, label) => {
     const preferences = PreferenceParser.parse({ description })

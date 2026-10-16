@@ -5,30 +5,32 @@ A responsive React + TypeScript web application for getting film and TV recommen
 ## Development
 
 Install dependencies:
-\`\`\`bash
+```bash
 npm install
-\`\`\`
+```
 
 Run development server:
-\`\`\`bash
+```bash
 npm run dev
-\`\`\`
+```
 
 Build for production:
-\`\`\`bash
+```bash
 npm run build
-\`\`\`
+```
 
 Preview production build:
-\`\`\`bash
+```bash
 npm run preview
-\`\`\`
+```
 
 ## Features
 
-- Natural language input for "what I'm in the mood for"
-- Optional preference questions (genres, mood, type, rating)
-- Results page with recommendations
+- Conversation-first natural language input and freeform follow-ups
+- Inline clarification choices when requested by the backend
+- Structured request state stored and sent back on follow-ups; cleared on new chat
+- Recommendation rounds, poster highlights, details panels, availability and trailers
+- Generic chat fallback text when an API response has no assistant intro
 - Responsive design for mobile and desktop
 
 ## Architecture
@@ -37,4 +39,51 @@ npm run preview
 - Component-based structure with Pages
 - Tailwind CSS for styling
 - TypeScript for type safety
-- Proxy configured to backend API (localhost:5000)
+- Recommendation API base: `VITE_BACKEND_URL` when set, otherwise `http://localhost:3000` in development or `https://protogen-backend-1bvp.onrender.com` in production
+- Vite's separate `/api` proxy targets the Render backend; it is not the local recommendation-call default
+- Optional `VITE_STREAMING_REGION` overrides browser-locale region inference
+- Provider keys belong on the backend, never in frontend `VITE_*` settings
+
+## State and Lazy Enrichment
+
+- Messages, recommendation rounds and the current request spec live in React
+  memory via [useConversation](src/hooks/useConversation.ts). Reset clears that
+  conversation; there is no server session or persistent conversation history.
+- [ConversationalHome](src/pages/ConversationalHome.tsx) sends the original query,
+  latest answer, user turns, asked-question IDs, previous result IDs, cumulative
+  constraint tags and previous spec. Request IDs ignore cancelled/superseded
+  replies in the UI; they do not abort the underlying fetch/provider work.
+- [ResultsPage](src/pages/ResultsPage.tsx) loads highlights for the empty state
+  and highlight metadata when their details panel opens. It fetches streaming
+  availability separately for either kind of details panel when an IMDb ID is
+  known. Recommendation responses do not preload availability.
+- Highlights, highlight details, availability and availability diagnostics are
+  cached in `sessionStorage`. Highlight-detail failures store the basic tile as
+  fallback; availability failures store an empty list plus error diagnostics.
+  These browser entries have no TTL, and availability keys use IMDb ID without
+  country. A cached failure can therefore prevent a retry during the browser
+  session, and a changed region can reuse stale data. Backend cache TTLs do not
+  invalidate browser entries. Conversation reset does not clear these caches.
+- A response containing clarification takes precedence over recommendations in
+  the chat renderer. Some non-empty backend weak-result paths omit intro text;
+  generic frontend text is not evidence of a fact-grounded backend reply.
+
+## Visual Development Controls
+
+[LensTweakPanel](src/components/LensTweakPanel.tsx) is available in development
+or when the URL contains `?tweak`, and starts closed. It adjusts visual lens/beam
+parameters and the shader toggle, not recommendation preferences. Theme-specific
+settings and the toggle use `localStorage`; defaults and gating belong to
+[lensTweaks](src/lensTweaks.ts). The beam renderer uses OGL/WebGL in
+[BeamBackground](src/components/BeamBackground.tsx). These existing local UI
+changes have not received fresh browser/deployment certification.
+
+## Implementation Status
+
+As of October 16, structured-request round-tripping is implemented. Catalogue-built
+clarification options, backend fact-grounded replies and reply streaming remain
+planned. With a saved spec, failed/unusable understanding now returns a text
+clarification and unchanged request rather than unconfirmed new results. Live
+quality and latency acceptance remain open; see the
+[engine design](../memory-bank/design-conversational-engine.md) and
+[dated progress](../memory-bank/progress.md).

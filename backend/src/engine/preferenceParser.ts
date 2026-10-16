@@ -4,6 +4,9 @@
  * Phase 5: Intent classification and ambiguity detection
  */
 
+import { joinOriginNames, resolveConversationOrigins } from './regionTaxonomy.js'
+import { releaseWindow, summariseOrigins, type RequestSpec, type SpecOperation } from './requestSpec.js'
+
 export type DiscoveryMode = 'mood' | 'reference' | 'talent' | 'mixed'
 export type TurnContinuity = 'continue' | 'soft_pivot' | 'hard_pivot'
 export type TurnOperationType = 'narrow' | 'widen' | 'replace'
@@ -110,6 +113,13 @@ export interface ParsedPreferences {
   }
   originalLanguage?: string
   originalLanguageName?: string
+  /** ISO 3166-1 country of origin, e.g. MY for "Malaysian movies". */
+  /** ISO 3166-1 code(s); several are joined with "|" and mean any of them. */
+  originCountry?: string
+  originCountryName?: string
+  /** How the latest turn changed the requested language/country of origin. */
+  originChange?: 'added' | 'replaced' | 'narrowed'
+  originChangeNote?: string
   releaseWindowLabel?: string
 }
 
@@ -127,6 +137,10 @@ export interface RecommendationRequest {
     askedQuestionIds?: string[]
     cumulativeConstraints?: string[]
   }
+  /** LLM-understood request for this turn; authoritative over rule extraction when present. */
+  spec?: RequestSpec
+  previousSpec?: RequestSpec
+  specOperation?: SpecOperation
 }
 
 /**
@@ -199,35 +213,47 @@ export class PreferenceParser {
   ]
 
   private static readonly GENRE_KEYWORDS: Record<string, string[]> = {
-    'Action': ['action', 'fight', 'explosion', 'adventure', 'heroic', 'thrilling', 'combat'],
+    'Action': ['action', 'fight', 'explosion', 'heroic', 'thrilling', 'combat'],
+    'Adventure': ['adventure', 'adventures'],
     'Comedy': ['funny', 'laugh', 'comedy', 'comedies', 'comedic', 'humorous', 'hilarious', 'comic'],
-    'Drama': ['emotional', 'serious', 'dramatic', 'deep', 'character', 'intense'],
+    'Drama': ['emotional', 'serious', 'dramatic'],
     'Horror': ['scary', 'horror', 'spooky', 'creepy', 'terrifying', 'frightening'],
     'Romance': ['romance', 'romantic', 'love', 'couple', 'relationship'],
     'Sci-Fi': ['sci-fi', 'science fiction', 'future', 'space', 'alien', 'technology', 'dystopian'],
-    'Thriller': ['thriller', 'suspense', 'mystery', 'detective', 'crime', 'dark'],
+    'Thriller': ['thriller', 'suspense'],
+    'Crime': ['crime', 'detective', 'heist', 'gangster', 'mafia', 'cartel', 'police procedural'],
+    'Mystery': ['mystery', 'mysteries', 'detective', 'whodunit'],
     'Animation': ['animated', 'animation', 'cartoon'],
-    'Fantasy': ['fantasy', 'magic', 'magical', 'legend', 'adventure'],
-    'Documentary': ['documentary', 'real', 'true', 'educational'],
+    'Fantasy': ['fantasy', 'magic', 'magical', 'legend'],
+    'Documentary': ['documentary', 'educational'],
+    'History': ['historical', 'history', 'period drama', 'period piece', 'costume drama'],
+    'War': ['war', 'wartime'],
+    'Western': ['western', 'westerns', 'cowboy'],
     'Indie': ['indie', 'independent', 'arthouse', 'art house', 'festival', 'hidden gem', 'cult']
   }
 
   private static readonly GENRE_ALIAS_PATTERNS: Array<{ genre: string; pattern: RegExp }> = [
-    { genre: 'Action', pattern: /\b(action|actions|action-packed|adventure|adventures|combat|heroic)\b/i },
+    { genre: 'Action', pattern: /\b(action|actions|action-packed|combat|heroic)\b/i },
+    { genre: 'Adventure', pattern: /\b(adventure|adventures)\b/i },
     { genre: 'Comedy', pattern: /\b(comedy|comedies|comedic|funny|hilarious|humorous|laugh|laughing|comic|romcom|romcoms|rom-com|rom-coms)\b/i },
     { genre: 'Drama', pattern: /\b(drama|dramas|dramatic|character-driven|emotional)\b/i },
     { genre: 'Horror', pattern: /\b(horror|horrors|scary|spooky|creepy|terrifying|frightening)\b/i },
     { genre: 'Romance', pattern: /\b(romance|romances|romantic|love\s+story|love\s+stories|relationship|relationships|romcom|romcoms|rom-com|rom-coms)\b/i },
     { genre: 'Sci-Fi', pattern: /\b(sci-fi|sci fi|scifi|scifis|science\s+fiction|science-fiction|cyberpunk|dystopian)\b/i },
-    { genre: 'Thriller', pattern: /\b(thriller|thrillers|suspense|suspenseful|mystery|mysteries|detective|crime)\b/i },
+    { genre: 'Thriller', pattern: /\b(thriller|thrillers|suspense|suspenseful)\b/i },
+    { genre: 'Crime', pattern: /\b(crime|crimes|heist|heists|gangster|gangsters|mafia|cartel|cartels|detective|detectives|noir|police\s+procedurals?)\b/i },
+    { genre: 'Mystery', pattern: /\b(mystery|mysteries|whodunit|whodunits|whodunnit|whodunnits|detective|detectives)\b/i },
     { genre: 'Animation', pattern: /\b(animation|animated|anime|cartoon|cartoons)\b/i },
     { genre: 'Fantasy', pattern: /\b(fantasy|fantasies|magic|magical|mythic|legend)\b/i },
-    { genre: 'Documentary', pattern: /\b(documentary|documentaries|docuseries|non-fiction|nonfiction|true\s+story|true\s+stories)\b/i },
+    { genre: 'Documentary', pattern: /\b(documentary|documentaries|docuseries|non-fiction|nonfiction)\b/i },
+    { genre: 'History', pattern: /\b(historical|history|period\s+(?:drama|dramas|piece|pieces)|costume\s+dramas?)\b/i },
+    { genre: 'War', pattern: /\b(war|wartime)\b/i },
+    { genre: 'Western', pattern: /\b(western|westerns|cowboy|cowboys)\b/i },
     { genre: 'Indie', pattern: /\b(indie|indies|independent|arthouse|art\s+house|festival|hidden\s+gem|hidden\s+gems|cult)\b/i }
   ]
 
   private static readonly MOOD_KEYWORDS: Record<string, string[]> = {
-    'Happy': ['happy', 'uplifting', 'feel-good', 'cheerful', 'light', 'fun'],
+    'Happy': ['happy', 'uplifting', 'feel-good', 'cheerful', 'light', 'fun', 'heartwarming', 'heart-warming', 'heartfelt', 'wholesome', 'lighthearted', 'light-hearted', 'touching', 'family-friendly', 'feel good'],
     'Sad': ['sad', 'emotional', 'crying', 'melancholic', 'depressing'],
     'Intense': ['intense', 'adrenaline', 'fast-paced', 'fast paced', 'suspenseful', 'gripping', 'faster pace'],
     'Relaxing': ['relaxing', 'chill', 'cozy', 'calm', 'peaceful', 'easy-going', 'slower pace', 'slow pace', 'slower', 'gentle'],
@@ -312,12 +338,6 @@ export class PreferenceParser {
     'unexpected',
     'unusual'
   ]
-
-  private static readonly LANGUAGE_CODES: Record<string, string> = {
-    french: 'fr', spanish: 'es', german: 'de', italian: 'it', japanese: 'ja', korean: 'ko',
-    hindi: 'hi', mandarin: 'zh', chinese: 'zh', portuguese: 'pt', swedish: 'sv', danish: 'da',
-    norwegian: 'no', russian: 'ru', turkish: 'tr', thai: 'th', arabic: 'ar', polish: 'pl'
-  }
 
   private static readonly MAINSTREAM_KEYWORDS = [
     'blockbuster',
@@ -502,7 +522,7 @@ export class PreferenceParser {
 
   private static normalizeMoods(moods: string[]): string[] {
     const canonicalMoods = new Map([
-      ['happy', 'Happy'], ['uplifting', 'Happy'], ['feel-good', 'Happy'],
+      ['happy', 'Happy'], ['uplifting', 'Happy'], ['feel-good', 'Happy'], ['heartwarming', 'Happy'], ['heartfelt', 'Happy'], ['wholesome', 'Happy'],
       ['sad', 'Sad'], ['intense', 'Intense'], ['relaxing', 'Relaxing'], ['cozy', 'Relaxing'],
       ['funny', 'Funny'], ['comedy', 'Funny'], ['thoughtful', 'Thoughtful'],
       ['dark', 'Dark'], ['romantic', 'Romantic'], ['suspenseful', 'Suspenseful'],
@@ -727,6 +747,14 @@ export class PreferenceParser {
       preferences.originalLanguage = refinementSignals.originalLanguage.code
       preferences.originalLanguageName = refinementSignals.originalLanguage.name
     }
+    if (refinementSignals.originCountry) {
+      preferences.originCountry = refinementSignals.originCountry.code
+      preferences.originCountryName = refinementSignals.originCountry.name
+    }
+    if (refinementSignals.originChange) {
+      preferences.originChange = refinementSignals.originChange
+      preferences.originChangeNote = refinementSignals.originChangeNote
+    }
     if (refinementSignals.releaseWindowLabel) {
       preferences.releaseWindowLabel = refinementSignals.releaseWindowLabel
     }
@@ -746,6 +774,10 @@ export class PreferenceParser {
       preferences.constraints = Array.from(
         new Set([...(preferences.constraints || []), ...refinementSignals.constraints])
       )
+    }
+
+    if (request.spec) {
+      explicitGenres = this.applySpec(preferences, request)
     }
 
     const latestClarification = request.clarificationContext?.userClarification?.trim() || ''
@@ -802,6 +834,10 @@ export class PreferenceParser {
 
     // === PHASE 5: Extract actors and classify intent ===
     const latestTurn = request.clarificationContext?.userClarification || ''
+    if (request.spec) {
+      preferences.detectedCreators = request.spec.creators.map(creator => ({ ...creator }))
+      preferences.detectedActors = [...request.spec.actors]
+    } else {
     const latestCreators = this.extractCreators(latestTurn)
     const replacesCreators = latestCreators.length > 0 && !/\b(?:also|alongside|as well)\b/i.test(latestTurn)
     const ruleCreators = replacesCreators ? latestCreators : this.extractCreators(analysisText)
@@ -828,6 +864,7 @@ export class PreferenceParser {
         creator.name.toLowerCase() === actor.toLowerCase()
       ))
     ]))
+    }
     const intentClassification = this.classifyIntent(
       preferences.referenceTitle || [],
       preferences.detectedActors || [],
@@ -842,7 +879,9 @@ export class PreferenceParser {
     preferences.discoveryMode = intentClassification.mode
     preferences.intentConfidence = intentClassification.confidence
     preferences.intentSignals = intentClassification.signals
-    preferences.turnOperation = this.inferTurnOperation(request, preferences)
+    preferences.turnOperation = request.spec && request.specOperation
+      ? this.turnOperationFromSpec(request, preferences)
+      : this.inferTurnOperation(request, preferences)
 
     // Store original description for later use
     preferences.description = analysisText
@@ -861,6 +900,100 @@ export class PreferenceParser {
     }
 
     return preferences
+  }
+
+  /**
+   * Overlays the LLM-understood request on rule-extracted preferences. Spec fields are
+   * authoritative (set or clear); ranking nuances the spec doesn't model (comparative
+   * mood shifts, critics/novelty intent, result counts) stay rule-derived.
+   * Returns the explicit genres for the request.
+   */
+  private static applySpec(preferences: ParsedPreferences, request: RecommendationRequest): string[] {
+    const spec = request.spec!
+    const explicit = request.preferences || {}
+
+    if (!explicit.genres?.length) {
+      preferences.genres = [...spec.genres]
+      preferences.inferredGenresFromMood = false
+    }
+    // TMDB has no Indie genre: treat it as discovery intent rather than a genre filter.
+    if (spec.genres.includes('Indie')) preferences.noveltyIntent = true
+    if (preferences.noveltyIntent && !preferences.genres.includes('Indie')) preferences.genres.push('Indie')
+
+    if (!explicit.mood?.length) {
+      const ruleStrength = preferences.moodStrength || new Map<string, number>()
+      preferences.mood = [...spec.tones]
+      preferences.moodStrength = new Map(spec.tones.map(tone => [tone, ruleStrength.get(tone) ?? 0.9]))
+    }
+
+    preferences.keywords = [...spec.themes]
+
+    if (!explicit.contentType) {
+      if (spec.format !== 'both') {
+        preferences.contentType = spec.format
+        preferences.contentTypeExplicit = true
+      } else {
+        const keepsImplicitMovieDefault = preferences.popularityPreference === 'mainstream' ||
+          preferences.criticsIntent || preferences.noveltyIntent
+        preferences.contentType = keepsImplicitMovieDefault ? preferences.contentType : 'both'
+        preferences.contentTypeExplicit = false
+      }
+    }
+    if (!explicit.maxRating) preferences.maxRating = spec.maxCertification || 'R'
+
+    preferences.excludedGenres = [...spec.excludeGenres]
+    preferences.genres = preferences.genres.filter(genre => !spec.excludeGenres.includes(genre))
+
+    preferences.yearRange = spec.years ? { ...spec.years } : undefined
+    const window = releaseWindow(spec)
+    preferences.releaseDateRange = window ? { gte: window.gte, lte: window.lte } : undefined
+    preferences.releaseWindowLabel = window?.label
+
+    const origins = summariseOrigins(request.previousSpec, spec)
+    preferences.originCountry = origins.originCountry
+    preferences.originCountryName = origins.originCountryName
+    preferences.originalLanguage = origins.originalLanguage
+    preferences.originalLanguageName = origins.originalLanguageName
+    preferences.originChange = origins.originChange
+    preferences.originChangeNote = origins.originChangeNote
+
+    if (!explicit.referenceTitle?.length) preferences.referenceTitle = [...spec.references]
+    preferences.referenceSuggestions = [...spec.referenceSuggestions]
+    if (spec.references.length && spec.tones.length) preferences.isContrastiveReference ||= /\bbut\b/i.test(this.buildAnalysisText(request))
+    // "Something good" is not a popularity request; only accept the field when the user signalled it.
+    const popularityCue = /\b(popular|mainstream|blockbusters?|crowd[- ]?pleas\w*|well[- ]known|famous|big hits?|hidden gems?|underrated|obscure|lesser[- ]known|niche|indie|under[- ]the[- ]radar|cult|arthouse|festival)\b/i
+    preferences.popularityPreference = spec.popularity && popularityCue.test(this.buildAnalysisText(request))
+      ? spec.popularity
+      : undefined
+
+    return explicit.genres?.length ? [...explicit.genres] : spec.genres.filter(genre => genre !== 'Indie')
+  }
+
+  private static turnOperationFromSpec(
+    request: RecommendationRequest,
+    preferences: ParsedPreferences
+  ): TurnOperation | undefined {
+    if ((request.clarificationContext?.clarificationRound ?? 0) === 0) return undefined
+
+    const operation = request.specOperation!
+    const previous = request.previousSpec
+    const spec = request.spec!
+    const rationaleTags = ['llm_spec', `spec_${operation}`]
+    const people = (value?: RequestSpec) => JSON.stringify([value?.references, value?.actors, value?.creators?.map(creator => creator.name)])
+    if (previous && people(previous) !== people(spec) && (spec.references.length || spec.actors.length || spec.creators.length)) {
+      rationaleTags.push('anchor_shift')
+    }
+    if (preferences.originChange) rationaleTags.push(`origin_${preferences.originChange}`)
+
+    const mapped: Record<SpecOperation, Pick<TurnOperation, 'continuity' | 'operation'>> = {
+      new: { continuity: 'hard_pivot', operation: 'replace' },
+      pivot: { continuity: 'hard_pivot', operation: 'replace' },
+      replace: { continuity: 'continue', operation: 'replace' },
+      add: { continuity: 'continue', operation: 'widen' },
+      remove: { continuity: 'continue', operation: 'widen' },
+      refine: { continuity: 'continue', operation: 'narrow' }
+    }
+    return { ...mapped[operation], confidence: 0.9, rationaleTags }
   }
 
   private static inferTurnOperation(
@@ -904,10 +1037,14 @@ export class PreferenceParser {
       }
     }
 
-    if (hasReplaceCue) {
+    if (hasReplaceCue || preferences.originChange === 'replaced') {
       operation = 'replace'
       confidence += 0.2
-      rationaleTags.push('replace_cue')
+      rationaleTags.push(hasReplaceCue ? 'replace_cue' : 'origin_replaced')
+    } else if (preferences.originChange === 'added') {
+      operation = 'widen'
+      confidence += 0.2
+      rationaleTags.push('origin_added')
     } else if (hasWidenCue && !hasNarrowCue) {
       operation = 'widen'
       confidence += 0.15
@@ -998,6 +1135,9 @@ export class PreferenceParser {
     yearRange?: { min?: number; max?: number }
     releaseDateRange?: { gte?: string; lte?: string }
     originalLanguage?: { code: string; name: string }
+    originCountry?: { code: string; name: string }
+    originChange?: 'added' | 'replaced' | 'narrowed'
+    originChangeNote?: string
     releaseWindowLabel?: string
     rankingStrategyPreference?: 'mood_first' | 'reference_first' | 'talent_first'
     resultLimit?: number
@@ -1104,6 +1244,15 @@ export class PreferenceParser {
       } else if (/\b(?:last|past)\s+month\b/.test(description)) {
         releaseDateRange = monthsBack(1)
         releaseWindowLabel = 'released in the last month'
+      } else if (/\bthis\s+week\b/.test(description)) {
+        const start = new Date(currentDate)
+        start.setDate(start.getDate() - 7)
+        releaseDateRange = { gte: toIso(start), lte: toIso(currentDate) }
+        releaseWindowLabel = 'released this week'
+      } else if (/\bthis\s+month\b/.test(description)) {
+        // Early in a month, "this month" would be a near-empty window; use the last month instead.
+        releaseDateRange = monthsBack(1)
+        releaseWindowLabel = 'released in the last month'
       } else if (/\blast\s+year\b/.test(description)) {
         releaseDateRange = { gte: `${currentYear - 1}-01-01`, lte: `${currentYear - 1}-12-31` }
         releaseWindowLabel = `released last year (${currentYear - 1})`
@@ -1113,7 +1262,11 @@ export class PreferenceParser {
       } else if (/\b(?:past|previous)\s+(?:year|12\s+months)\b/.test(description)) {
         releaseDateRange = monthsBack(12)
         releaseWindowLabel = 'released in the last 12 months'
-      } else if (/\b(?:recent|recently|latest|newly\s+released|new\s+releases?|just\s+released)\b/.test(description)) {
+      } else if (
+        /\b(?:recent|recently|latest|newly\s+released|new\s+releases?|just\s+released)\b/.test(description) ||
+        // Plural only: "a new movie" usually means one the user hasn't seen, not a recent release.
+        /\bnew\s+(?!to\b)(?:[a-z-]+\s+){0,2}(?:movies|films|shows|series|tv\s+shows)\b/.test(description)
+      ) {
         releaseDateRange = monthsBack(12)
         releaseWindowLabel = 'recent releases (last 12 months)'
       }
@@ -1123,14 +1276,18 @@ export class PreferenceParser {
       }
     }
 
-    let originalLanguage: { code: string; name: string } | undefined
-    for (const [name, code] of Object.entries(this.LANGUAGE_CODES)) {
-      if (new RegExp(`\\b${name}(?:-language)?\\b`).test(description)) {
-        originalLanguage = { code, name: name.charAt(0).toUpperCase() + name.slice(1) }
-        constraints.push(`language:${code}`)
-        break
-      }
-    }
+    // Analysis text joins active user turns with " | "; origins merge turn by turn.
+    const origins = resolveConversationOrigins(description.split(' | '))
+    const originalLanguage = origins.languages.length > 0
+      ? { code: origins.languages.map(item => item.code).join('|'), name: joinOriginNames(origins.languages)! }
+      : undefined
+    const originCountry = origins.countries.length > 0
+      ? { code: origins.countries.map(item => item.code).join('|'), name: joinOriginNames(origins.countries)! }
+      : undefined
+    const originChange = origins.change
+    const originChangeNote = origins.changeNote
+    origins.languages.forEach(item => constraints.push(`language:${item.code}`))
+    origins.countries.forEach(item => constraints.push(`country:${item.code}`))
 
     const yearRange = uniqueExplicitYears.length > 0
       ? {
@@ -1217,6 +1374,9 @@ export class PreferenceParser {
       yearRange,
       releaseDateRange,
       originalLanguage,
+      originCountry,
+      originChange,
+      originChangeNote,
       releaseWindowLabel,
       rankingStrategyPreference,
       resultLimit,

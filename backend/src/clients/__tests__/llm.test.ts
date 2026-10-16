@@ -93,6 +93,19 @@ describe('LLM provider configuration', () => {
     ])).toEqual(new Map())
   })
 
+  it('does not return fallback-only clarification as LLM output', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key'
+    createCompletion.mockResolvedValue({ choices: [{ message: { content: '{}' } }] })
+    const result = await new LLMClient().generateConversationalClarification('A film', [{
+      id: 'mood',
+      question: 'What kind of mood?',
+      type: 'select',
+      options: ['Light', 'Thoughtful']
+    }])
+
+    expect(result).toBeNull()
+  })
+
   it('validates creator hints and restricts cross-role fallback to director-primary requests', async () => {
     process.env.OPENAI_API_KEY = 'test-openai-key'
     createCompletion.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
@@ -119,5 +132,47 @@ describe('LLM provider configuration', () => {
     }])
     expect(explanations.get('Producer Pick')).toContain('producing credit')
     expect(createCompletion.mock.calls[0][0].messages[1].content).toContain('James Cameron: producer')
+  })
+
+  it('returns the structured request with the previous request and turns in the prompt', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key'
+    createCompletion.mockResolvedValue({
+      choices: [{ message: { content: '{"operation":"add","spec":{"countries":["MY","ID"]}}' } }]
+    })
+    const client = new LLMClient()
+
+    const result = await client.parseRequestSpec({
+      latestTurn: 'What about Indonesian films too?',
+      earlierTurns: ['Malaysian movies'],
+      previousSpec: { countries: ['MY'] },
+      today: new Date('2026-10-15T00:00:00Z')
+    })
+
+    expect(result).toEqual({ operation: 'add', spec: { countries: ['MY', 'ID'] } })
+    const [body, options] = createCompletion.mock.calls[0]
+    expect(body.messages[0].content).toContain('Today is 2026-10-15')
+    expect(body.messages[0].content).toContain('Keep previous genres alongside the new ones')
+    expect(body.messages[0].content).toContain('replaces only countries')
+    expect(body.messages[1].content).toContain('Previous request: {"countries":["MY"]}')
+    expect(body.messages[1].content).toContain('- Malaysian movies')
+    expect(options).toEqual({ timeout: 8000, maxRetries: 1 })
+  })
+
+  it('returns null for malformed request understanding', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key'
+    createCompletion.mockResolvedValue({ choices: [{ message: { content: '[1,2]' } }] })
+    const client = new LLMClient()
+
+    expect(await client.parseRequestSpec({ latestTurn: 'Nordic noir' })).toBeNull()
+  })
+
+  it('skips further calls for a cooldown after a rate limit', async () => {
+    process.env.OPENAI_API_KEY = 'test-openai-key'
+    createCompletion.mockRejectedValue(Object.assign(new Error('429 status code (no body)'), { status: 429 }))
+    const client = new LLMClient()
+
+    expect(await client.parseRequestSpec({ latestTurn: 'Nordic noir' })).toBeNull()
+    expect(await client.parseRequestSpec({ latestTurn: 'Korean thrillers' })).toBeNull()
+    expect(createCompletion).toHaveBeenCalledTimes(1)
   })
 })

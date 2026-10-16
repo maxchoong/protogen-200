@@ -1,12 +1,11 @@
-# GitHub Models Setup Guide
+# LLM Provider Setup Guide
 
-## Current Setup: Migrate Away From GitHub Models
+## Current Setup: OpenAI-Compatible Provider
 
-GitHub Models was retired on July 30, 2026. Its inference API is no longer
-available. GitHub Copilot is a separate service and cannot supply this app's
-model requests. Rotating a GitHub token will not restore the retired API.
-
-Official notice: https://docs.github.com/en/github-models/quickstart
+This guide retains its legacy filename for existing links. The current client
+rejects `models.inference.ai.azure.com` and `models.github.ai` and does not use
+GitHub-token credentials. GitHub Copilot is separate from this app's provider
+configuration; rotating a GitHub token does not configure a supported endpoint.
 
 The backend now supports OpenAI or an OpenAI-compatible Chat Completions API.
 No provider has been purchased or credential changed automatically.
@@ -79,8 +78,9 @@ npm --prefix backend run check:llm
 ```
 
 This sends two small provider requests and may incur usage charges. It reports
-success only after both preference parsing and explanation generation return
-usable responses; merely configuring a key does not prove connectivity.
+success only after both the older preference parser and batch explanation
+generation return usable responses. It does not test `parseRequestSpec` or a
+full conversation; merely configuring a key does not prove connectivity.
 
 Stop the existing backend in its terminal with Ctrl+C, then restart:
 
@@ -101,6 +101,26 @@ and template explanations, and no requests are made to the retired service.
 - Connection errors: inspect DNS, TLS trust, firewall, or proxy settings. Do
   not disable TLS verification to work around them.
 - JSON-output errors: select a model supporting the required request options.
+
+### Observed Reliability and Request Budget (October 16, 2026)
+
+- Gemini `gemini-3.5-flash-lite` responded after the earlier rate limit, but
+  later requests returned timeouts/503s and a subsequent check returned 429.
+  Neither a quota reset nor continued availability has been confirmed since
+  that final failure. No live provider check is part of the documentation refresh.
+- Structured understanding uses an 8 s per-attempt timeout and one SDK retry;
+  other LLM stages default to 15 s per attempt and two retries.
+- After SDK retries end with a 429, the client starts a process-local 60 s
+  cooldown. Uncached LLM stages then fall back immediately during that cooldown.
+  This does not fail fast on the first 429 attempt or circuit-break timeouts/503s.
+- A turn can call understanding, clarification wording, batch explanations and
+  a results intro; when understanding fails, the older preference-parser call
+  may also run. Caching affects actual usage. Do not use the historical
+  two-calls-per-query estimate or daily-capacity figures below.
+- Fallback keeps core retrieval available but is not yet equivalent to the
+  structured path for conversation continuity. See
+  [the engine design](../memory-bank/design-conversational-engine.md) and
+  [progress](../memory-bank/progress.md) for measured latency and quality.
 
 ## Historical Instructions (Obsolete, Do Not Follow)
 
@@ -423,4 +443,4 @@ You should see personalized, intelligent recommendations! ✨
 - **Model playground:** https://github.com/marketplace/models
 - **API reference:** https://docs.github.com/en/rest/models
 
-For issues with this project, check [main README](../README.md) or [memory bank](../memory-bank/).
+For current project setup, use the [backend README](README.md) or [memory bank](../memory-bank/).

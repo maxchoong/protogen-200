@@ -34,6 +34,8 @@ uniform vec4 uClip2;
 uniform vec4 uClip3;
 uniform vec4 uLensA;
 uniform vec4 uLensB;
+uniform vec4 uBeamA;
+uniform vec4 uBeamB;
 
 float hash(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -75,6 +77,12 @@ float dust(vec2 p, float scale, float seed, float t) {
   return step(0.55, h) * smoothstep(0.045, 0.0, d) * twinkle;
 }
 
+// Streaks fanning out from the lens, as if cast by bright and dark areas of the projected picture.
+float rayPattern(float ang, float seed, float t) {
+  float z = seed * 7.31 + t * uBeamA.y;
+  return 0.65 * noise(vec2(ang * 28.0, z)) + 0.35 * noise(vec2(ang * 70.0 + 3.7, z * 1.3 + 4.1));
+}
+
 vec4 shade(vec2 p) {
   float aspect = uResolution.x / uResolution.y;
   vec2 uv = vec2(p.x / aspect, p.y);
@@ -91,8 +99,24 @@ vec4 shade(vec2 p) {
   float cone = smoothstep(halfWidth, halfWidth * 0.15, abs(across));
   cone *= smoothstep(0.0, 0.25, along) * exp(-max(along, 0.0) * 0.85);
 
-  float haze = fbm(p * 2.2 + vec2(t * 0.018, -t * 0.012));
-  float beam = cone * (0.55 + 0.75 * haze);
+  // Scenes crossfade over the last quarter of each shot so picture changes never read as hard cuts.
+  float s = t / max(uBeamA.w, 0.5);
+  float shot = floor(s);
+  float blend = smoothstep(0.75, 1.0, fract(s));
+
+  float ang = across / max(along, 0.05);
+  float rays = mix(rayPattern(ang, shot, t), rayPattern(ang, shot + 1.0, t), blend);
+  float rayMod = 1.0 + uBeamA.x * (rays * 2.0 - 1.0);
+
+  float level = mix(hash(vec2(shot, 1.7)), hash(vec2(shot + 1.0, 1.7)), blend);
+  float sceneMod = 1.0 + uBeamA.z * (level * 2.0 - 1.0);
+  float gate = 1.0 - uBeamB.z * hash(vec2(floor(t * 24.0), 9.1));
+
+  // Smoke drifts away from the projector and curls via a cheap domain warp.
+  vec2 hp = p * 2.2;
+  vec2 warp = vec2(noise(hp * 0.6 + t * 0.05), noise(hp * 0.6 + 9.1 - t * 0.04)) - 0.5;
+  float haze = fbm(hp + warp * uBeamB.y - dir * t * uBeamB.x + vec2(t * 0.018, -t * 0.012));
+  float beam = cone * (0.55 + 0.75 * haze) * rayMod * sceneMod * gate;
 
   float motes = dust(p, 18.0, 1.0, t) + 0.7 * dust(p, 32.0, 5.0, t);
   float cut = smoothstep(0.02, 0.35, cone);
@@ -230,6 +254,8 @@ export default function BeamBackground({ theme, onReady, onUnavailable }: BeamBa
       uClip3: { value: [0, 0, 0, 0] },
       uLensA: { value: [0, 0, 0, 0] },
       uLensB: { value: [0, 0, 0, 0] },
+      uBeamA: { value: [0, 0, 0, 1] },
+      uBeamB: { value: [0, 0, 0, 0] },
     }
     const rectUniforms = [uniforms.uRect0, uniforms.uRect1, uniforms.uRect2, uniforms.uRect3]
     const clipUniforms = [uniforms.uClip0, uniforms.uClip1, uniforms.uClip2, uniforms.uClip3]
@@ -263,6 +289,8 @@ export default function BeamBackground({ theme, onReady, onUnavailable }: BeamBa
       const lens = getLensParams(lightRef.current.value > 0.5 ? 'light' : 'dark')
       uniforms.uLensA.value = [lens.magnify, lens.bend, lens.brighten, lens.fringe]
       uniforms.uLensB.value = [lens.splitG, lens.splitB, lens.width, lens.radius]
+      uniforms.uBeamA.value = [lens.rays, lens.rayDrift, lens.scene, lens.sceneLength]
+      uniforms.uBeamB.value = [lens.hazeFlow, lens.swirl, lens.gateFlicker, 0]
 
       rectUniforms.forEach((uniform, i) => {
         const card = active[i]

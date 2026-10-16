@@ -5,7 +5,7 @@ import AmbientBackground from './components/AmbientBackground'
 import LensTweakPanel from './components/LensTweakPanel'
 import { isTweakPanelEnabled } from './lensTweaks'
 import { useTheme } from './hooks/useTheme'
-import { useConversation } from './hooks/useConversation'
+import { useConversation, type LLMUsageDiagnostics } from './hooks/useConversation'
 import { buttonClass } from './buttonStyles'
 import './App.css'
 
@@ -20,6 +20,7 @@ interface RecommendationRequest {
     cumulativeConstraints?: string[]
     userTurns?: string[]
   }
+  spec?: unknown
   preferences?: {
     genres?: string[]
     mood?: string[]
@@ -33,6 +34,8 @@ interface RecommendationResponse {
   appliedConstraints?: string[]
   interpretationNote?: string
   assistantMessage?: string
+  llmDiagnostics?: LLMUsageDiagnostics
+  spec?: unknown
   retrievalDiagnostics?: {
     tmdbEnabled: boolean
     usedTmdb: boolean
@@ -97,12 +100,14 @@ function App() {
       askedQuestionIds?: string[]
       previousRecommendationIds?: string[]
       cumulativeConstraints?: string[]
-    }
+    },
+    spec?: unknown
   ): Promise<RecommendationResponse> => {
     const payload: RecommendationRequest = {
       description,
       region: inferStreamingRegion(),
-      clarificationContext
+      clarificationContext,
+      spec
     }
 
     const connectivityMessage = "We couldn't connect to our recommendation service just now. Please try again."
@@ -154,6 +159,7 @@ function App() {
       turnOperation?: RecommendationResponse['turnOperation']
       appliedConstraints?: string[]
       interpretationNote?: string
+      llmDiagnostics?: LLMUsageDiagnostics
       retrievalDiagnostics?: RecommendationResponse['retrievalDiagnostics']
     }
   ) => {
@@ -165,6 +171,7 @@ function App() {
       turnOperation: options?.turnOperation,
       appliedConstraints: options?.appliedConstraints || [],
       interpretationNote: options?.interpretationNote,
+      llmDiagnostics: options?.llmDiagnostics,
       retrievalDiagnostics: options?.retrievalDiagnostics
     })
   }
@@ -209,7 +216,7 @@ function App() {
               onClick={handleStartNewConversation}
               className={buttonClass({
                 variant: showResetConfirm ? 'secondary' : 'subtle',
-                size: 'sm',
+                size: 'md',
                 className: `${showResetConfirm ? 'glass--accent' : ''} whitespace-nowrap`
               })}
               aria-label="Start a new conversation"
@@ -218,45 +225,46 @@ function App() {
             </button>
             <button
               onClick={toggleTheme}
-              className={buttonClass({ variant: 'subtle', size: 'icon' })}
-              aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+              className={buttonClass({ variant: 'subtle', size: 'switch', className: 'theme-switch' })}
+              role="switch"
+              aria-checked={theme === 'dark'}
+              aria-label="Dark mode"
               title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+              data-theme-mode={theme}
             >
-              {theme === 'dark' ? (
-                <svg
-                  className="h-4 w-4"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <circle cx="12" cy="12" r="4" />
-                  <path d="M12 2v2" />
-                  <path d="M12 20v2" />
-                  <path d="m4.93 4.93 1.41 1.41" />
-                  <path d="m17.66 17.66 1.41 1.41" />
-                  <path d="M2 12h2" />
-                  <path d="M20 12h2" />
-                  <path d="m6.34 17.66-1.41 1.41" />
-                  <path d="m19.07 4.93-1.41 1.41" />
-                </svg>
-              ) : (
-                <svg
-                  className="h-4 w-4"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
-                </svg>
-              )}
+              <span className="theme-switch__thumb" aria-hidden="true" />
+              <svg
+                className="theme-switch__icon theme-switch__icon--sun"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="4" />
+                <path d="M12 2v2" />
+                <path d="M12 20v2" />
+                <path d="m4.93 4.93 1.41 1.41" />
+                <path d="m17.66 17.66 1.41 1.41" />
+                <path d="M2 12h2" />
+                <path d="M20 12h2" />
+                <path d="m6.34 17.66-1.41 1.41" />
+                <path d="m19.07 4.93-1.41 1.41" />
+              </svg>
+              <svg
+                className="theme-switch__icon theme-switch__icon--moon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M20.3 15.4A8.5 8.5 0 0 1 8.6 3.7a8.7 8.7 0 1 0 11.7 11.7Z" />
+              </svg>
             </button>
           </div>
         </div>

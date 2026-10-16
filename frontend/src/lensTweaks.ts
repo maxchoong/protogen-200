@@ -7,6 +7,13 @@ export interface LensParams {
   fringe: number
   width: number
   radius: number
+  rays: number
+  rayDrift: number
+  scene: number
+  sceneLength: number
+  hazeFlow: number
+  swirl: number
+  gateFlicker: number
 }
 
 export type LensTheme = 'dark' | 'light'
@@ -21,6 +28,13 @@ export const LENS_DEFAULTS: Record<LensTheme, LensParams> = {
     fringe: 0.36,
     width: 8,
     radius: 12,
+    rays: 0.4,
+    rayDrift: 0.12,
+    scene: 0.15,
+    sceneLength: 8,
+    hazeFlow: 0.04,
+    swirl: 1,
+    gateFlicker: 0.02,
   },
   light: {
     magnify: 0.06,
@@ -31,6 +45,13 @@ export const LENS_DEFAULTS: Record<LensTheme, LensParams> = {
     fringe: 0.36,
     width: 8,
     radius: 12,
+    rays: 0.64,
+    rayDrift: 0.12,
+    scene: 0.15,
+    sceneLength: 8,
+    hazeFlow: 0.04,
+    swirl: 0.6,
+    gateFlicker: 0.02,
   },
 }
 

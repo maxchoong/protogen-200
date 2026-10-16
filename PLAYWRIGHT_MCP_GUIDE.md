@@ -333,7 +333,7 @@ Steps:
 
 ## Next Steps
 
-1. **Run the test file**: [backend/test-playwright-intro.ts](../backend/test-playwright-intro.ts)
+1. **Run the test file**: [backend/test-playwright-intro.ts](backend/test-playwright-intro.ts)
 2. **Try other interactions**: Form inputs, keyboard shortcuts, modal dialogs
 3. **Test error states**: Invalid inputs, network errors, edge cases
 4. **Automate workflows**: Multi-step user journeys, regression suites
@@ -343,7 +343,7 @@ Steps:
 
 ## Resources
 
-- **Test file**: [backend/test-playwright-intro.ts](../backend/test-playwright-intro.ts) — Contains commented test cases for all key scenarios
+- **Test file**: [backend/test-playwright-intro.ts](backend/test-playwright-intro.ts) — Contains commented test cases for all key scenarios
 - **App URL**: https://protogen-200.vercel.app/
-- **Backend code**: [backend/src/](../backend/src/) — Recommendation engine and API endpoints
-- **Frontend code**: [frontend/src/](../frontend/src/) — React components and UI logic
+- **Backend code**: [backend/src/](backend/src/) — Recommendation engine and API endpoints
+- **Frontend code**: [frontend/src/](frontend/src/) — React components and UI logic

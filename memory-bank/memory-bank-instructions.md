@@ -1,183 +1,74 @@
-# Copilot Memory Bank & Project Instructions
+# Memory index and maintenance contract
 
-## Summary
+Status: current policy. Updated: October 16, 2026.
 
-This document defines how GitHub Copilot maintains project memory and context across sessions. Copilot’s memory resets between sessions, so all project knowledge must be captured in the Memory Bank to ensure continuity, accuracy, and effective collaboration.
+## Start here: selective context
 
----
+At session start or after context loss, read this index, [project rules](copilot-rules.md)
+and [active context](activeContext.md). Then load only the references needed for
+the task. Within the same session, reuse context already read; reread changed
+owners or when uncertainty requires it. Do not recursively load the memory bank.
 
-## Core Principle
+| Task or question | Read next |
+|---|---|
+| Product intent and scope | [Project brief](projectbrief.md), [product context](productContext.md) |
+| Architecture and code ownership | [System patterns](systemPatterns.md) |
+| Setup, API use and environment | [Backend README](../backend/README.md), [frontend README](../frontend/README.md), [provider guide](../backend/GITHUB_MODELS_SETUP.md); [technical context](techContext.md) for integration constraints |
+| Recommendation-engine changes | [Engine PRD](prd-conversational-engine.md), [design](design-conversational-engine.md), [tasks](tasks-conversational-engine.md) |
+| Test/evaluation status and provider health | [Verification ledger](progress.md) |
+| UI styling/testing | [Visual reference](design2.md), actual component/CSS source; [browser guide](../PLAYWRIGHT_MCP_GUIDE.md) for historical examples, not current verification |
+| Recommendation review workflow | [Review PRD](recommendation-review-skill/prd.md), [design](recommendation-review-skill/design.md), [tasks](recommendation-review-skill/tasks.md); load [the skill](../.github/skills/recommendation-review/SKILL.md) when applicable |
+| Historical decisions, diagnoses or recovery | [Snapshot recovery map](archive/2026-10-16/README.md); search/read only relevant sections |
 
-**Copilot MUST read ALL memory bank files at the start of EVERY task.**
+Read source/tests before changing or asserting implementation behaviour. Docs
+route investigation; they are not substitutes for code evidence. Archives are
+historical evidence, never active instructions or current health claims.
 
-* No exceptions.
-* Use this checklist before any work:
+Old links remain valid through the [consolidated-doc entry point](Film_Advisor_App_AllDocs.md)
+and [superseded design entry point](design.md); do not load their snapshots by default.
 
-  * [ ] Read `projectbrief.md`
-  * [ ] Read `productContext.md`
-  * [ ] Read `systemPatterns.md`
-  * [ ] Read `techContext.md`
-  * [ ] Read `activeContext.md`
-  * [ ] Read `progress.md`
-  * [ ] Read `copilot-rules.md`
-  * [ ] Read any additional context files in `/memory-bank/`
+## One authoritative home per fact
 
----
+- PRD: requirements, product decisions and acceptance targets.
+- Design: implemented architecture, rationale, deviations and labelled plans.
+- Feature tasks: implementation completion and outstanding work.
+- [Progress](progress.md): dated validation/evaluation evidence and general backlog.
+- [Active context](activeContext.md): current focus, blockers, next action and owner links.
+- READMEs/provider guide: runnable setup and configuration.
+- Source types/tests: exact runtime contracts.
 
-## Memory Bank Structure
+Link to an owner rather than duplicating its test counts, scores, task lists or
+API types. A short blocker reminder is useful; a second full ledger is not.
+When evidence disagrees, inspect the relevant source/report and update the owner.
+Do not silently promote historical observations into current facts.
 
-The Memory Bank consists of required core files and optional context files, all in Markdown. Files build upon each other in a clear hierarchy:
+## Maintenance on each meaningful change
 
-```mermaid
-flowchart TD
-    PB[projectbrief.md] --> PC[productContext.md]
-    PB --> SP[systemPatterns.md]
-    PB --> TC[techContext.md]
+1. Follow Kiro-Lite: PRD -> Design -> Tasks -> Code, proportional to scope. Keep
+   requirements, design and tasks distinct; do not duplicate the implementation
+   story in all three. Use the explicit Kiro-Lite skill only when requested.
+2. Update the affected owner in the same change, or explain why none changed.
+3. Refresh active context when focus, blockers or the next action changes. Link
+   verification there rather than copying results.
+4. Record validation with date, scope and command/report. Distinguish implemented,
+   verified, accepted and deployed. Editing a doc does not refresh verification.
+5. Move completed detail out of the handoff. Preserve unique evidence and open
+   tasks before shortening; use dated snapshots for substantial restructuring.
+6. Run `npm --prefix backend run check:docs` after documentation/instruction edits.
 
-    PC --> AC[activeContext.md]
-    SP --> AC
-    TC --> AC
+Keep the default reading set small (soft warning above 2,000 words combined;
+active context guideline 500-800 words). Do not drop critical facts to meet a
+budget; move detail to an indexed owner.
 
-    AC --> P[progress.md]
-    AC --> CR[copilot-rules.md]
-```
+On **/update memory bank**, review this index, current state, ledger, affected
+owners and their consistency. Inventory all current document owners; inspect
+unchanged reference/history selectively, not by loading every snapshot. Report
+what was checked and what was not verified. Never refresh immutable archives.
 
-### Core Files (Required)
+## Checks and limitations
 
-1. **projectbrief.md**
-   Foundation document for all others. Defines core requirements, goals, and project scope.
-2. **productContext.md**
-   Why this project exists, problems it solves, user experience goals.
-3. **systemPatterns.md**
-   System architecture, key technical decisions, design patterns, component relationships.
-4. **techContext.md**
-   Technologies used, development setup, technical constraints, dependencies.
-5. **activeContext.md**
-   Current work focus, recent changes, next steps, active decisions.
-6. **progress.md**
-   What works, what’s left to build, current status, known issues.
-7. **copilot-rules.md**
-   Project rules, Copilot guidance, safety/security policies, evolving project patterns.
-
-### Additional Context
-
-Add extra files/folders in `/memory-bank/` for:
-
-* Complex features
-* Integration specs
-* API docs
-* Testing strategies
-* Deployment procedures
-
----
-
-## Core Workflows
-
-### Plan Mode
-
-```mermaid
-flowchart TD
-    Start[Start] --> ReadFiles[Read Memory Bank]
-    ReadFiles --> CheckFiles{Files Complete?}
-    CheckFiles -->|No| Plan[Create Plan]
-    Plan --> Document[Document in Chat]
-    CheckFiles -->|Yes| Verify[Verify Context]
-    Verify --> Strategy[Develop Strategy]
-    Strategy --> Present[Present Approach]
-```
-
-**Description:**
-
-* Always start by reading all memory bank files.
-* If files are missing, create a plan and document it.
-* If files are complete, verify context and develop a strategy before acting.
-
-### Act Mode
-
-```mermaid
-flowchart TD
-    Start[Start] --> Context[Check Memory Bank]
-    Context --> Update[Update Documentation]
-    Update --> Rules[Update copilot-rules.md if needed]
-    Rules --> Execute[Execute Task]
-    Execute --> Document[Document Changes]
-```
-
-**Description:**
-
-* Check memory bank before any action.
-* Update documentation as you work.
-* Update `copilot-rules.md` if new patterns or rules are discovered.
-* Document all changes.
-
----
-
-## Documentation Updates
-
-Update the Memory Bank when:
-
-1. Discovering new project patterns or rules
-2. After significant changes
-3. When the user requests with **update memory bank** (review ALL files)
-4. When context needs clarification
-
-```mermaid
-flowchart TD
-    Start[Update Process]
-    subgraph Process
-        P1[Review ALL Files]
-        P2[Document Current State]
-        P3[Clarify Next Steps]
-        P4[Update copilot-rules.md]
-        P1 --> P2 --> P3 --> P4
-    end
-    Start --> Process
-```
-
-**Note:**
-On **update memory bank**, review every file, even if some don’t require changes.
-Focus on `activeContext.md` and `progress.md` for current state.
-
----
-
-## Project Rules (`copilot-rules.md`)
-
-This file is Copilot’s and the team’s learning journal for the project. It captures:
-
-* Critical implementation paths
-* User preferences and workflow
-* Project-specific patterns
-* Security requirements and known challenges
-* Evolution of project decisions
-* Tool usage patterns
-
-**Example: Core Security Rule**
-
-```markdown
-## 🚨 Security: Never Upload Secrets
-
-- Never copy, move, or commit secret files or values (e.g., `.env`, `secrets.json`, API keys, tokens, passwords) to version control or into example/sample config files.
-- Example files like `.env.example` must be built by hand with only safe placeholder values.
-- Always verify that no secrets are present before staging, committing, or pushing code.
-- If a secret is ever committed, treat as a security incident: remove from history and rotate affected credentials immediately.
-- Use secret scanning tools (e.g., GitHub Secret Scanning, TruffleHog, git-secrets) for extra safety.
-```
-
----
-
-## How to Use This Document
-
-* Reference this file at the start of every session.
-* Use the checklists and diagrams to guide your workflow.
-* Update the Memory Bank and `copilot-rules.md` as you learn.
-* Treat this as a living document—improve it as the project evolves.
-
----
-
-**REMEMBER:**
-After every memory reset, Copilot begins completely fresh. The Memory Bank is the only link to previous work. Maintain it with precision and clarity—project effectiveness and security depend on its accuracy.
-
----
-
-*Last updated: 2025-06-30*
-*Version: 1.1.0*
+[Documentation checker](../backend/scripts/check-docs.mjs) validates local inline
+links, code-fence balance, managed-document coverage, current status metadata,
+snapshot hashes and the default word budget. It does not validate prose truth,
+external URLs, heading anchors, all Markdown/YAML syntax or provider health.
+Historical snapshot links resolve from their recorded original source paths.

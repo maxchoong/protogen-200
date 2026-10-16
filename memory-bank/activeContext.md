@@ -1,175 +1,92 @@
-# Active Context – Current Work & Decisions
+# Active context
 
-## Project Status
+Status: current handoff. Updated: October 16, 2026.
 
-**Date:** October 13, 2026
-**Phase:** Plain language queries and conversational disambiguation enhancements
-**Overall Progress:** Plain language queries (cultural/prestige awards, seasonal blockbusters), TMDB date-range discovery, catalog search seed hydration, Results-First gating, and conversational LLM disambiguation are implemented. Backend build and lint pass; backend Jest passes 201/201 tests. Frontend build and lint pass.
+## Current focus
 
----
+Improve Lumera's conversational recommendation quality without adding a growing
+collection of intent-specific rules. The user approved LLM-first structured
+understanding, prose-only transparency, useful catalogue-backed clarification,
+an approximately five-second response target and evaluation before further
+architecture changes. These decisions and targets belong to the
+[engine PRD](prd-conversational-engine.md).
 
-## Current Reality
+Documentation structure and selective context loading were completed first.
+Original worktree documents were preserved byte-for-byte with hashes and a
+[recovery map](archive/2026-10-16/README.md). Application code and provider
+configuration were not changed by this migration.
 
-- **Frontend & Backend:** Both build and lint cleanly with zero errors.
-- **Frontend:** Conversational flow is primary with dynamic advisor clarification rendering.
-- **Backend:** Intent-aware ranking + conversational disambiguation + transparency safeguards in `POST /recommendations`.
-- **Plain language handling:** 
-  - Expanded lexicon in `preferenceParser.ts` for award queries (`oscar`, `academy award`, `bafta`, `palme d'or`).
-  - Added relative seasonal date-window resolution (`this summer`, `last summer`) producing concrete release bounds (e.g. `2026-05-01` to `2026-08-31`).
-  - Broad category and temporal terms (`oscar`, `winning`, `summer`, `blockbuster`, `hits`) are removed from literal TMDB search term queries to prevent matching accidental literal titles.
-  - LLM system prompt in `llm.ts` now suggests canonical award-winning catalog seeds in `referenceSuggestions` for prestige queries, which `recommendationEngine.ts` validates and ingests into candidate pools.
-  - TMDB discover methods in `tmdb.ts` support `releaseDateGte` and `releaseDateLte` for accurate seasonal discover paging.
-  - Queries with clear cultural/thematic intent (e.g. Oscar winners, blockbusters) now receive sufficient intent confidence (0.82) to trigger Results-First delivery directly, bypassing unnecessary disambiguation delays.
-- **Conversational disambiguation:**
-  - Implemented `llmClient.generateConversationalClarification()`, transforming rigid developer menus into engaging, film-advisor dialogue with context-tailored options.
-  - Updated deterministic fallback templates in `preferenceParser.ts` and `index.ts` to replace internal system jargon ("Go mood-first", "Go title-similarity first") with natural user-centric choices ("Focus on the mood or vibe", "Match the tone of a specific movie", "Focus on a favorite actor or director").
+A subsequent [code/documentation cross-check](progress.md#codedocumentation-cross-check)
+corrected current guidance and surfaced enforcement, validation, proxy-consent
+and cache gaps. A subsequent local reliability slice implements usable-spec
+checks, conservative failure handling and common candidate constraint gates;
+proxy-consent and cache work remain open.
 
----
+## Resume recommendation work here
 
-## Recently Shipped Changes
+Read the [engine design](design-conversational-engine.md) and
+[feature tasks](tasks-conversational-engine.md) before implementation. Phases
+1-2 are implemented; phase 3 has an initial results-first policy, not the full
+catalogue-built option strategy. Implementation is not quality acceptance.
 
-### Plain Language Discovery & Conversational Disambiguation (October 13, 2026)
-- Plain language queries without explicit schema fields (awards/prestige, seasonal releases) now resolve through catalog-validated seeds and TMDB temporal release-window filtering.
-- Conversational clarification replaces mechanical developer options with natural advisor questions and options.
-- All 201 Jest tests pass. Frontend and backend build and lint cleanly.
+The API attempts a full updated request plus operation each turn, validates it,
+overlays it on rule-derived preferences and returns it to the client. Concrete
+directions try results first. Search-scope changes fetch fresh candidates;
+unchanged scope and tone-only refinements can reuse prior results.
 
-### Retrieval and Enrichment
-- Added TMDB enrichment for runtime, genres, language, cast, and directors.
-- Added TMDB IMDb-ID mapping and credits retrieval for better metadata completeness.
-- Added deterministic blockbuster paging (`blockbuster_page`) for "show me more" flows.
+**Saved-state protection is now implemented locally:** unusable/failed
+understanding on a follow-up keeps the saved spec and asks for clarification,
+without retrieval or legacy LLM parsing. The reply says the change was not
+applied. Valid remove/replace/pivot operations still work. First-request/legacy
+fallback remains rule-based; equivalent offline understanding is not claimed.
 
-### Parsing and Follow-up Quality
-- Added generalized genre alias parsing (`romcom`, `scifi`, plurals, hyphenated variants).
-- Fixed false TV pivot from "show me more" by removing generic `show/shows` TV hint terms.
-- Added critics-intent parsing and proxy constraint tagging (`ranking:critic_proxy`).
-- Added movie-default behavior for critics-intent when user does not explicitly ask for TV.
+Date-bound candidates retain exact dates or attempt TMDB detail hydration.
+Common format/date/year/origin/exclusion gates run before ranking and after
+final enrichment; missing dates are excluded with explicit uncertainty copy.
+Missing language remains permissive, and certification enforcement is incomplete.
 
-### Ranking and Critics Proxy
-- Added dedicated critics-year proxy retrieval path for exact-year critic-style prompts.
-- Added critics-proxy quality floor on rating + vote count.
-- Added critics-proxy deterministic sort by rating then vote count.
+The other immediate blocker is **provider reliability and latency**. Gemini
+started responding after the earlier rate limit, then returned timeouts/503s
+and later another 429. A configured key or an earlier successful probe does not
+establish current availability. The cooldown starts after SDK retries finish,
+not at the first failed attempt, and is not a total-turn time budget.
 
-### Honesty and UX Transparency
-- Added unsupported-source guardrail for explicit Rotten Tomatoes / Metacritic / Letterboxd requests.
-- Added response-level `interpretationNote` to explain proxy assumptions.
-- Surfaced `interpretationNote` in both chat response text and results panel.
-- Removed meta-steering choice and associated trace UI.
-- Removed refinement suggestion chips; users now refine entirely via freeform typing.
+## Next actions, in order
 
-### Robustness Fixes
-- Prevented literal `"null"` explanation strings from leaking to UI by forcing fallback template explanations.
+1. Continue phase 3: build options from matching catalogue data, validate them
+   against the active request and specialised retrieval paths, and record
+   loosening visibly. Keep explicit origin constraints unless the user agrees
+   to widening.
+2. Bound retry/stage latency and retain provider failure evidence. Assess
+   whether any offline follow-up changes can be safely understood; the current
+   conservative policy asks instead of guessing.
+3. Re-evaluate targeted paths and then the full suite when provider health
+   permits. Check transcripts: the harness can select the first clarification
+   or widening option, so final constraint failures are not always spontaneous
+   state loss.
 
-### Editorial Results UX Refinements (May 24, 2026)
-- Recommendation cards and default highlight poster tiles now use clearer hover/focus affordances while maintaining a lower-chrome editorial baseline.
-- More-details interaction is unified: both recommendation cards and default highlight tiles open the same right-side panel format.
-- Panel navigation moved to the top row and restyled to lightweight link-style Previous/Next controls with a subtle `x of y` counter.
-- Removed redundant panel metadata line that duplicated runtime/rating/votes beneath the poster area.
-- Trailer modal fallback UX improved for failed embeds (explicit fallback message + source link).
+Other engine gaps (thin Malaysian critics options, Portuguese coverage, widened
+origin balance, horror-comedy and tone conflicts) are owned by feature tasks.
+Safety, frontend/deployed parity and general coverage remain in the
+[general backlog](progress.md#general-backlog), not silently completed.
+Ranking simplification, fact-grounded replies and streaming remain later phases.
 
-### Highlights Data Enrichment (May 24, 2026)
-- Root cause identified: default highlights were backed by lightweight `/highlights` payload and lacked full recommendation metadata.
-- Backend now exposes `GET /highlights/:type/:id` for enriched highlight details (synopsis, cast, directors, genres, language, runtime, trailer).
-- Frontend details panel now fetches highlight details on demand and caches per-highlight to avoid repeated requests.
-- Highlight details now render richer metadata parity with recommendation details (subject to TMDB data availability per title).
+## Verification and worktree cautions
 
-### Editorial Panel Art Direction Iteration (May 24, 2026)
-- Updated "Why this" treatment to a cleaner editorial label (`Lumera note`) with Migra italic body and reduced structural chrome.
-- Removed default highlight "why this" filler text so highlight details only show rationale when meaningful data exists.
-- Refined explanation tone toward concise knowledgeable-friend phrasing with British-English leaning prompt guidance and fallback wording updates.
-- Reworked details composition into a stronger editorial structure: hero with poster + note/actions and explicit narrative/metadata separation.
-- Landed asymmetrical narrative + side rail layout as the preferred panel variant after testing multiple synopsis/metadata permutations.
-- Added lighter-weight metadata presentation (smaller, quieter labels) and list-style cast/director blocks.
-- Added right-aligned panel open/close motion: fade backdrop + slide-in/out panel at 300ms ease-out with reduced-motion support.
-- Added responsive panel-width behavior preserving 50:50 feel at large sizes while allowing modest extra room on mid-sized desktops.
+The [verification ledger](progress.md) owns exact test counts, evaluation scores,
+report names and caveats. The reliability slice uses mocked/local verification
+only, with no Gemini calls. No live run covers it or the final candidate-reuse fix.
+The targeted 90s refinement succeeded; French-more-recent remains unverified
+under healthy LLM conditions. Provider health has not been rechecked since the
+last recorded failure.
 
-### UI Consistency and Component Reuse Pass (May 24, 2026)
-- Added shared button style utility in `frontend/src/buttonStyles.ts` with standard variants (`primary`, `secondary`, `subtle`, `ghost`, `chip`, `link`) and sizes (`xs`, `sm`, `md`, `lg`, `icon`, `icon-sm`).
-- Migrated header controls in `frontend/src/App.tsx` to shared styles, including subtler reset action hierarchy and icon-only theme toggle parity.
-- Migrated core action buttons in `frontend/src/pages/ConversationalHome.tsx`, `frontend/src/pages/ResultsPage.tsx`, and `frontend/src/pages/HomePage.tsx` to shared class generation for consistent spacing, typography, focus, hover, and disabled states.
-- Added shared `inlineLinkClass` utility and applied it to interactive links in `ResultsPage` (streaming links + trailer source link) to align anchor focus/hover treatment with button system tokens.
+Recommendation work is uncommitted, mixed with unrelated frontend edits. Do not
+revert or commit them indiscriminately, or assume local changes are deployed.
+Frontend build/lint evidence predates the latest backend-only follow-up and
+does not certify the current dirty frontend worktree. Evaluation JSON files
+other than baseline reports are ignored/local; the persistent ledger retains
+their summaries and caveats.
 
-### Layout and Interaction Follow-ups (May 24, 2026)
-- Reworked two-column divider implementation: removed right-panel `border-left` and moved divider to a centered `editorial-main::after` separator so the split reads as visually balanced.
-- Added shared `inlineActionClass` and applied it to recommendation-card "More details" / "View trailer" controls to remove inherited `h-7 px-3` padding and restore true inline action rhythm.
-- Applied the same inline-action treatment to details-panel `Previous` / `Next` navigation while keeping semantic button behavior for keyboard/accessibility.
-- Fixed subtle/ghost hover-state reliability by replacing unsupported slash-opacity token classes on CSS-variable colors with valid Tailwind token classes.
-- Restored restrained hover styling after debugging (kept subtle style language consistent with the rest of the app).
-- Fixed highlight poster-tile hover-lift regression by moving shadow/lift to a non-clipping wrapper and tuning hover lift to avoid side clipping while preserving visible elevation.
-
-### Caching and Panel Rhythm Follow-ups (May 24, 2026)
-- Added backend in-memory TTL caching for Streaming Availability lookups (including short-lived negative cache entries for rate-limit/error statuses).
-- Added backend in-memory TTL caching across TMDB hot paths (details, credits, videos, external IDs, IMDb mapping, person lookup/credits, trailer-by-IMDb).
-- Added backend in-memory TTL caching for OMDb/FMDb search and detail endpoints to reduce repeated fan-out fetches.
-- Persisted `highlightDetailsCache` in frontend sessionStorage to avoid repeated highlight detail fetches on reload within the same session.
-- Reworked details-panel media actions into a single wrapping row (trailer + providers) without a separate heading to reduce visual clutter.
-- Standardized details-panel vertical rhythm to 8/16/24 spacing decisions and normalized uppercase micro-label typography via shared class constants.
-
----
-
-## Current Architecture Snapshot
-
-### Backend
-- **Parser (`preferenceParser`)**: intent, genre aliases, year handling, critics-proxy detection, blockbuster paging state.
-- **Engine (`recommendationEngine`)**: mode-aware search, TMDB enrichment, strict year filters, mainstream and critics proxy retrieval/ranking paths.
-- **API (`index.ts`)**: clarification gating, weak-result handling, applied constraints, interpretation notes, unsupported-source clarification flow.
-
-### Frontend
-- **Conversation:** freeform multi-turn interaction, clarification questions only when backend requests them.
-- **Results:** round navigation + active constraints + interpretation note + richer metadata display.
-- **State:** recommendation passes store constraints, turn operation, diagnostics, and interpretation note.
-
----
-
-## Important Decisions
-
-- **Honesty-first policy:** Never imply unavailable critic-source data; explicitly disclose proxy interpretation.
-- **Freeform over control chips:** Removed meta-steering and refinement chips to reduce confusion and keep interaction natural.
-- **Single endpoint strategy:** Continue using one endpoint with optional `clarificationContext` and richer response metadata.
-- **Conservative fallback policy:** If explicit unavailable source is requested, ask user to confirm proxy mode before returning guessed results.
-
----
-
-## Validation Snapshot
-
-Items below record previously validated behavior; the current build and Jest status is recorded above.
-
-- [x] Backend build passes.
-- [x] Frontend build passes.
-- [x] `Critics favourites from 2020` now returns movie-only 2020 set with interpretation note and proxy constraint.
-- [x] Explicit unsupported source query (e.g., Rotten Tomatoes) returns clarification prompt instead of pretending source support.
-- [x] `Show me more` remains in blockbuster/year frame without TV drift.
-- [x] Unified details panel opens from both recommendation cards and default highlight poster tiles.
-- [x] Top-row panel navigation (`Previous / x of y / Next + close`) validated in browser.
-- [x] Highlight details now include cast/director/language/trailer data after backend endpoint activation.
-- [x] Details panel motion now includes both enter and exit animation with reduced-motion fallback.
-- [x] Preferred details layout variant validated: asymmetrical narrative/synopsis column with metadata side rail.
-- [x] "Lumera note" style and trailer action polish validated in browser iteration.
-- [x] Shared button/link style utility integrated across app header, conversational actions, results actions, and home preference controls.
-- [x] Frontend production build passes after style-system migration and anchor parity updates.
-- [x] Divider now renders in the inter-panel gap center (`.editorial-main::after`) with symmetric spacing on both columns.
-- [x] Recommendation and details-panel navigation actions now use inline action styling without padded pill geometry.
-- [x] Highlight tile hover lift restored with wrapper-based elevation and clipping-safe hover tuning.
-- [x] Backend build passes after streaming/TMDB/OMDb cache-layer additions.
-- [x] Frontend build passes after details-panel action-row and spacing/typography rhythm refinements.
-
----
-
-## Remaining Gaps
-
-- [ ] Implement and test detailed content-rating enforcement if unrated/NC-17 blocking remains a product requirement; current TMDB filter only checks `adult`.
-- [ ] Run full browser smoke pass for all major conversational journeys after latest transparency changes.
-- [x] Review all memory-bank files; align current facts and label legacy snapshots (October 2, 2026).
-- [ ] Add targeted automated tests for critics-intent guardrails and interpretation-note behavior.
-- [ ] Add automated coverage for `GET /highlights/:type/:id` and frontend highlight-details caching/fallback behavior.
-- [ ] Add frontend visual regression coverage for details-panel layout variants and motion states.
-- [ ] Revisit metadata rail density once real title data breadth is tested across wider genres/languages.
-- [ ] Evaluate whether to extract a typed `Button` React component wrapper on top of `buttonClass` for stricter usage consistency and reduced className drift.
-
----
-
-## Next Steps
-
-1. Add regression tests for critics proxy and unsupported source clarification.
-2. Add regression tests for enriched highlight details route and panel parity behavior.
-3. Validate production/deployed behavior matches local changes.
-4. Continue documentation convergence (README/phase docs and memory-bank consolidated docs).
+Some API result paths omit the assistant intro, but the frontend supplies
+generic chat text. That is a reply-quality gap, not necessarily a blank visible
+bubble. Detailed content-certification enforcement is still outstanding.

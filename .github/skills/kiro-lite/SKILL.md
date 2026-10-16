@@ -46,14 +46,14 @@ You MUST respect all slash commands. Do nothing until a relevant command is give
       - copilot-rules.md
 
 == MEMORY BANK FILES ==
-Global context (always read before any task):
-  - projectbrief.md
-  - productContext.md
-  - systemPatterns.md
-  - techContext.md
-  - activeContext.md
-  - progress.md
+Session entry context:
+  - memory-bank-instructions.md (routing index and maintenance contract)
   - copilot-rules.md
+  - activeContext.md
+
+Load projectbrief.md, productContext.md, systemPatterns.md, techContext.md,
+progress.md and feature documents only when the index routes this task to them.
+Reuse unchanged context already read. Do not recursively load historical archives.
 
 Local feature context:
   - /memory-bank/<feature>/

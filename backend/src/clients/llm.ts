@@ -1,9 +1,14 @@
 import OpenAI from 'openai'
-import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions'
+import type {
+  ChatCompletion,
+  ChatCompletionCreateParamsNonStreaming,
+  ChatCompletionMessageParam
+} from 'openai/resources/chat/completions'
 import type { CreatorCredit, CreatorPreference, CreatorRole, LLMPreferenceHints } from '../engine/preferenceParser.js'
 
 const LLM_TIMEOUT_MS = 15000
 const MAX_RETRIES = 2
+const RATE_LIMIT_COOLDOWN_MS = 60_000
 
 interface LLMCache {
   [key: string]: {
@@ -17,8 +22,22 @@ interface LLMCache {
  * OpenAI-compatible LLM Client for Film Advisor
  * Handles preference parsing, explanation generation, and synopsis creation
  */
+const STOCK_PHRASE = /popcorn|happy (?:watching|viewing)|sit back|enjoy (?:exploring|watching|browsing|these|the)|verified filter/i
+
+/** Drop clichéd sentences the model still produces; null-equivalent if nothing remains. */
+export function stripStockPhrases(text: string): string {
+  const sentences = text.match(/[^.!?]+[.!?]*\s*/g) || [text]
+  return sentences.filter(sentence => !STOCK_PHRASE.test(sentence)).join('').trim()
+}
+
+/** Shared guidance for referenceSuggestions: catalogue search seeds, validated downstream. */
+const REFERENCE_SEED_GUIDANCE = `When a request names a reference and asks for a tonal change, suggest up to five real, specific titles that retain conceptual or narrative appeal while fitting the new tone. Cross genres when the premise supports it (for example, a high-concept memory puzzle can point to thoughtful science fiction). Do not include the reference itself. These titles are search seeds that will be checked against the catalog, not guaranteed matches.
+For an awards, prestige, or Oscar-focused request without a named reference (e.g. "Oscar winning movies", "academy award winners"), put up to five diverse, real, celebrated award-winning title seeds in referenceSuggestions across eras and genres (e.g., Parasite, Everything Everywhere All At Once, No Country for Old Men, The Silence of the Lambs, Moonlight).
+For a broad novelty or indie-discovery request without a named reference, put up to five diverse, real title search seeds in referenceSuggestions. Cover unusual premise or genre shift, atmosphere, quiet character/emotional impact, visual or formal invention, and offbeat satire; include titles from different genres rather than clustering in sci-fi/thriller. For calibration, this range can include The One I Love or Coherence (odd premise), The Vast of Night (atmosphere), The Station Agent or The Rider (character impact), The Fall or A Ghost Story (visual/formal), and Sorry to Bother You (satire/genre shift). These are examples, not a fixed whitelist. Favor distinctive voice and credible quality with modest exposure; do not equate obscurity with quality or limit suggestions to plot twists. The catalog will validate each title.`
+
 export class LLMClient {
   private client: OpenAI | null = null
+  private rateLimitedUntil = 0
   private cache: LLMCache = {}
   private enabled: boolean = false
   private model: string
@@ -53,6 +72,28 @@ export class LLMClient {
       }
       console.log('[LLM] Set OPENAI_API_KEY or LLM_API_KEY for a supported provider. Using fallbacks.')
       this.enabled = false
+    }
+  }
+
+  /**
+   * Single entry point for completions. After a rate-limit response, calls fail
+   * immediately for a cooldown so every stage falls back without waiting on retries.
+   */
+  private async complete(
+    body: ChatCompletionCreateParamsNonStreaming,
+    options?: { timeout?: number; maxRetries?: number }
+  ): Promise<ChatCompletion> {
+    if (Date.now() < this.rateLimitedUntil) {
+      throw new Error('rate limited; skipping LLM call during cooldown')
+    }
+    try {
+      return await (options ? this.client!.chat.completions.create(body, options) : this.client!.chat.completions.create(body))
+    } catch (error: any) {
+      if (error?.status === 429) {
+        this.rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS
+        console.warn(`[LLM] Rate limited; using fallbacks for ${RATE_LIMIT_COOLDOWN_MS / 1000}s`)
+      }
+      throw error
     }
   }
 
@@ -105,9 +146,7 @@ Use canonical genres: Action, Adventure, Animation, Comedy, Crime, Documentary, 
 Use canonical moods: Happy, Sad, Intense, Relaxing, Funny, Thoughtful, Dark, Romantic, Suspenseful, Surprising.
 Put title similarity anchors in referenceTitles, named performers in actors, and descriptive concepts useful for catalog search in keywords.
 Put named directors, writers, producers, and creators in creators as {"name":"Person Name","role":"director|writer|producer|creator","allowOtherRoles":false}. Do not also put them in actors unless the user explicitly requests their acting. For an unqualified request such as "films by Person Name", use role "director" and allowOtherRoles true. Explicit "directed by", "written by", "produced by", or "created by" requests use their exact role and allowOtherRoles false. Never invent a person not named in the active conversation.
-When a request names a reference and asks for a tonal change, suggest up to five real, specific titles that retain conceptual or narrative appeal while fitting the new tone. Cross genres when the premise supports it (for example, a high-concept memory puzzle can point to thoughtful science fiction). Do not include the reference itself. These titles are search seeds that will be checked against the catalog, not guaranteed matches.
-For an awards, prestige, or Oscar-focused request without a named reference (e.g. "Oscar winning movies", "academy award winners"), put up to five diverse, real, celebrated award-winning title seeds in referenceSuggestions across eras and genres (e.g., Parasite, Everything Everywhere All At Once, No Country for Old Men, The Silence of the Lambs, Moonlight).
-For a broad novelty or indie-discovery request without a named reference, put up to five diverse, real title search seeds in referenceSuggestions. Cover unusual premise or genre shift, atmosphere, quiet character/emotional impact, visual or formal invention, and offbeat satire; include titles from different genres rather than clustering in sci-fi/thriller. For calibration, this range can include The One I Love or Coherence (odd premise), The Vast of Night (atmosphere), The Station Agent or The Rider (character impact), The Fall or A Ghost Story (visual/formal), and Sorry to Bother You (satire/genre shift). These are examples, not a fixed whitelist. Favor distinctive voice and credible quality with modest exposure; do not equate obscurity with quality or limit suggestions to plot twists. The catalog will validate each title.
+${REFERENCE_SEED_GUIDANCE}
 Use null for unknown year bounds. Preserve all relevant details from the full conversation.`
         },
         {
@@ -116,7 +155,7 @@ Use null for unknown year bounds. Preserve all relevant details from the full co
         }
       ]
 
-      const response = await this.client!.chat.completions.create({
+      const response = await this.complete({
         model: this.model,
         messages,
         temperature: 0.3,
@@ -184,6 +223,98 @@ Use null for unknown year bounds. Preserve all relevant details from the full co
   }
 
   /**
+   * Understand the latest turn as a full structured request, given the previous request.
+   * Returns raw model JSON; callers must validate it with validateSpecTurn.
+   */
+  async parseRequestSpec(input: {
+    latestTurn: string
+    earlierTurns?: string[]
+    previousSpec?: unknown
+    today?: Date
+  }): Promise<Record<string, unknown> | null> {
+    if (!this.enabled || !input.latestTurn.trim()) return null
+
+    const today = (input.today ?? new Date()).toISOString().slice(0, 10)
+    const earlierTurns = (input.earlierTurns ?? []).filter(turn => turn.trim()).slice(-6)
+    const previousSpec = input.previousSpec ? JSON.stringify(input.previousSpec) : 'none'
+    const cacheKey = `spec:${today}:${previousSpec}:${earlierTurns.join('\n').toLowerCase()}:${input.latestTurn.trim().toLowerCase()}`
+    const cached = this.getCache(cacheKey)
+    if (cached) return cached
+
+    const system = `You turn film and TV requests into a structured search request. Today is ${today}.
+You receive the previous request (or none), earlier user messages, and the latest user message. Return the FULL updated request after the latest message, plus the kind of change.
+
+Return ONLY JSON:
+{
+  "operation": "new|refine|add|remove|replace|pivot",
+  "spec": {
+    "countries": [], "languages": [],
+    "years": {"min": null, "max": null}, "releasedWithinDays": null, "dateRange": {"from": null, "to": null},
+    "format": "both", "excludeGenres": [], "maxCertification": null,
+    "genres": [], "tones": [], "themes": [],
+    "references": [], "referenceSuggestions": [],
+    "actors": [], "creators": [], "popularity": null
+  }
+}
+
+Operations:
+- new: first message, or no previous request.
+- refine: adds or tightens a preference while keeping the rest ("only movies", "something darker", "after 2015").
+- add: widens a list while keeping the rest ("what about Indonesian films too?", "include comedies as well").
+- remove: drops a constraint ("any country is fine", "not just anime").
+- replace: swaps one dimension, keeping the others ("make it Korean instead", "TV shows instead").
+- pivot: an unrelated new request; start from an empty request ("actually, show me Pixar films").
+Keep every previous field the latest message does not change. A short answer to an assistant question (e.g. "Gritty crime thrillers and mysteries") is a refine of the previous request, never a pivot.
+An additional genre or tone is not a reset. Keep previous genres alongside the new ones unless the user explicitly replaces or rejects them. A change of one dimension (country, format, genre or tone) must not clear other dimensions.
+For example, previous Indonesian horror movies + "Intense, fast-paced thrillers" means refine with countries ["ID"], format "movie", genres ["Horror","Thriller"], tones ["Intense"]. Previous horror movies + "psychological thrillers" keeps Horror and adds Thriller. Previous Japanese horror movies + "make it Korean instead" replaces only countries with ["KR"], retaining Horror and movie format.
+Use pivot only for a clear unrelated request or explicit restart, not a short genre or mood answer.
+
+Fields:
+- countries: ISO 3166-1 alpha-2 production countries. Nationality words mean countries ("Malaysian films" -> ["MY"], "Korean dramas" -> ["KR"]) unless the user says "-language" or "in <language>". Bollywood -> ["IN"]; Nollywood -> ["NG"]; Nordic/Scandinavian -> ["SE","DK","NO","IS","FI"]; anime -> ["JP"].
+- languages: ISO 639-1 original languages, only for explicit language requests ("Spanish-language", "in Portuguese", "subtitled French").
+- years: inclusive release-year bounds for decades or eras ("90s" -> 1990-1999, "more recent" -> min ${Number(today.slice(0, 4)) - 8}, "classic" -> max 1980).
+- releasedWithinDays: relative recency ("this week" 7, "this month" 31, "new"/"latest"/"recent releases" 365). Do not also invent year bounds for these requests.
+- dateRange: absolute ISO dates for specific months or seasons ("released in March 2026").
+- format: "movie" for films/movies (including "German films about World War II"), "tv" for series/shows, otherwise keep the previous format or use "both" when no previous format exists.
+- genres: only from Action, Adventure, Animation, Comedy, Crime, Documentary, Drama, Family, Fantasy, History, Horror, Indie, Music, Mystery, Romance, Sci-Fi, Thriller, War, Western. Nordic noir -> Crime, Mystery; anime -> Animation; rom-com -> Romance, Comedy; horror-comedy -> Horror, Comedy; Bollywood implies nothing about genre.
+- excludeGenres: genres the user rejects ("no horror", "not animated").
+- maxCertification: G, PG, PG-13 or R, only for explicit age limits or "for kids"/"family-friendly" (PG).
+- tones: only from Happy, Sad, Intense, Relaxing, Funny, Thoughtful, Dark, Romantic, Suspenseful, Surprising ("gritty" -> Dark, Intense; "cosy" -> Relaxing, Happy; "make me cry" -> Sad; "heartwarming" -> Happy).
+- themes: short concrete subject keywords useful for catalogue search ("heist", "time loop", "world war ii", "small town").
+- references: titles the user wants something similar to.
+- actors: performers named by the user. creators: {"name","role":"director|writer|producer|creator","allowOtherRoles":bool}; "films by X" -> director with allowOtherRoles true; explicit "directed by" -> allowOtherRoles false. Never invent people.
+- popularity: "mainstream" for popular/blockbuster/well-known, "niche" for hidden gems/underrated/obscure.
+- referenceSuggestions: ${REFERENCE_SEED_GUIDANCE}
+Only include what the user asked for. Use null or [] when unknown.`
+
+    const user = [
+      `Previous request: ${previousSpec}`,
+      earlierTurns.length ? `Earlier user messages:\n${earlierTurns.map(turn => `- ${turn}`).join('\n')}` : 'Earlier user messages: none',
+      `Latest user message: ${input.latestTurn.trim()}`
+    ].join('\n\n')
+
+    try {
+      const response = await this.complete({
+        model: this.model,
+        messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+        temperature: 0.1,
+        max_tokens: 700,
+        response_format: { type: 'json_object' }
+      }, { timeout: 8000, maxRetries: 1 })
+
+      const content = response.choices[0]?.message?.content
+      if (!content) return null
+      const parsed = JSON.parse(content)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+      this.setCache(cacheKey, parsed, 3600000)
+      return parsed as Record<string, unknown>
+    } catch (error: any) {
+      console.error('[LLM] Request understanding error:', error.message)
+      return null
+    }
+  }
+
+  /**
    * Generate "Why this?" explanation for a recommendation
    */
   async generateWhyThis(
@@ -228,7 +359,7 @@ Why recommend this?`
         }
       ]
 
-      const response = await this.client!.chat.completions.create({
+      const response = await this.complete({
         model: this.model,
         messages,
         temperature: 0.7,
@@ -340,7 +471,7 @@ Generate explanations as JSON object with numbered keys. Reference the matching 
         }
       ]
 
-      const response = await this.client!.chat.completions.create({
+      const response = await this.complete({
         model: this.model,
         messages,
         temperature: 0.7,
@@ -405,7 +536,7 @@ Generate explanations as JSON object with numbered keys. Reference the matching 
         }
       ]
 
-      const response = await this.client!.chat.completions.create({
+      const response = await this.complete({
         model: this.model,
         messages,
         temperature: 0.6,
@@ -471,7 +602,7 @@ Rules:
         }
       ]
 
-      const response = await this.client!.chat.completions.create({
+      const response = await this.complete({
         model: this.model,
         messages,
         temperature: 0.2,
@@ -554,7 +685,7 @@ Guidelines:
         }
       ]
 
-      const response = await this.client!.chat.completions.create({
+      const response = await this.complete({
         model: this.model,
         messages,
         temperature: 0.5,
@@ -566,15 +697,24 @@ Guidelines:
       if (!content) return null
 
       const parsed = JSON.parse(content) as Record<string, unknown>
-      const context = typeof parsed.context === 'string' && parsed.context.trim()
+      const llmContext = typeof parsed.context === 'string' && parsed.context.trim()
         ? parsed.context.trim()
-        : 'I can steer this in a few different directions. What kind of watch are you in the mood for?'
-      const question = typeof parsed.question === 'string' && parsed.question.trim()
+        : undefined
+      const llmQuestion = typeof parsed.question === 'string' && parsed.question.trim()
         ? parsed.question.trim()
-        : fallbackQuestions[0].question
-      const options = Array.isArray(parsed.options)
+        : undefined
+      const llmOptions = Array.isArray(parsed.options)
         ? parsed.options.filter((opt): opt is string => typeof opt === 'string' && opt.trim().length > 0)
-        : fallbackQuestions[0].options
+        : undefined
+
+      if (!llmContext && !llmQuestion && !llmOptions?.length) {
+        return null
+      }
+
+      const context = llmContext ||
+        'I can steer this in a few different directions. What kind of watch are you in the mood for?'
+      const question = llmQuestion || fallbackQuestions[0].question
+      const options = llmOptions && llmOptions.length > 0 ? llmOptions : fallbackQuestions[0].options
 
       const result = {
         context,
@@ -583,7 +723,7 @@ Guidelines:
             id: fallbackQuestions[0].id,
             question,
             type: fallbackQuestions[0].type,
-            options: options && options.length > 0 ? options : fallbackQuestions[0].options
+            options
           }
         ]
       }
@@ -600,38 +740,49 @@ Guidelines:
    * One short conversational sentence introducing results (small token budget).
    */
   async generateResultsIntro(
-    userQuery: string,
-    facts: string,
-    titles: string[]
+    latestMessage: string,
+    scope: string,
+    titles: string[],
+    change?: string
   ): Promise<string | null> {
     if (!this.enabled || titles.length === 0) {
       return null
     }
 
-    const cacheKey = `intro:${userQuery.substring(0, 80)}:${titles.slice(0, 3).join('|')}`
+    const cacheKey = `intro:${latestMessage.substring(0, 80)}:${change || ''}:${titles.slice(0, 3).join('|')}`
     const cached = this.getCache(cacheKey)
     if (cached) {
       return cached
     }
 
     try {
-      const response = await this.client!.chat.completions.create({
+      const response = await this.complete({
         model: this.model,
         messages: [
           {
             role: 'system',
-            content: 'You are a friendly film advisor. Write 1-2 short sentences (max 40 words) introducing the results to the user. British English. Mention the verified filters given, name at most two titles from the list, add no facts beyond those supplied, no markdown, no lists.'
+            content: [
+              'You are a friendly film advisor replying in a chat. Write 1-2 short sentences (max 35 words) introducing the results. British English.',
+              'Respond to the latest message. If a change is given, open by confirming it in plain words.',
+              'Say naturally where the titles come from, name at most two titles from the list, and add no facts beyond those supplied.',
+              'Never say "filter", "verified" or "scope". No stock sign-offs or filler such as "grab some popcorn", "enjoy", "sit back", "happy watching", "brilliant" or "fantastic". No markdown or lists.'
+            ].join(' ')
           },
           {
             role: 'user',
-            content: `Request: "${userQuery}"\nVerified filters: ${facts}\nTitles: ${titles.slice(0, 5).join('; ')}`
+            content: [
+              `Latest message: "${latestMessage}"`,
+              `Results cover: ${scope}`,
+              change ? `Change this turn: ${change}` : '',
+              `Titles: ${titles.slice(0, 5).join('; ')}`
+            ].filter(Boolean).join('\n')
           }
         ],
         temperature: 0.6,
         max_tokens: 80
       })
 
-      const text = response.choices[0]?.message?.content?.trim()
+      const text = stripStockPhrases(response.choices[0]?.message?.content?.trim() || '')
       if (!text) return null
 
       this.setCache(cacheKey, text, 3600000)
