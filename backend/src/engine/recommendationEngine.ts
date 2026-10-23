@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { fmdbClient } from '../clients/fmdb.js'
 import { llmClient } from '../clients/llm.js'
+import type { LLMRequestDiagnostics } from '../clients/llm.js'
 import { streamingClient } from '../clients/streaming.js'
 import { tmdbClient } from '../clients/tmdb.js'
 import { PreferenceParser, ParsedPreferences, RecommendationRequest, DiscoveryMode } from './preferenceParser.js'
@@ -9,6 +10,7 @@ import { TalentMatcher } from './talentMatcher.js'
 import { RankingScorer, ScoringFactors } from './rankingScorer.js'
 import { SERIES_KEYWORD_FALLBACKS, titleMatchesAnyGenre } from './genreTaxonomy.js'
 import { diffSpecs, toIsoDate } from './requestSpec.js'
+import { reportTurnStage, throwIfTurnStopped } from './turnDeadline.js'
 
 export type LLMUsageStage =
   | 'request understanding'
@@ -18,7 +20,7 @@ export type LLMUsageStage =
   | 'clarification wording'
   | 'results introduction'
 
-export interface LLMUsageDiagnostics {
+export interface LLMUsageDiagnostics extends LLMRequestDiagnostics {
   used: boolean
   stages: LLMUsageStage[]
 }
@@ -186,7 +188,7 @@ export class RecommendationEngine {
           console.log(`[Engine] TMDB series genre-keyword fallback yielded ${seriesKeywordResults.length} titles`)
         }
       }
-    } else if (hasFilters) {
+    } else if (hasFilters || yearRange || (searchTerms.length === 0 && keywords.length === 0)) {
       const filterResults = await tmdbClient.discoverByFilters({
         includeMovies,
         includeTV,
@@ -470,6 +472,7 @@ export class RecommendationEngine {
   }
 
   private filterHardConstraints(titles: any[], preferences: ParsedPreferences): any[] {
+    throwIfTurnStopped()
     let missingReleaseDates = 0
     const filtered = titles.filter(title => {
       const isTv = title.type === 'tv' || title.type === 'series' || title.type === 'episode'
@@ -514,7 +517,9 @@ export class RecommendationEngine {
     yearRange?: ParsedPreferences['yearRange'],
     filters: { originalLanguage?: string; originCountry?: string; releaseDateRange?: { gte?: string; lte?: string } } = {}
   ): Promise<{ results: any[]; source: 'tmdb' | 'omdb' }> {
-    if (searchTerms.length === 0 && preferredGenres.length === 0 && keywords.length === 0) {
+    if (searchTerms.length === 0 && preferredGenres.length === 0 && keywords.length === 0 &&
+        !filters.originCountry && !filters.originalLanguage && !filters.releaseDateRange && !yearRange &&
+        !tmdbClient.isEnabled()) {
       return { results: [], source: tmdbClient.isEnabled() ? 'tmdb' : 'omdb' }
     }
 
@@ -926,11 +931,20 @@ export class RecommendationEngine {
     )
   }
 
+  /** Same candidate pipeline, without provider-generated text or trailer enrichment. */
+  async previewRecommendations(request: RecommendationRequest, limit = 30): Promise<Recommendation[]> {
+    // Do not overwrite the live engine's legacy "last request" diagnostic fields.
+    const previewEngine = new RecommendationEngine()
+    return requestRankingContext.run({}, () => previewEngine.generateRecommendations(request, limit, undefined, true))
+  }
+
   private async generateRecommendations(
     request: RecommendationRequest,
     limit: number,
-    llmDiagnostics?: LLMUsageDiagnostics
+    llmDiagnostics?: LLMUsageDiagnostics,
+    cataloguePreview = false
   ): Promise<Recommendation[]> {
+    throwIfTurnStopped()
         const diagnostics: RetrievalDiagnostics = {
           tmdbEnabled: tmdbClient.isEnabled(),
           usedTmdb: false,
@@ -947,18 +961,20 @@ export class RecommendationEngine {
     let llmPreferences
     const analysisText = PreferenceParser.buildAnalysisText(request)
     // A structured spec already carries the LLM's understanding of the request.
-    if (!request.spec && llmClient.isEnabled() && analysisText.trim()) {
+    if (!cataloguePreview && !request.understandingAttempted && !request.spec && llmClient.isEnabled() && analysisText.trim()) {
       try {
         llmPreferences = await llmClient.parsePreferences(analysisText)
         if (llmPreferences && llmDiagnostics) {
           recordLLMUsage(llmDiagnostics, 'preference parsing')
         }
       } catch {
+        throwIfTurnStopped()
         console.warn('[Engine] LLM parsing failed, using rule-based fallback')
       }
     }
 
     const preferences = PreferenceParser.parse(request, llmPreferences || undefined)
+    reportTurnStage('retrieval')
     console.log(`[Engine] Parsed preferences: ${PreferenceParser.explain(preferences)}`)
     
     // Phase 5: Log intent classification
@@ -1066,6 +1082,9 @@ export class RecommendationEngine {
     } else if (preferences.discoveryMode === 'mood') {
       searchTerms = []
       console.log(`[Engine] Mood mode: discovering by genre and keyword signals`)
+    } else if (request.spec && preferences.genres.length === 0 && !preferences.keywords?.length) {
+      searchTerms = []
+      console.log('[Engine] Undirected structured request: browsing within catalogue filters')
     } else {
       // Mixed or default: extract from description + use explicit genres
       searchTerms = this.extractSearchTerms(request.description, [])
@@ -1370,11 +1389,14 @@ export class RecommendationEngine {
           )
         }
       } catch {
+        throwIfTurnStopped()
         console.warn('[Engine] Mainstream fallback fetch failed')
       }
     }
 
     // Remove duplicates by ID
+    throwIfTurnStopped()
+    reportTurnStage('ranking')
     const uniqueCandidates = await this.hydrateReleaseDates(this.mergeCandidates(candidates), preferences)
 
     console.log(`[Engine] ${uniqueCandidates.length} unique candidates`)
@@ -1408,6 +1430,7 @@ export class RecommendationEngine {
       : ranked
 
     if (
+      !cataloguePreview &&
       actorMatches.length === 0 &&
       preferences.discoveryMode === 'talent' &&
       preferences.detectedActors &&
@@ -1486,6 +1509,7 @@ export class RecommendationEngine {
       const selectedFallback = this.selectFinalResults(fallback, Math.min(limit - selectedPrimary.length, fallback.length))
       finalCandidates = [...selectedPrimary, ...selectedFallback]
     }
+    reportTurnStage('verification')
     const final = this.filterHardConstraints(await this.resolveImdbIds(finalCandidates), preferences)
 
     this.lastRetrievalDiagnostics = {
@@ -1496,49 +1520,6 @@ export class RecommendationEngine {
     }
 
     console.log(`[Engine] Returning ${final.length} recommendations`)
-
-    // Generate LLM explanations in batch if available
-    let llmExplanations = new Map<string, string>()
-    if (llmClient.isEnabled() && final.length > 0 && !preferences.detectedCreators?.length) {
-      try {
-        // === PHASE 4 ENHANCEMENT: Provide scoring context for better explanations ===
-        const titlesForLLM = final.map(item => ({
-          title: item.title,
-          genre: (item.genres || []).join(', '),
-          plot: item.plot || '',
-          rating: item.rating,
-          // Pass scoring factors for context
-          ...(item.scoringFactors && {
-            genreScore: item.scoringFactors.genreScore,
-            moodScore: item.scoringFactors.moodScore,
-            talentScore: item.scoringFactors.talentScore,
-            compositeScore: item.scoringFactors.composite
-          }),
-          talentMatchScore: item.talentMatchScore,
-          creatorCredits: this.getCreatorCredits(item),
-          // Pass user context
-          referenceTitles: preferences.referenceTitle,
-          excludedGenres: preferences.excludedGenres
-        }))
-        
-        llmExplanations = await llmClient.generateWhyThisBatch(
-          request.description,
-          titlesForLLM
-        )
-        
-        const hasUsableExplanation = Array.from(llmExplanations.values()).some(
-          explanation => explanation.trim().length > 0 && explanation.trim().toLowerCase() !== 'null'
-        )
-        if (hasUsableExplanation) {
-          if (llmDiagnostics) {
-            recordLLMUsage(llmDiagnostics, 'recommendation explanations')
-          }
-          console.log(`[Engine] Generated ${llmExplanations.size} LLM explanations with enhanced context`)
-        }
-      } catch {
-        console.warn('[Engine] LLM explanation generation failed, using fallback')
-      }
-    }
 
     // Streaming availability is fetched lazily on details-panel open.
     const availabilityData = new Map<string, StreamingAvailability[]>()
@@ -1555,44 +1536,15 @@ export class RecommendationEngine {
       streaming: availabilityDiagnostics
     }
 
-    // Fetch trailers in batch
-    let trailerData = new Map<string, string>()
-    if (final.length > 0) {
-      try {
-        const imdbItems = final
-          .filter(item => this.isImdbId(item.id))
-          .map(item => ({
-          imdbId: item.id,
-          type: (item.type === 'series' ? 'tv' : 'movie') as 'movie' | 'tv'
-        }))
-
-        if (imdbItems.length > 0) {
-          trailerData = await tmdbClient.getTrailersBatch(imdbItems)
-        }
-
-        // Fallback path for TMDB-only IDs when IMDb mapping is unavailable.
-        const tmdbOnlyItems = final.filter(item => !this.isImdbId(item.id) && item.tmdbId)
-        for (const item of tmdbOnlyItems) {
-          const mediaType = item.tmdbMediaType === 'tv' ? 'tv' : 'movie'
-          const videos = await tmdbClient.getVideos(item.tmdbId, mediaType)
-          if (videos.length > 0) {
-            trailerData.set(item.id, `https://www.youtube.com/watch?v=${videos[0].key}`)
-          }
-        }
-      } catch {
-        console.warn('[Engine] Trailer fetch failed')
-      }
-    }
-
     // Convert to recommendation objects with all enhancements
+    throwIfTurnStopped()
     return final.map(title => 
       this.titleToRecommendation(
         title, 
         preferences, 
         request.description, 
-        llmExplanations,
-        availabilityData,
-        trailerData
+        undefined,
+        availabilityData
       )
     )
   }
@@ -1650,6 +1602,7 @@ export class RecommendationEngine {
         })
         .length
     } catch (error) {
+      throwIfTurnStopped()
       console.warn('[Engine] Availability probe failed:', error)
       return undefined
     }
@@ -1664,6 +1617,7 @@ export class RecommendationEngine {
    * Searches for the reference title and returns full details if found
    */
   private async fetchReferenceTitle(titleName: string): Promise<any | null> {
+    throwIfTurnStopped()
     // Check cache first
     const cached = this.referenceTitlesCache.get(titleName.toLowerCase())
     if (cached) {
@@ -1682,6 +1636,7 @@ export class RecommendationEngine {
 
       // Get full details for first result (best match)
       const details = await fmdbClient.getDetails(results[0].imdbID)
+      throwIfTurnStopped()
       if (details) {
         const converted = fmdbClient.convertToInternal(details)
         // Cache it
@@ -1692,6 +1647,7 @@ export class RecommendationEngine {
       
       return null
     } catch (error) {
+      throwIfTurnStopped()
       console.error(`[Engine.Ref] Error fetching ${titleName}:`, error)
       return null
     }

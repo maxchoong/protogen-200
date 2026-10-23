@@ -4,6 +4,8 @@
  * No API key required - free and open API
  */
 
+import { fetchWithTurnSignal as fetch, throwIfTurnStopped } from '../engine/turnDeadline.js'
+
 const FMDB_BASE_URL = 'http://www.omdbapi.com'
 const FMDB_API_KEY = 'trilogy' // Free public key for testing
 
@@ -89,6 +91,7 @@ export class FMDBClient {
       this.setCachedValue(this.searchCache, cacheKey, results, FMDB_SEARCH_TTL_MS)
       return results
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[FM-DB] Search error:', error)
       this.setCachedValue(this.searchCache, cacheKey, [], FMDB_FAILURE_TTL_MS)
       return []
@@ -135,6 +138,7 @@ export class FMDBClient {
       this.setCachedValue(this.detailsCache, cacheKey, details, FMDB_DETAILS_TTL_MS)
       return details
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[FM-DB] Details error:', error)
       this.setCachedValue(this.detailsCache, cacheKey, null, FMDB_FAILURE_TTL_MS)
       return null
@@ -168,6 +172,7 @@ export class FMDBClient {
       // Filter out null results and return
       return detailedResults.filter((r): r is FMDBMovie => r !== null)
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[FM-DB] Search with details error:', error)
       return []
     }
@@ -193,6 +198,7 @@ export class FMDBClient {
   }
 
   private getCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string): T | undefined {
+    throwIfTurnStopped()
     const entry = cache.get(key)
     if (!entry) {
       return undefined
@@ -207,6 +213,7 @@ export class FMDBClient {
   }
 
   private setCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T, ttlMs: number): void {
+    throwIfTurnStopped()
     cache.set(key, {
       value,
       expiresAt: Date.now() + ttlMs

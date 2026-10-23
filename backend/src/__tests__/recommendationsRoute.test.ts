@@ -2,12 +2,13 @@ import request from 'supertest'
 import { app } from '../index'
 import { recommendationEngine, type Recommendation } from '../engine/recommendationEngine'
 import { llmClient } from '../clients/llm'
+import { PreferenceParser } from '../engine/preferenceParser'
 
 describe('POST /recommendations route guardrails', () => {
   beforeEach(() => {
     jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue(null)
     jest.spyOn(llmClient, 'generateResultsIntro').mockResolvedValue(null)
-    jest.spyOn(recommendationEngine, 'estimateAvailableTitles').mockResolvedValue(undefined)
+    jest.spyOn(recommendationEngine, 'estimateAvailableTitles').mockResolvedValue(10)
   })
 
   afterEach(() => {
@@ -607,15 +608,13 @@ describe('POST /recommendations route guardrails', () => {
 
   it('drops clarification options that would return no results', async () => {
     jest.spyOn(llmClient, 'isEnabled').mockReturnValue(true)
-    jest.spyOn(llmClient, 'generateConversationalClarification').mockResolvedValue({
-      context: 'Spanish series, great choice.',
-      questions: [{
+    const wording = jest.spyOn(llmClient, 'generateConversationalClarification').mockImplementation(() => new Promise(() => {}))
+    jest.spyOn(PreferenceParser, 'needsClarification').mockReturnValue([{
         id: 'direction',
         question: 'What kind of story?',
         type: 'select',
         options: ['Gritty crime thrillers', 'Feel-good comedies', 'Other (type your own)']
-      }]
-    })
+      }])
     jest.spyOn(recommendationEngine, 'estimateAvailableTitles').mockImplementation(async prefs =>
       prefs.genres.includes('Comedy') ? 0 : 12
     )
@@ -628,6 +627,7 @@ describe('POST /recommendations route guardrails', () => {
       'Other (type your own)'
     ])
     expect(getRecommendationsSpy).not.toHaveBeenCalled()
+    expect(wording).not.toHaveBeenCalled()
   })
 
   it('skips clarification when no offered direction has results', async () => {
@@ -696,6 +696,11 @@ describe('POST /recommendations structured request', () => {
     jest.spyOn(llmClient, 'generateResultsIntro').mockResolvedValue(null)
     jest.spyOn(llmClient, 'generateConversationalClarification').mockResolvedValue(null)
     jest.spyOn(recommendationEngine, 'estimateAvailableTitles').mockResolvedValue(undefined)
+    jest.spyOn(recommendationEngine, 'previewRecommendations').mockResolvedValue(
+      Array.from({ length: 6 }, (_, index) => ({
+        ...results[0], id: `catalogue-${index}`, genres: [index < 3 ? 'Comedy' : 'Drama']
+      }))
+    )
   })
 
   afterEach(() => {
@@ -722,8 +727,7 @@ describe('POST /recommendations structured request', () => {
   })
 
   it.each([
-    { description: 'Malaysian movies', spec: { countries: ['MY'], format: 'movie' } },
-    { description: 'something good to watch', spec: {} }
+    { description: 'Malaysian movies', spec: { countries: ['MY'], format: 'movie' } }
   ])('still clarifies an undirected request: $description', async ({ description, spec }) => {
     jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue({ operation: 'new', spec })
     const engineSpy = jest.spyOn(recommendationEngine, 'getRecommendations').mockResolvedValue(results)
@@ -744,9 +748,106 @@ describe('POST /recommendations structured request', () => {
     const response = await request(app).post('/recommendations').send({ description: 'Korean western series' })
 
     expect(response.body.recommendations).toEqual([])
-    expect(response.body.requiresClarification.context).toContain("I couldn't find")
+    expect(response.body.requiresClarification.context).toContain("I couldn't confirm")
     expect(response.body.spec.countries).toEqual(['KR'])
   })
+
+  it('tries results instead of offering unchecked directions when the catalogue is thin', async () => {
+    jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue({
+      operation: 'new', spec: { countries: ['MY'], format: 'movie' }
+    })
+    jest.mocked(recommendationEngine.previewRecommendations).mockResolvedValue(results)
+    const engine = jest.spyOn(recommendationEngine, 'getRecommendations').mockResolvedValue(results)
+    const response = await request(app).post('/recommendations').send({ description: 'Malaysian movies thin catalogue' })
+    expect(response.body.requiresClarification).toBeUndefined()
+    expect(response.body.recommendations).toHaveLength(2)
+    expect(engine).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not treat unknown legacy availability as proof of a viable option', async () => {
+    jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue({ operation: 'new', spec: {} })
+    const engine = jest.spyOn(recommendationEngine, 'getRecommendations').mockResolvedValue(results)
+    const response = await request(app).post('/recommendations').send({ description: 'something good to watch' })
+    expect(response.body.requiresClarification).toBeUndefined()
+    expect(engine).toHaveBeenCalledTimes(1)
+    expect(recommendationEngine.previewRecommendations).not.toHaveBeenCalled()
+  })
+
+  it('applies a checked choice with understanding disabled, retaining country and format', async () => {
+    const description = 'Malaysian movies'
+    const understanding = jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue({
+      operation: 'new', spec: { countries: ['MY'], format: 'movie' }
+    })
+    const first = await request(app).post('/recommendations').send({ description })
+    const question = first.body.requiresClarification.questions[0]
+    const label = question.options[0]
+    const engine = jest.spyOn(recommendationEngine, 'getRecommendations').mockResolvedValue(results)
+    understanding.mockClear()
+    jest.mocked(llmClient.isEnabled).mockReturnValue(false)
+    const selected = await request(app).post('/recommendations').send({
+      description, spec: first.body.spec, selectedOptionToken: question.optionTokens[label],
+      clarificationContext: { clarificationRound: 1, userClarification: label, userTurns: [description, label] }
+    })
+    expect(selected.status).toBe(200)
+    expect(selected.body.spec).toMatchObject({ countries: ['MY'], format: 'movie', genres: ['Comedy'] })
+    expect(understanding).not.toHaveBeenCalled()
+    expect(engine).toHaveBeenCalledWith(expect.objectContaining({
+      spec: selected.body.spec, specOperation: 'refine'
+    }), 10, expect.any(Object), expect.any(Object))
+  })
+
+  it('changes only the explicitly selected widening dimension and explains the change', async () => {
+    const description = 'Korean western series explicit widening'
+    const understanding = jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue({
+      operation: 'new', spec: { countries: ['KR'], languages: ['ko'], format: 'tv', genres: ['Western'] }
+    })
+    jest.mocked(recommendationEngine.previewRecommendations).mockResolvedValue(
+      Array.from({ length: 3 }, (_, index) => ({ ...results[0], id: `western-${index}`, type: 'tv', genres: ['Western'] }))
+    )
+    const engine = jest.spyOn(recommendationEngine, 'getRecommendations').mockResolvedValue([])
+    const first = await request(app).post('/recommendations').send({ description })
+    const question = first.body.requiresClarification.questions[0]
+    const label = 'Include titles from any country'
+    engine.mockResolvedValue(results)
+    understanding.mockClear()
+    jest.mocked(llmClient.isEnabled).mockReturnValue(false)
+    const selected = await request(app).post('/recommendations').send({
+      description, spec: first.body.spec, selectedOptionToken: question.optionTokens[label],
+      clarificationContext: { clarificationRound: 1, userClarification: label, userTurns: [description, label] }
+    })
+    expect(selected.body.spec).toMatchObject({ countries: [], languages: ['ko'], format: 'tv', genres: ['Western'] })
+    expect(selected.body.interpretationNote).toContain(`Widened as requested: ${label}`)
+    expect(understanding).not.toHaveBeenCalled()
+  })
+
+  it.each(['invalid-token', 'changed-scope', 'changed-controls', 'changed-label', 'expired'])(
+    'preserves state without retrieval or understanding for %s selections', async mode => {
+      const description = `Malaysian movies ${mode}`
+      const understanding = jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue({
+        operation: 'new', spec: { countries: ['MY'], format: 'movie' }
+      })
+      const first = await request(app).post('/recommendations').send({ description })
+      const question = first.body.requiresClarification.questions[0]
+      const label = question.options[0]
+      const engine = jest.spyOn(recommendationEngine, 'getRecommendations').mockResolvedValue(results)
+      understanding.mockClear()
+      if (mode === 'expired') jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 3_600_001)
+      const saved = mode === 'changed-scope' ? { ...first.body.spec, countries: ['MY', 'ID'] } : first.body.spec
+      const response = await request(app).post('/recommendations').send({
+        description, spec: saved,
+        preferences: mode === 'changed-controls' ? { type: 'tv' } : undefined,
+        selectedOptionToken: mode === 'invalid-token' ? 'invalid' : question.optionTokens[label],
+        clarificationContext: {
+          clarificationRound: 1, userClarification: mode === 'changed-label' ? 'Explore Horror' : label,
+          userTurns: [description, label]
+        }
+      })
+      expect(response.body.spec).toEqual(saved)
+      expect(response.body.requiresClarification.questions[0].id).toBe('request_update_retry')
+      expect(engine).not.toHaveBeenCalled()
+      expect(understanding).not.toHaveBeenCalled()
+    }
+  )
 
   it('understands a follow-up against the previous request and returns the updated spec', async () => {
     const parseSpy = jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue({
@@ -807,6 +908,28 @@ describe('POST /recommendations structured request', () => {
     expect(response.body.recommendations).toBeUndefined()
     expect(response.body.llmDiagnostics.used).toBe(false)
     expect(engineSpy).not.toHaveBeenCalled()
+  })
+
+  it('returns request-local deadline evidence while preserving the saved request', async () => {
+    const budget = jest.spyOn(llmClient, 'withRequestBudget')
+    jest.spyOn(llmClient, 'parseRequestSpec').mockResolvedValue(null)
+    jest.spyOn(llmClient, 'getRequestDiagnostics').mockReturnValue({
+      budgetExhausted: true,
+      failures: [{ stage: 'request understanding', reason: 'deadline', elapsedMs: 4000 }]
+    })
+    const engine = jest.spyOn(recommendationEngine, 'getRecommendations')
+    const response = await request(app).post('/recommendations').send({
+      description: 'Malaysian movies', spec: { countries: ['MY'], format: 'movie' },
+      clarificationContext: { clarificationRound: 1, userClarification: 'include Indonesia too' }
+    })
+    expect(budget).toHaveBeenCalledTimes(1)
+    expect(response.body.spec.countries).toEqual(['MY'])
+    expect(response.body.llmDiagnostics).toEqual({
+      used: false, stages: [], budgetExhausted: true,
+      failures: [{ stage: 'request understanding', reason: 'deadline', elapsedMs: 4000 }]
+    })
+    expect(response.body.requiresClarification.context).toContain('unchanged')
+    expect(engine).not.toHaveBeenCalled()
   })
 
   it.each([

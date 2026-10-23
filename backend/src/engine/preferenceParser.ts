@@ -141,6 +141,7 @@ export interface RecommendationRequest {
   spec?: RequestSpec
   previousSpec?: RequestSpec
   specOperation?: SpecOperation
+  understandingAttempted?: boolean
 }
 
 /**
@@ -890,6 +891,7 @@ export class PreferenceParser {
     // If no genres found, infer genre hints from mood/novelty for non-reference discovery.
     if (
       preferences.genres.length === 0 &&
+      (!request.spec || preferences.mood.length > 0 || preferences.noveltyIntent) &&
       !request.preferences?.genres &&
       (preferences.referenceTitle?.length || 0) === 0 &&
       !this.isClearRefinementRequest(preferences) &&
@@ -1846,5 +1848,3 @@ export class PreferenceParser {
     return null
   }
 }
-
-

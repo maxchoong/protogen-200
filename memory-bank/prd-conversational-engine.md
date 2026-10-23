@@ -2,7 +2,7 @@
 
 **Status:** Approved direction, October 15, 2026. Implementation is phased (see `tasks-conversational-engine.md`).
 
-**Implementation checkpoint (October 16):** evaluation harness and structured-request round-trip are implemented locally; initial results-first policy is implemented, not deployment-certified. Catalogue-built options, general recorded loosening, ranking simplification, fact-grounded replies and streaming remain planned. These requirements are acceptance goals, not all current guarantees. Detailed certification enforcement, semantic-invalid-spec fallback and per-field validation-rejection logging are outstanding. See [design](design-conversational-engine.md), [tasks](tasks-conversational-engine.md) and [measured progress](progress.md).
+**Implementation checkpoint (October 16):** evaluation harness, structured-request round-trip, saved-state protection, common candidate gates, catalogue-backed choices and progressive POST delivery are implemented locally, not deployment-certified. General recorded loosening, tone-built choices, ranking simplification and full fact-grounded replies remain planned. These requirements are acceptance goals, not all current guarantees. Detailed certification enforcement, general semantic-intent validation and per-field validation-rejection logging remain outstanding. See [design](design-conversational-engine.md), [tasks](tasks-conversational-engine.md) and [measured progress](progress.md).
 
 ## Original problem (before v2)
 
@@ -59,10 +59,20 @@ There are endless ways to phrase a request, so this approach will not generalise
   - there are too many strong candidates and choosing would meaningfully change the top results, or
   - the request is genuinely ambiguous.
 - Options are built from the genres and tones present in the matching titles. Each option is checked to return at least N results with all current hard constraints.
+- Initial implementation uses N = 3 distinct final titles and genre evidence,
+  including specialised retrieval/ranking gates. At least two different checked
+  directions are needed to ask; otherwise try results. This is not a permanent
+  availability guarantee or yet a tone-clustering implementation.
+- Selecting an offered structured choice applies its checked change without a
+  second understanding call. Stale or invalid selections must retain the saved
+  request and ask, not guess from the label.
 
 ### R4 — Loosen visibly
 - When there are too few matches, the engine loosens soft preferences before hard constraints, and never a constraint the user stated in the latest turn.
 - Every loosening is recorded and must be mentioned in the reply.
+- Initial widening is opt-in: offer checked changes to one named dimension;
+  apply only the selected change and explain it. This does not implement the
+  general automatic soft-preference relaxation policy.
 
 ### R5 — Ranking
 - Hard constraints filter titles out. Soft preferences contribute to one weighted score.
@@ -81,6 +91,12 @@ There are endless ways to phrase a request, so this approach will not generalise
 
 ### R7 — Latency
 - Up to ~5 s per turn. The reply text should appear before the titles finish loading (streaming is a later phase).
+- October 16 delivery refinement: five seconds is a useful-response target, not
+  a mandatory search cutoff. Show immediate acknowledgement and actual progress,
+  then deliver constraint-checked titles without waiting for optional generated
+  copy or trailers. The user approved a provisional 15-second overall search
+  ceiling. Progress must not commit request state; terminal results or
+  clarification do. Keep cancellation and explicit incomplete-search handling.
 
 ### R8 — Evaluation
 - About 50 single and multi-turn cases, run against the live API.

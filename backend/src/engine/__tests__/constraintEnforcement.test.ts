@@ -72,7 +72,17 @@ describe('Candidate-source-independent constraint checks', () => {
     const results = await engine.getRecommendations({
       description: 'Malaysian comedy films', spec: windowSpec(), specOperation: 'new'
     })
+
     expect(results.map(item => item.title)).toEqual(['Title 1'])
+  })
+
+  it('does not repeat LLM preference parsing after route understanding failed', async () => {
+    jest.mocked(llmClient.isEnabled).mockReturnValue(true)
+    const parsing = jest.spyOn(llmClient, 'parsePreferences').mockImplementation(() => new Promise(() => {}))
+    jest.mocked(tmdbClient.discoverByGenres).mockResolvedValue([film(1, '2025-01-01')])
+    const results = await engine.getRecommendations({ description: 'comedy movies', understandingAttempted: true })
+    expect(results.length).toBeGreaterThan(0)
+    expect(parsing).not.toHaveBeenCalled()
   })
 
   it('rechecks previous results alongside fresh retrieval after a date-scope change', async () => {
@@ -154,5 +164,64 @@ describe('Candidate-source-independent constraint checks', () => {
       spec: validateSpec({ countries: ['MY'], genres: ['Comedy'], format: 'movie' }), specOperation: 'new'
     })
     expect(films.map(item => item.title)).toEqual(['Title 2'])
+  })
+
+  it.each([
+    { countries: ['MY'], format: 'movie' },
+    { languages: ['ms'], format: 'movie' },
+    { format: 'movie' },
+    { format: 'tv' }
+  ])('supports undirected catalogue previews for $countries/$languages/$format without LLMs or trailers', async fields => {
+    jest.mocked(llmClient.isEnabled).mockReturnValue(true)
+    const parsing = jest.spyOn(llmClient, 'parsePreferences').mockResolvedValue(null)
+    const explanations = jest.spyOn(llmClient, 'generateWhyThisBatch').mockResolvedValue(new Map())
+    const actorSeeds = jest.spyOn(llmClient, 'suggestActorTitleSeeds').mockResolvedValue([])
+    jest.mocked(tmdbClient.discoverByFilters).mockResolvedValue([
+      film(1, '2025-01-01', fields.format === 'tv' ? 'tv' : 'movie')
+    ])
+    const spec = validateSpec(fields)
+    const results = await engine.previewRecommendations({ description: 'Find titles', spec }, 10)
+    expect(results).toHaveLength(1)
+    expect(tmdbClient.discoverByFilters).toHaveBeenCalled()
+    expect(parsing).not.toHaveBeenCalled()
+    expect(explanations).not.toHaveBeenCalled()
+    expect(actorSeeds).not.toHaveBeenCalled()
+    expect(tmdbClient.getTrailersBatch).not.toHaveBeenCalled()
+  })
+
+  it('uses the same final constraints for preview and normal selected retrieval', async () => {
+    jest.mocked(tmdbClient.discoverByGenres).mockResolvedValue([
+      film(1, '2026-09-15'), film(2, '2026-09-20'), film(3, '2026-09-30'),
+      film(4, '2026-01-01'), film(5, '2026-09-15', 'tv')
+    ])
+    const request = { description: 'Malaysian comedies in September 2026', spec: windowSpec() }
+    const preview = await engine.previewRecommendations(request, 10)
+    const selected = await engine.getRecommendations(request, 10)
+    expect(preview.map(title => title.id)).toEqual(selected.map(title => title.id))
+    expect(preview).toHaveLength(3)
+  })
+
+  it('checks the specialised critics quality floor during preview, not cheap discovery totals', async () => {
+    jest.mocked(tmdbClient.discoverPopularByYear).mockResolvedValue([
+      film(1, '2026-09-15'), film(2, '2026-09-20'),
+      { ...film(3, '2026-09-30'), vote_average: 4, vote_count: 5 }
+    ])
+    const preview = await engine.previewRecommendations({
+      description: 'Malaysian critics favourite comedy films of 2026',
+      spec: validateSpec({ ...windowSpec(), years: { min: 2026, max: 2026 } })
+    }, 10)
+    expect(tmdbClient.discoverPopularByYear).toHaveBeenCalled()
+    expect(preview.map(title => title.title).sort()).toEqual(['Title 1', 'Title 2'])
+  })
+
+  it('never invokes legacy LLM parsing or actor-seed recovery during previews', async () => {
+    jest.mocked(llmClient.isEnabled).mockReturnValue(true)
+    const parsing = jest.spyOn(llmClient, 'parsePreferences').mockResolvedValue(null)
+    const seeds = jest.spyOn(llmClient, 'suggestActorTitleSeeds').mockResolvedValue([])
+    const results = await engine.previewRecommendations({ description: 'movies with Tom Hanks' })
+    expect(results).toEqual([])
+    expect(tmdbClient.searchTitlesForPerson).toHaveBeenCalled()
+    expect(parsing).not.toHaveBeenCalled()
+    expect(seeds).not.toHaveBeenCalled()
   })
 })

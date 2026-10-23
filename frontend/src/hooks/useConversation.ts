@@ -7,6 +7,7 @@ export interface ClarificationQuestion {
   question: string
   type: 'select' | 'text' | 'boolean'
   options?: string[]
+  optionTokens?: Record<string, string>
 }
 
 export interface DetectedIntent {
@@ -32,6 +33,20 @@ export type LLMUsageStage =
 export interface LLMUsageDiagnostics {
   used: boolean
   stages: LLMUsageStage[]
+  failures?: Array<{
+    stage: string
+    reason: 'deadline' | 'rate_limit' | 'cooldown' | 'timeout' | 'provider_error'
+    status?: number
+    elapsedMs: number
+  }>
+  budgetExhausted?: boolean
+}
+
+export interface RequestDiagnostics {
+  outcome: 'completed' | 'timed_out'
+  deadlineMs: number
+  elapsedMs: number
+  stages: Array<{ stage: string; durationMs: number }>
 }
 
 export interface RecommendationPass {
@@ -45,6 +60,7 @@ export interface RecommendationPass {
   appliedConstraints?: string[]
   interpretationNote?: string
   llmDiagnostics?: LLMUsageDiagnostics
+  requestDiagnostics?: RequestDiagnostics
   retrievalDiagnostics?: {
     tmdbEnabled: boolean
     usedTmdb: boolean
@@ -69,6 +85,7 @@ export interface ConversationMessage {
   recommendations?: any[]
   turnOperation?: TurnOperation
   llmDiagnostics?: LLMUsageDiagnostics
+  requestDiagnostics?: RequestDiagnostics
 }
 
 export interface ConversationState {

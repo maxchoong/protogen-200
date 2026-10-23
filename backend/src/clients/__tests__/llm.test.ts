@@ -1,5 +1,5 @@
 import OpenAI from 'openai'
-import { LLMClient } from '../llm'
+import { LLMClient, RECOMMENDATION_LLM_WINDOW_MS } from '../llm'
 
 jest.mock('openai', () => ({
   __esModule: true,
@@ -21,6 +21,11 @@ describe('LLM provider configuration', () => {
     mockOpenAI.mockImplementation(() => ({
       chat: { completions: { create: createCompletion } }
     } as unknown as OpenAI))
+  })
+
+  afterEach(() => {
+    jest.useRealTimers()
+    jest.restoreAllMocks()
   })
 
   afterAll(() => {
@@ -50,7 +55,9 @@ describe('LLM provider configuration', () => {
     expect(await client.parsePreferences('Like Inception but more relaxing')).toEqual(
       expect.objectContaining({ mood: ['Relaxing'], referenceSuggestions: ['Solaris'] })
     )
-    expect(createCompletion).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-4o-mini' }))
+    expect(createCompletion).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-4o-mini' }), expect.objectContaining({
+      timeout: 15000, maxRetries: 0, signal: expect.any(AbortSignal)
+    }))
   })
 
   it('uses explicit compatible-provider credentials, endpoint, and model for explanations', async () => {
@@ -70,7 +77,9 @@ describe('LLM provider configuration', () => {
       { title: 'Solaris', genre: 'Sci-Fi', plot: 'A psychologist confronts memories.' }
     ])
     expect(explanations.get('Solaris')).toBe('A thoughtful memory story.')
-    expect(createCompletion).toHaveBeenCalledWith(expect.objectContaining({ model: 'provider-model' }))
+    expect(createCompletion).toHaveBeenCalledWith(expect.objectContaining({ model: 'provider-model' }), expect.objectContaining({
+      maxRetries: 0
+    }))
   })
 
   it.each(['https://models.inference.ai.azure.com', 'https://models.github.ai/inference'])(
@@ -155,7 +164,7 @@ describe('LLM provider configuration', () => {
     expect(body.messages[0].content).toContain('replaces only countries')
     expect(body.messages[1].content).toContain('Previous request: {"countries":["MY"]}')
     expect(body.messages[1].content).toContain('- Malaysian movies')
-    expect(options).toEqual({ timeout: 8000, maxRetries: 1 })
+    expect(options).toMatchObject({ timeout: 8000, maxRetries: 0, signal: expect.any(AbortSignal) })
   })
 
   it('returns null for malformed request understanding', async () => {
@@ -173,6 +182,205 @@ describe('LLM provider configuration', () => {
 
     expect(await client.parseRequestSpec({ latestTurn: 'Nordic noir' })).toBeNull()
     expect(await client.parseRequestSpec({ latestTurn: 'Korean thrillers' })).toBeNull()
+    expect(createCompletion).toHaveBeenCalledTimes(1)
+  })
+
+  it('shares one elapsed deadline across understanding and optional stages, including retrieval time', async () => {
+    jest.useFakeTimers()
+    process.env.OPENAI_API_KEY = 'test-key'
+    createCompletion
+      .mockResolvedValueOnce({ choices: [{ message: { content: '{"operation":"new","spec":{"genres":["Comedy"]}}' } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: '{"1":"A warm comedy."}' } }] })
+    const client = new LLMClient()
+    await client.withRequestBudget(async () => {
+      await jest.advanceTimersByTimeAsync(1000)
+      expect(await client.parseRequestSpec({ latestTurn: 'Comedy films' })).not.toBeNull()
+      expect(createCompletion.mock.calls[0][1].timeout).toBe(3000)
+      await jest.advanceTimersByTimeAsync(2500)
+      await client.generateWhyThisBatch('Comedy films', [{ title: 'A film', genre: 'Comedy', plot: 'A funny story.' }])
+      expect(createCompletion.mock.calls[1][1].timeout).toBe(500)
+      await jest.advanceTimersByTimeAsync(500)
+      expect(await client.generateResultsIntro('Comedy films', 'Comedy', ['A film'])).toBeNull()
+      expect(createCompletion).toHaveBeenCalledTimes(2)
+      expect(client.getRequestDiagnostics()).toEqual({
+        budgetExhausted: true,
+        failures: [{ stage: 'results introduction', reason: 'deadline', elapsedMs: 0 }]
+      })
+      expect(jest.getTimerCount()).toBe(0)
+    })
+    expect(client.getRequestDiagnostics()).toEqual({})
+  })
+
+  it('aborts in-flight understanding at the shared deadline and never retries or starts later stages', async () => {
+    jest.useFakeTimers()
+    process.env.OPENAI_API_KEY = 'test-key'
+    createCompletion.mockImplementation((_body, options: { signal: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(new Error('Transport aborted')), { once: true })
+      })
+    )
+    const client = new LLMClient()
+    await client.withRequestBudget(async () => {
+      const result = client.parseRequestSpec({ latestTurn: 'Korean movies' })
+      await jest.advanceTimersByTimeAsync(RECOMMENDATION_LLM_WINDOW_MS - 1)
+      expect(createCompletion.mock.calls[0][1].signal.aborted).toBe(false)
+      await jest.advanceTimersByTimeAsync(1)
+      expect(await result).toBeNull()
+      expect(createCompletion.mock.calls[0][1].signal.aborted).toBe(true)
+      await client.parsePreferences('Korean movies')
+      expect(createCompletion).toHaveBeenCalledTimes(1)
+      expect(client.getRequestDiagnostics()).toEqual({
+        budgetExhausted: true,
+        failures: [
+          { stage: 'request understanding', reason: 'deadline', elapsedMs: 4000 },
+          { stage: 'preference parsing', reason: 'deadline', elapsedMs: 0 }
+        ]
+      })
+      expect(jest.getTimerCount()).toBe(0)
+    })
+  })
+
+  it('rejects late transport output rather than caching an expired understanding', async () => {
+    jest.useFakeTimers()
+    process.env.OPENAI_API_KEY = 'test-key'
+    createCompletion.mockImplementation(async () => {
+      await jest.advanceTimersByTimeAsync(RECOMMENDATION_LLM_WINDOW_MS + 1)
+      return { choices: [{ message: { content: '{"operation":"new","spec":{"genres":["Comedy"]}}' } }] }
+    })
+    const client = new LLMClient()
+    await client.withRequestBudget(async () => {
+      expect(await client.parseRequestSpec({ latestTurn: 'Comedy films' })).toBeNull()
+      expect(client.getRequestDiagnostics().budgetExhausted).toBe(true)
+    })
+    expect(client.getCacheStats().size).toBe(0)
+  })
+
+  it('classifies a fractional remaining-window abort as budget exhaustion, not a provider timeout', async () => {
+    jest.useFakeTimers()
+    let now = 0
+    jest.spyOn(performance, 'now').mockImplementation(() => now)
+    process.env.OPENAI_API_KEY = 'test-key'
+    createCompletion.mockImplementation((_body, options: { signal: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(new Error('Aborted')), { once: true })
+      })
+    )
+    const client = new LLMClient()
+    await client.withRequestBudget(async () => {
+      now = 0.5
+      const result = client.parseRequestSpec({ latestTurn: 'Comedy films' })
+      expect(createCompletion.mock.calls[0][1].timeout).toBe(3999)
+      now = 3999.5
+      await jest.advanceTimersByTimeAsync(3999)
+      expect(await result).toBeNull()
+      expect(client.getRequestDiagnostics()).toMatchObject({
+        budgetExhausted: true, failures: [{ stage: 'request understanding', reason: 'deadline' }]
+      })
+      expect(jest.getTimerCount()).toBe(0)
+    })
+  })
+
+  it('allows cached understanding after the network window expires without another provider call', async () => {
+    jest.useFakeTimers()
+    process.env.OPENAI_API_KEY = 'test-key'
+    createCompletion.mockResolvedValue({
+      choices: [{ message: { content: '{"operation":"new","spec":{"genres":["Comedy"]}}' } }]
+    })
+    const client = new LLMClient()
+    await client.parseRequestSpec({ latestTurn: 'Comedy films' })
+    await client.withRequestBudget(async () => {
+      await jest.advanceTimersByTimeAsync(4001)
+      expect(await client.parseRequestSpec({ latestTurn: 'Comedy films' })).not.toBeNull()
+      expect(client.getRequestDiagnostics()).toEqual({})
+    })
+    expect(createCompletion).toHaveBeenCalledTimes(1)
+  })
+
+  it('gates every uncached LLM stage after the shared window, preserving their fallback shapes', async () => {
+    jest.useFakeTimers()
+    process.env.OPENAI_API_KEY = 'test-key'
+    const client = new LLMClient()
+    await client.withRequestBudget(async () => {
+      await jest.advanceTimersByTimeAsync(RECOMMENDATION_LLM_WINDOW_MS)
+      expect(await client.parseRequestSpec({ latestTurn: 'Comedy' })).toBeNull()
+      expect(await client.parsePreferences('Comedy')).toBeNull()
+      expect(await client.generateWhyThis('Comedy', 'A film', 'Comedy', 'A funny story.')).toBeNull()
+      expect(await client.generateWhyThisBatch('Comedy', [{ title: 'A film', genre: 'Comedy', plot: 'A funny story.' }])).toEqual(new Map())
+      expect(await client.generateSpoilerFreeSynopsis('A film', 'A funny story.')).toBeNull()
+      expect(await client.suggestActorTitleSeeds(['Tom Hanks'], 'Comedy')).toEqual([])
+      expect(await client.generateConversationalClarification('Comedy', [{
+        id: 'direction', question: 'Which direction?', type: 'select', options: ['Comedy', 'Drama']
+      }])).toBeNull()
+      expect(await client.generateResultsIntro('Comedy', 'Comedy', ['A film'])).toBeNull()
+      expect(client.getRequestDiagnostics().failures?.map(failure => failure.stage)).toEqual([
+        'request understanding', 'preference parsing', 'recommendation explanations',
+        'recommendation explanations', 'synopsis generation', 'actor title recovery',
+        'clarification wording', 'results introduction'
+      ])
+      expect(createCompletion).not.toHaveBeenCalled()
+      expect(jest.getTimerCount()).toBe(0)
+    })
+  })
+
+  it('starts cooldown on the first 429 and resumes only after it expires', async () => {
+    jest.useFakeTimers()
+    process.env.OPENAI_API_KEY = 'test-key'
+    createCompletion.mockRejectedValueOnce(Object.assign(new Error('Provider body must not appear in diagnostics'), { status: 429 }))
+      .mockResolvedValue({ choices: [{ message: { content: '{"operation":"new","spec":{"genres":["Comedy"]}}' } }] })
+    const client = new LLMClient()
+    await client.withRequestBudget(async () => {
+      await client.parseRequestSpec({ latestTurn: 'Comedy films' })
+      await client.parsePreferences('Comedy films')
+      expect(client.getRequestDiagnostics().failures).toEqual([
+        { stage: 'request understanding', reason: 'rate_limit', status: 429, elapsedMs: 0 },
+        { stage: 'preference parsing', reason: 'cooldown', elapsedMs: 0 }
+      ])
+    })
+    expect(createCompletion.mock.calls[0][1].maxRetries).toBe(0)
+    await jest.advanceTimersByTimeAsync(60_000)
+    await client.withRequestBudget(async () => {
+      expect(await client.parseRequestSpec({ latestTurn: 'Comedy films' })).not.toBeNull()
+      expect(client.getRequestDiagnostics()).toEqual({})
+    })
+    expect(createCompletion).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps concurrent request deadlines and failure evidence isolated', async () => {
+    jest.useFakeTimers()
+    process.env.OPENAI_API_KEY = 'test-key'
+    createCompletion.mockResolvedValue({ choices: [{ message: { content: '{"mood":["Happy"]}' } }] })
+    const client = new LLMClient()
+    let release: () => void = () => { throw new Error('Missing release callback') }
+    const paused = new Promise<void>(resolve => { release = resolve })
+    const first = client.withRequestBudget(async () => {
+      await paused
+      expect(await client.parsePreferences('expired request')).toBeNull()
+      return client.getRequestDiagnostics()
+    })
+    await jest.advanceTimersByTimeAsync(4001)
+    const second = client.withRequestBudget(async () => {
+      release()
+      expect(await client.parsePreferences('healthy concurrent request')).not.toBeNull()
+      return client.getRequestDiagnostics()
+    })
+    expect((await first).budgetExhausted).toBe(true)
+    expect(await second).toEqual({})
+    expect(createCompletion).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    { error: Object.assign(new Error('unavailable'), { status: 503 }), reason: 'provider_error', status: 503 },
+    { error: Object.assign(new Error('timeout'), { name: 'APIConnectionTimeoutError' }), reason: 'timeout', status: undefined }
+  ])('captures $reason evidence and clears the abort timer', async ({ error, reason, status }) => {
+    process.env.OPENAI_API_KEY = 'test-key'
+    createCompletion.mockRejectedValue(error)
+    const client = new LLMClient()
+    await client.withRequestBudget(async () => {
+      expect(await client.parseRequestSpec({ latestTurn: 'Mystery series' })).toBeNull()
+      expect(client.getRequestDiagnostics().failures).toEqual([
+        expect.objectContaining({ stage: 'request understanding', reason, ...(status ? { status } : {}) })
+      ])
+    })
     expect(createCompletion).toHaveBeenCalledTimes(1)
   })
 })

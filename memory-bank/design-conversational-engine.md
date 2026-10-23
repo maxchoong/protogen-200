@@ -81,7 +81,12 @@ interface SpecTurn {
   - "Indie" becomes discovery intent, not a hard genre.
   - Popularity is accepted only when the wording supports it.
 - **Operation mapping:** new/pivot → hard pivot; replace → continue + replace; add/remove → widen; refine → narrow.
-- **Failure handling:** understanding uses an 8 s per-attempt timeout and one SDK retry. Other completion calls default to 15 s per attempt and two retries. A 429 starts a process-local 60 s cooldown only after SDK retries finish. Uncached calls then fail fast during cooldown; cached output can still be used. This is not an 8 s total-turn budget and does not cover 503s/timeouts with a circuit breaker.
+- **Failure handling:** the recommendations route shares a four-second elapsed
+  LLM window across all stages, without SDK retries; see the latency slice
+  below. Standalone client calls retain 8 s understanding/15 s other-stage
+  limits, also without retries. The first 429 starts a process-local 60 s
+  cooldown. Cached output can still be used. This is not a whole-HTTP-turn
+  deadline and does not circuit-break timeouts/503s.
 - **Refinement retention (October 16):** the prompt explicitly distinguishes a short genre/tone answer from a pivot, retains prior genres unless explicitly replaced/rejected, and preserves unrelated country/format fields. Relative release windows should not invent extra year bounds.
 - **Candidate reuse (October 16):** compare current/previous validated specs with `diffSpecs`. Any changed field other than tones requires fresh catalogue retrieval; missing previous structured state also requires retrieval. Unchanged scope and tone-only refinements may re-rank previous candidates. This prevents a new decade/window from being applied only to ten old results.
 
@@ -135,12 +140,94 @@ interface SpecTurn {
 - `appliedConstraints` unions supplied cumulative tags with current parser tags;
   it is not a canonical active spec or an enforcement trace. Frontend pivot
   handling clears some history, but replace/remove can leave obsolete tags.
-- Understanding receives user messages and the previous spec, not the assistant
-  question/options. Short choices rely on their own wording. Current intro
-  generation does not receive the previous assistant reply; stock-phrase
-  filtering does not provide general cross-turn repetition prevention.
+- Freeform understanding receives user messages and the previous spec, not the
+  assistant question/options. Structured catalogue choices now bypass it using
+  signed scoped changes; legacy choices still rely on wording. Initial copy is
+  now deterministic; the standalone intro client has no prior-reply context.
+  General cross-turn repetition prevention remains open.
 
 ## 2. Conversation state (implemented, conservative failure handling)
+
+### Progressive delivery refinement (October 16, locally implemented)
+
+- Keep JSON responses for existing API/eval callers; browser POST requests opt
+  into `text/event-stream`. Emit actual understanding, retrieval, ranking,
+  verification and catalogue-choice stage transitions, then one terminal
+  response/error event. No invented titles, claims of completed understanding or
+  saved-state updates in progress events.
+- Five seconds becomes a soft useful-response target. The user approved a
+  provisional 15-second overall deadline; the four-second shared LLM window
+  remains unchanged. This does not claim Gemini will complete within that window.
+- Return final constraint-checked titles with deterministic copy. Remove optional
+  explanation/intro/clarification wording and trailers from the critical path;
+  trailers load on details open. Required metadata hydration/gates still run.
+  Do not repeat legacy LLM preference parsing after route understanding.
+- Retain cancellation/disconnects, request IDs, signed option retries and
+  original-spec timeout semantics. Stage timings accompany terminal diagnostics.
+  Browser parsing must handle fragmented UTF-8/events and fail explicitly on an
+  interrupted stream without a terminal event; progress alone never changes state.
+- Local tests plus a mocked browser interaction verify progress, terminal results,
+  cancel/retry/reset state retention and lazy trailers. No new live recommendation/
+  Gemini calls were made. Live quality, proxy buffering and deadline calibration
+  remain acceptance work, not a reason to alter ranking.
+
+### Whole-turn deadline slice (October 16, locally implemented)
+
+- The original slice enforced a five-second server-work deadline. The delivery
+  refinement above supersedes that constant with the approved provisional
+  15-second ceiling; the cancellation/state rules below remain in effect.
+  Share cancellation across catalogue fetches (including response bodies) and
+  LLM transport, and cancel work when the HTTP response connection closes.
+  Other endpoints keep their current provider timeouts.
+- On expiry send one explicit incomplete-search clarification, no partial
+  recommendations and the original saved spec. An understood change is not
+  committed if the complete response cannot finish; ask the user to retry.
+  Never report a deadline as catalogue absence or start widening on abort.
+- Rethrow cancellation through provider fallback catches and gate cache writes,
+  stage boundaries and final replies. Do not cache aborts as empty/null results.
+  Dispose timers/listeners on success, error, expiry and disconnect.
+- Timeout replies carry `requestDiagnostics: { outcome: 'timed_out',
+  deadlineMs: 15000, elapsedMs, stages }`. Completed replies also retain timings.
+  Frontend messages/passes and evaluation transcripts retain diagnostics.
+  The browser now aborts fetch on Cancel, new-chat reset or component unmount;
+  request IDs still protect against late UI updates. The timeout clarification
+  does not claim any discarded understanding contributed (`llmDiagnostics.used`
+  is false), though provider failure evidence remains available.
+- The deadline is an event-loop/server-work boundary, not a guarantee about
+  network transit or CPU stalls, nor live quality acceptance. Conservative
+  timeouts may return fewer completed recommendation turns; measure that before
+  deployment rather than claiming cancellation improves catalogue coverage.
+- The first subsequent user-authorised live check failed to complete: request
+  understanding consumed its four-second window, leaving about one second for
+  fallback retrieval/ranking/enrichment. This demonstrates a stage-allocation
+  risk, not an established quota failure or lack of matches. Before tuning,
+  distinguish a fast initial conversational response from a completed title list;
+  the exact evidence belongs to the [verification ledger](progress.md).
+
+### Latency reliability slice (October 16, locally implemented)
+
+- Give uncached LLM work one shared four-second elapsed window from entry to the
+  recommendations route, rather than a fresh timeout/retry allowance per stage.
+  Cached answers remain usable. Every dispatched completion has a cancellable
+  remaining-time deadline and no automatic SDK retries; the first 429 starts
+  the existing process-local cooldown immediately.
+- Record request-local stage/reason/status/duration evidence without provider
+  error bodies, prompts or credentials. Preserve existing fallback shapes and
+  saved-spec clarification on failed understanding; optional copy must not
+  extend the expired LLM window. Other endpoints/standalone client calls keep
+  their stage timeouts, but no longer retry automatically. API `llmDiagnostics`
+  exposes optional `failures` and `budgetExhausted`; the frontend retains them
+  and evaluation transcripts persist them, without changing `used`/`stages`
+  semantics or claiming every attempted call contributed.
+- Give catalogue-choice construction a 1.5-second elapsed scheduling window. Check
+  the window before every additional preview, accept only completed evidence,
+  and log/describe incomplete checks rather than invent options. Completed
+  widening options remain valid, with explicit incomplete-check wording;
+  insufficient completed directions fall through to results. Do not race
+  uncancelled provider work or cache a partial/unknown outcome as verified.
+- This LLM-specific slice alone does not bound the full HTTP turn. It now runs
+  inside the separate whole-turn deadline above, which also cancels in-flight
+  catalogue work. Streaming and live quality/latency acceptance remain outstanding.
 
 ### Reliability implementation slice (October 16, locally implemented)
 
@@ -165,23 +252,73 @@ interface SpecTurn {
 - No server-side session store is needed (the API stays stateless).
 - The engine skips older `parsePreferences` when a new spec is available.
   Failed saved-spec follow-ups return clarification before the engine runs.
-  Other fallback paths can still attempt legacy parsing and multiple retries.
+  Other fallback paths can still attempt legacy parsing within the remaining
+  LLM window, but no application LLM completion retries automatically.
 
 ## 3. Catalogue check, clarification and loosening (partially implemented)
+
+### Catalogue-choice slice (October 16, locally implemented)
+
+- Reuse the real retrieval/ranking/final metadata gates in a catalogue-preview
+  mode that never calls an LLM or loads trailers. Build genre choices from the
+  matching titles, not an invented tone promise; verify each with the same
+  scoped request and require at least three distinct final matching titles.
+  The broad pool is capped at 30, checks use the actual result limit (normally
+  ten); requests for fewer than three results skip these choice promises. At
+  most five genre paths are checked and at most three choices are offered.
+  Identical matching title sets are not separate useful directions; fewer than
+  two supported directions falls through to results. Structured undirected
+  browsing no longer invents default Drama/Comedy preferences or searches country
+  words as title terms. Actual genre directions still use normal retrieval.
+- Keep the existing active spec for every choice; a genre choice adds only a
+  catalogue-backed genre. Structured empty-result widening changes one named
+  dimension and is checked by that same preview before being offered. Genre
+  widening is considered before language/country/format/release-window widening.
+  Nothing is changed automatically; selection adds explicit prose about what
+  widened. General automatic soft-relaxation records remain unimplemented.
+- Attach expiring signed, stateless choice tokens to questions. Tokens bind the
+  current spec, original description, region, explicit controls, user-turn
+  history, resulting spec, operation and exact label. Frontend and eval
+  replay them on selection, avoiding a second LLM interpretation. Stale/invalid
+  selections preserve state and ask, never silently widen. Process restart
+  invalidates tokens; they expire after one hour and require the same process,
+  so multi-worker/restart-safe signing is not claimed. The frontend keeps the
+  exact selected token for transport retries, without duplicating user turns.
+  Freeform turns retain ordinary understanding. Normal initial copy is now
+  deterministic; neither previews nor click interpretation uses an LLM.
+- Cache at most 50 preview outcomes for 60 seconds within the process; the key
+  includes the full engine request and result limit. This is catalogue
+  evidence, not a permanent availability guarantee. Unknown/failed checks do not
+  count as viable. If no useful supported choice exists, try results or ask for
+  freeform guidance rather than fabricate options. Thrown catalogue errors use
+  the standard logged API error response. Previews use an isolated engine
+  instance and request-local diagnostics, not production "last request" fields.
+  No live providers in tests. Sequential preview work is bounded by count and
+  elapsed admission; the separate turn deadline now cancels in-flight previews
+  at expiry. Live successful-response quality/latency remains unverified.
 
 - **Initial policy implemented locally October 16:** a validated spec with a
   concrete genre, tone, theme, reference, person or date direction bypasses
   first-turn clarification and attempts results. Origin/format alone do not
   trigger this spec-based override; separate legacy intent/confidence overrides
-  still exist. Empty retrieval uses the existing widening flow. This is not yet
-  the catalogue-count/option-building design below or a deployment claim.
-- **Existing option check:** deterministic or LLM-written option strings are parsed by rules and checked with `estimateAvailableTitles`; the current minimum is 3, with a 2.5 s timeout treated as unknown/viable. This does not use the active spec or fully model specialised ranking paths. It is not a guarantee of 3 final results (Malaysian festival dramas returned 2).
-- **Current transparency:** genre-filter relaxation and origin-change notes exist. A general recorded loosening plan does not.
+  still exist. Structured empty retrieval now uses checked, opt-in widening.
+  This is not a deployment claim.
+- **Legacy option check (no accepted spec):** deterministic or LLM-written
+  option strings are parsed by rules and checked with `estimateAvailableTitles`;
+  the minimum is 3. Unknown counts and the 2.5 s timeout now fail closed, and the
+  timer is cleared. This does not use the active spec or fully model specialised
+  ranking paths; it is not a guarantee of three final results. The historical
+  Malaysian festival-drama option returned two on that path.
+- **Current transparency:** genre-filter relaxation, origin-change notes and
+  selected catalogue-widening prose exist. A general recorded loosening plan does not.
 
-### Planned catalogue strategy (not implemented)
-- `probeCatalog(spec)` makes cheap TMDB discover calls (first page only, counts from `total_results`) and returns the number of matching titles and the genres among them.
-- **When to ask:** the request has no soft preferences, more than ~500 titles match, and the top genres are spread out. Otherwise show results.
-- **Options:** the top 3 genre or tone groups from the matching titles. Each option's request is checked to return at least 8 results. This replaces the fixed option templates.
+### Deferred catalogue strategy and remaining scope
+- The earlier cheap `probeCatalog(spec)`/`total_results` sketch was not used for
+  choice viability: discovery totals can overstate final specialised/quality
+  matches. The implemented preview above uses final results instead.
+- A calibrated "too many strong matches" threshold and tone/theme clustering
+  remain future work. The earlier ~500-title/eight-result sketch is not the
+  implemented threshold; the current minimum is three for small catalogues.
 - **Loosening order:**
   1. Themes.
   2. Tones beyond the first.
@@ -208,12 +345,13 @@ that those adjustments have been retired.
 - **Optional LLM re-order:** score the top 30 titles from synopsis against tone and themes on a 0–1 scale, blended into the score at about 30% weight. Results are cached per (spec, title).
 - The post-scoring adjustments in `recommendationEngine.ts` (~2180–2260) are retired one at a time, each change checked against the evaluation set.
 
-## 5. Reply (planned facts record and streaming)
+## 5. Reply (planned facts record; progressive transport implemented)
 
-Current responses may include an LLM results intro, deterministic constraint
-copy and an interpretation note. Some result paths omit `assistantMessage`;
-the frontend supplies its own fallback. `buildReplyFacts` and streaming are not
-implemented.
+Current responses use deterministic initial explanations/constraint copy and an
+interpretation note. Some paths omit `assistantMessage`; the frontend supplies
+its own fallback. Real stage progress streams before the final validated list;
+optional generated prose is not delivered later. `buildReplyFacts` and
+fact-grounded prose streaming are not implemented.
 
 `buildReplyFacts(spec, relaxations, results)` produces the facts the reply is written from:
 
@@ -240,18 +378,30 @@ implemented.
   check. Exact scoring belongs to [the runner](../backend/eval/run.ts); a passed
   case does not certify every recommendation or every hard requirement.
 - **Replay caveat:** if the requested option substring is absent, the runner takes the first option. It also answers unexpected questions with the first option (up to two extra turns). That can explicitly widen an origin or change direction. Review transcripts before attributing a failed final check to state loss.
-- **Reports:** baseline reports are eligible for version control; other reports are ignored local files. See [progress](progress.md) for dated results and provider caveats. No full live run covers the final October 16 candidate-reuse fix.
+- **Reports:** baseline reports are eligible for version control; other reports
+  are ignored local files. New transcripts retain optional API LLM failure/deadline
+  diagnostics. See [progress](progress.md) for dated results and provider caveats.
+  No full live run covers the final October 16 candidate-reuse fix or later slices.
+- Terminal request diagnostics include stage durations. Reports now distinguish
+  timed-out turn counts and completed-result latency; a case fails if any turn
+  timed out or its final outcome was not results, even if prior titles remain.
+  This still does not make genre proxies a semantic quality judge.
 - The API now returns `originCountries` on each recommendation so country constraints can be checked.
 
 ## Risks
 
-- **LLM cost and latency:** understanding, optional legacy parsing/talent recovery,
-  explanations and intro generation can each invoke a provider, with SDK retries.
-  The five-second goal is not an enforced whole-turn budget. Bound stage/retry
-  latency and measure it; use the [verification ledger](progress.md) for evidence.
+- **LLM cost and latency:** route understanding and optional talent recovery can
+  invoke a provider within the shared window; standalone/legacy callers can
+  still use other client methods. SDK retries are disabled. The deadline returns a
+  conservative incomplete-search reply at expiry; it does not prove useful
+  recommendations can complete within that target. Timeout rate and successful
+  turn quality still need live measurement. Use the [verification ledger](progress.md) for evidence.
 - **Inconsistent LLM output:** JSON-object mode is not provider-enforced schema.
   The new acceptance gate blocks unusable/omitted-state updates and asks rather
   than guessing on failed saved-spec follow-ups. It cannot prove the model's
   interpreted replacement/pivot matches the user's semantics; live quality
   evaluation and per-field rejection logging remain open.
-- **TMDB rate limits** from catalogue checks: mitigate with first-page-only calls, cached counts and batching option checks.
+- **TMDB rate limits** from catalogue checks: bounded previews and cached outcomes
+  reduce repeated work, but real final-pipeline checks can make several provider
+  calls each. The scheduling window does not itself cancel a preview, but the
+  shared whole-turn deadline/disconnect signal does.

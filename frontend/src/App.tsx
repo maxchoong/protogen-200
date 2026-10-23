@@ -5,9 +5,10 @@ import AmbientBackground from './components/AmbientBackground'
 import LensTweakPanel from './components/LensTweakPanel'
 import { isTweakPanelEnabled } from './lensTweaks'
 import { useTheme } from './hooks/useTheme'
-import { useConversation, type LLMUsageDiagnostics } from './hooks/useConversation'
+import { useConversation, type ClarificationQuestion, type LLMUsageDiagnostics, type RequestDiagnostics } from './hooks/useConversation'
 import { buttonClass } from './buttonStyles'
 import './App.css'
+import { readRecommendationStream, type RecommendationProgress } from './recommendationStream'
 
 interface RecommendationRequest {
   description: string
@@ -21,6 +22,7 @@ interface RecommendationRequest {
     userTurns?: string[]
   }
   spec?: unknown
+  selectedOptionToken?: string
   preferences?: {
     genres?: string[]
     mood?: string[]
@@ -35,6 +37,7 @@ interface RecommendationResponse {
   interpretationNote?: string
   assistantMessage?: string
   llmDiagnostics?: LLMUsageDiagnostics
+  requestDiagnostics?: RequestDiagnostics
   spec?: unknown
   retrievalDiagnostics?: {
     tmdbEnabled: boolean
@@ -48,12 +51,7 @@ interface RecommendationResponse {
     }
   }
   requiresClarification?: {
-    questions: Array<{
-      id: string
-      question: string
-      type: 'select' | 'text' | 'boolean'
-      options?: string[]
-    }>
+    questions: ClarificationQuestion[]
     context: string
     confidenceScore?: number
   }
@@ -101,13 +99,17 @@ function App() {
       previousRecommendationIds?: string[]
       cumulativeConstraints?: string[]
     },
-    spec?: unknown
+    spec?: unknown,
+    selectedOptionToken?: string,
+    signal?: AbortSignal,
+    onProgress?: (progress: RecommendationProgress) => void
   ): Promise<RecommendationResponse> => {
     const payload: RecommendationRequest = {
       description,
       region: inferStreamingRegion(),
       clarificationContext,
-      spec
+      spec,
+      selectedOptionToken
     }
 
     const connectivityMessage = "We couldn't connect to our recommendation service just now. Please try again."
@@ -122,10 +124,15 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
         },
         body: JSON.stringify(payload),
+        signal,
       })
 
+      if (response.headers.get('content-type')?.includes('text/event-stream')) {
+        return await readRecommendationStream<RecommendationResponse>(response, onProgress, signal)
+      }
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
         throw new Error(errorData.message || 'Failed to get recommendations')
@@ -160,6 +167,7 @@ function App() {
       appliedConstraints?: string[]
       interpretationNote?: string
       llmDiagnostics?: LLMUsageDiagnostics
+      requestDiagnostics?: RequestDiagnostics
       retrievalDiagnostics?: RecommendationResponse['retrievalDiagnostics']
     }
   ) => {
@@ -172,6 +180,7 @@ function App() {
       appliedConstraints: options?.appliedConstraints || [],
       interpretationNote: options?.interpretationNote,
       llmDiagnostics: options?.llmDiagnostics,
+      requestDiagnostics: options?.requestDiagnostics,
       retrievalDiagnostics: options?.retrievalDiagnostics
     })
   }

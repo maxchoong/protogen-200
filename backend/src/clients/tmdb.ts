@@ -1,4 +1,5 @@
 import { config } from '../config.js'
+import { fetchWithTurnSignal as fetch, throwIfTurnStopped } from '../engine/turnDeadline.js'
 import type { CreatorCredit, CreatorPreference, CreatorRole } from '../engine/preferenceParser.js'
 import { expandGenresForSeries } from '../engine/genreTaxonomy.js'
 
@@ -225,6 +226,7 @@ export class TMDBClient {
       const data = await response.json() as { results: TMDBTitle[] }
       return this.filterTitles(data.results, options)
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[TMDB] Search error:', error)
       return []
     }
@@ -264,6 +266,7 @@ export class TMDBClient {
       const [movies, tv] = await Promise.all([moviePromise, tvPromise])
       return [...movies, ...tv]
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[TMDB] Discover error:', error)
       return []
     }
@@ -302,6 +305,7 @@ export class TMDBClient {
       ])
       return [...movies, ...tv]
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[TMDB] Discover by filters error:', error)
       return []
     }
@@ -364,6 +368,7 @@ export class TMDBClient {
       ])
       return [...movies, ...tv]
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[TMDB] Keyword discovery error:', error)
       return []
     }
@@ -397,6 +402,7 @@ export class TMDBClient {
         excludeAdult: true
       })
     } catch (error) {
+      throwIfTurnStopped()
       console.error(`[TMDB] Related-title ${relation} error:`, error)
       return []
     }
@@ -434,6 +440,7 @@ export class TMDBClient {
       const data = await response.json() as { results: TMDBTitle[] }
       return this.filterTitles(data.results)
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[TMDB] Trending error:', error)
       return []
     }
@@ -472,6 +479,7 @@ export class TMDBClient {
         excludeAdult: options.excludeAdult ?? true
       })
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[TMDB] Discover by year error:', error)
       return []
     }
@@ -516,6 +524,7 @@ export class TMDBClient {
       this.setCachedValue(this.titleDetailsCache, cacheKey, normalized, TMDB_DETAILS_TTL_MS)
       return normalized
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[TMDB] Details error:', error)
       this.setCachedValue(this.titleDetailsCache, cacheKey, null, TMDB_FAILURE_TTL_MS)
       return null
@@ -563,6 +572,7 @@ export class TMDBClient {
       this.setCachedValue(this.videosCache, cacheKey, trailers, TMDB_VIDEOS_TTL_MS)
       return trailers
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[TMDB] Videos error:', error)
       this.setCachedValue(this.videosCache, cacheKey, [], TMDB_FAILURE_TTL_MS)
       return []
@@ -606,6 +616,7 @@ export class TMDBClient {
       this.setCachedValue(this.externalIdsCache, cacheKey, externalIds, TMDB_EXTERNAL_IDS_TTL_MS)
       return externalIds
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[TMDB] External IDs error:', error)
       this.setCachedValue(this.externalIdsCache, cacheKey, {}, TMDB_FAILURE_TTL_MS)
       return {}
@@ -675,6 +686,7 @@ export class TMDBClient {
       this.setCachedValue(this.titleCreditsCache, cacheKey, credits, TMDB_CREDITS_TTL_MS)
       return credits
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[TMDB] Credits error:', error)
       this.setCachedValue(this.titleCreditsCache, cacheKey, { mainCast: [], directors: [] }, TMDB_FAILURE_TTL_MS)
       return { mainCast: [], directors: [] }
@@ -748,6 +760,7 @@ export class TMDBClient {
       this.setCachedValue(this.findByImdbCache, cacheKey, null, TMDB_FIND_BY_IMDB_TTL_MS)
       return null
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[TMDB] Find by IMDb error:', error)
       this.setCachedValue(this.findByImdbCache, cacheKey, null, TMDB_FAILURE_TTL_MS)
       return null
@@ -801,6 +814,7 @@ export class TMDBClient {
           creatorCredits: [{ name: personName, roles: title.personCredit!.roles }]
         } : title)
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[TMDB] Person filmography search error:', error)
       return []
     }
@@ -863,6 +877,7 @@ export class TMDBClient {
       this.setCachedValue(this.trailerByImdbCache, cacheKey, null, TMDB_FAILURE_TTL_MS)
       return undefined
     } catch (error) {
+      throwIfTurnStopped()
       console.error('[TMDB] Error fetching trailer:', error)
       this.setCachedValue(this.trailerByImdbCache, cacheKey, null, TMDB_FAILURE_TTL_MS)
       return undefined
@@ -1313,6 +1328,7 @@ export class TMDBClient {
   }
 
   private getCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string): T | undefined {
+    throwIfTurnStopped()
     const entry = cache.get(key)
     if (!entry) {
       return undefined
@@ -1327,6 +1343,7 @@ export class TMDBClient {
   }
 
   private setCachedValue<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T, ttlMs: number): void {
+    throwIfTurnStopped()
     cache.set(key, {
       value,
       expiresAt: Date.now() + ttlMs

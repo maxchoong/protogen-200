@@ -10,6 +10,8 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { LLMUsageDiagnostics } from '../src/engine/recommendationEngine.js'
+import type { TurnDiagnostics } from '../src/engine/turnDeadline.js'
 
 type Turn = string | { choose: string; text: string }
 
@@ -58,12 +60,14 @@ interface ApiResponse {
   success: boolean
   message?: string
   recommendations?: Recommendation[]
-  requiresClarification?: { questions: { id: string; question: string; options?: string[] }[]; context: string }
+  requiresClarification?: { questions: { id: string; question: string; options?: string[]; optionTokens?: Record<string, string> }[]; context: string }
   appliedConstraints?: string[]
   assistantMessage?: string
   interpretationNote?: string
   turnOperation?: { continuity?: string; operation?: string }
   spec?: unknown
+  llmDiagnostics?: LLMUsageDiagnostics
+  requestDiagnostics?: TurnDiagnostics
 }
 
 type CheckKind = 'hard' | 'soft' | 'tone' | 'results' | 'clarify'
@@ -82,6 +86,8 @@ interface TranscriptEntry {
   options?: string[]
   latencyMs: number
   spec?: unknown
+  llmDiagnostics?: LLMUsageDiagnostics
+  requestDiagnostics?: ApiResponse['requestDiagnostics']
 }
 
 interface CaseResult {
@@ -137,6 +143,7 @@ async function replay(base: string, evalCase: EvalCase) {
   let firstQuery: string | undefined
   let clarificationRound = 0
   let pendingOptions: string[] | undefined
+  let pendingOptionTokens: Record<string, string> | undefined
   let finalResults: Recommendation[] = []
   let clarifiedFirstTurn = false
   const status: { lastOutcome: TranscriptEntry['outcome']; spec?: unknown } = { lastOutcome: 'empty' }
@@ -162,7 +169,8 @@ async function replay(base: string, evalCase: EvalCase) {
             cumulativeConstraints,
             userTurns: [...userTurns]
           },
-          spec: status.spec
+          spec: status.spec,
+          selectedOptionToken: pendingOptionTokens?.[text]
         }
       : { description: text }
 
@@ -172,13 +180,17 @@ async function replay(base: string, evalCase: EvalCase) {
 
     if (!data.success) {
       status.lastOutcome = 'error'
-      transcript.push({ user: text, reply: data.message || 'error', outcome: 'error', latencyMs })
+      transcript.push({
+        user: text, reply: data.message || 'error', outcome: 'error', latencyMs,
+        llmDiagnostics: data.llmDiagnostics, requestDiagnostics: data.requestDiagnostics
+      })
       return
     }
 
     if (data.requiresClarification) {
       const question = data.requiresClarification.questions[0]
       pendingOptions = question?.options
+      pendingOptionTokens = question?.optionTokens
       askedQuestionIds.push(...data.requiresClarification.questions.map(item => item.id))
       clarificationRound += 1
       status.lastOutcome = 'clarification'
@@ -189,12 +201,15 @@ async function replay(base: string, evalCase: EvalCase) {
         outcome: 'clarification',
         options: pendingOptions,
         latencyMs,
-        spec: data.spec
+        spec: data.spec,
+        llmDiagnostics: data.llmDiagnostics,
+        requestDiagnostics: data.requestDiagnostics
       })
       return
     }
 
     pendingOptions = undefined
+    pendingOptionTokens = undefined
     clarificationRound = 0
     const recommendations = data.recommendations || []
     if (recommendations.length > 0) {
@@ -210,7 +225,9 @@ async function replay(base: string, evalCase: EvalCase) {
       reply: [data.assistantMessage, data.interpretationNote].filter(Boolean).join(' '),
       outcome: status.lastOutcome,
       latencyMs,
-      spec: data.spec
+      spec: data.spec,
+      llmDiagnostics: data.llmDiagnostics,
+      requestDiagnostics: data.requestDiagnostics
     })
   }
 
@@ -334,8 +351,13 @@ function score(evalCase: EvalCase, results: Recommendation[], clarifiedFirstTurn
 
 async function runCase(base: string, evalCase: EvalCase): Promise<CaseResult> {
   try {
-    const { transcript, finalResults, clarifiedFirstTurn } = await replay(base, evalCase)
+    const { transcript, finalResults, clarifiedFirstTurn, lastOutcome } = await replay(base, evalCase)
     const checks = score(evalCase, finalResults, clarifiedFirstTurn)
+    checks.push({
+      name: 'completedSearch', kind: 'results',
+      pass: lastOutcome === 'results' && !transcript.some(entry => entry.requestDiagnostics?.outcome === 'timed_out'),
+      detail: `final outcome=${lastOutcome}; timed out turns=${transcript.filter(entry => entry.requestDiagnostics?.outcome === 'timed_out').length}`
+    })
     return {
       id: evalCase.id,
       category: evalCase.category,
@@ -385,6 +407,9 @@ function summarise(results: CaseResult[]) {
     return relevant.length ? relevant.filter(check => check.pass).length / relevant.length : null
   }
   const latencies = results.flatMap(result => result.transcript.map(entry => entry.latencyMs))
+  const turns = results.flatMap(result => result.transcript)
+  const completedLatencies = turns.filter(entry => entry.outcome === 'results').map(entry => entry.latencyMs)
+  const stageDurations = turns.flatMap(entry => entry.requestDiagnostics?.stages || [])
   const followups = results.filter(result => result.category === 'followup')
   const toneChecks = checks.filter(check => check.name === 'toneConflict')
   return {
@@ -401,6 +426,14 @@ function summarise(results: CaseResult[]) {
     errors: results.filter(result => result.error).length,
     latencyP50Ms: percentile(latencies, 0.5),
     latencyP90Ms: percentile(latencies, 0.9),
+    timedOutTurnCount: turns.filter(entry => entry.requestDiagnostics?.outcome === 'timed_out').length,
+    completedResultTurnCount: completedLatencies.length,
+    completedResultLatencyP50Ms: completedLatencies.length ? percentile(completedLatencies, 0.5) : null,
+    completedResultLatencyP90Ms: completedLatencies.length ? percentile(completedLatencies, 0.9) : null,
+    stageDurationP50Ms: Object.fromEntries(
+      Array.from(new Set(stageDurations.map(entry => entry.stage))).map(stage =>
+        [stage, percentile(stageDurations.filter(entry => entry.stage === stage).map(entry => entry.durationMs), 0.5)])
+    ),
     byCategory: Object.fromEntries(
       Array.from(new Set(results.map(result => result.category))).map(category => {
         const group = results.filter(result => result.category === category)

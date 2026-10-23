@@ -316,6 +316,10 @@ export default function ResultsPage({
   const [highlightDetailsLoading, setHighlightDetailsLoading] = useState(false)
   const [trailerLoadError, setTrailerLoadError] = useState(false)
   const [trailerLoading, setTrailerLoading] = useState(false)
+  const [trailersById, setTrailersById] = useState<Record<string, string | null>>({})
+  const [trailerLookupError, setTrailerLookupError] = useState<string>()
+  const [trailerLookupRetry, setTrailerLookupRetry] = useState(0)
+  const [trailerLookupLoading, setTrailerLookupLoading] = useState(false)
   const [detailsPanelEntered, setDetailsPanelEntered] = useState(false)
   const [infoPopoverOpen, setInfoPopoverOpen] = useState(false)
   const [availabilityByTitleId, setAvailabilityByTitleId] = useState<Record<string, NonNullable<Recommendation['availability']>>>({})
@@ -364,6 +368,43 @@ export default function ResultsPage({
     : highlightDetails
       ? highlightDetailsIndex
       : null
+
+  const activeTrailerId = activeDetailsRec?.imdbId || activeDetailsRec?.id
+  const activeTrailerType = activeDetailsRec?.type === 'series' || activeDetailsRec?.type === 'tv' || activeDetailsRec?.type === 'episode' ? 'tv' : 'movie'
+  const activeTrailerKey = activeTrailerId ? `${activeTrailerType}:${activeTrailerId}` : undefined
+  const suppliedTrailerUrl = activeDetailsRec?.trailerUrl
+  const activeTrailerUrl = suppliedTrailerUrl || (activeTrailerKey ? trailersById[activeTrailerKey] : undefined)
+
+  useEffect(() => {
+    if (activeDetailsSource !== 'recommendation' || !activeTrailerId || !activeTrailerKey || suppliedTrailerUrl || trailersById[activeTrailerKey] !== undefined) {
+      setTrailerLookupLoading(false)
+      setTrailerLookupError(undefined)
+      return
+    }
+    const controller = new AbortController()
+    const id = activeTrailerId.replace(/^tmdb:(movie|tv):/, '').replace(/^(movie|tv)-/, '')
+    const loadTrailer = async () => {
+      setTrailerLookupLoading(true)
+      setTrailerLookupError(undefined)
+      try {
+        const response = await fetch(`${getBackendUrl()}/trailers/${activeTrailerType}/${encodeURIComponent(id)}`, { signal: controller.signal })
+        if (!response.ok) throw new Error('Unable to load the trailer. Please try again.')
+        const data: { success: boolean; trailerUrl: string | null; message?: string } = await response.json()
+        if (!data.success) throw new Error(data.message || 'Unable to load the trailer. Please try again.')
+        if (data.trailerUrl !== null && typeof data.trailerUrl !== 'string') throw new Error('Invalid trailer response. Please try again.')
+        if (!controller.signal.aborted) setTrailersById(prev => ({ ...prev, [activeTrailerKey]: data.trailerUrl }))
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          console.error('Trailer lookup failed:', error)
+          setTrailerLookupError(error instanceof Error ? error.message : 'Unable to load the trailer.')
+        }
+      } finally {
+        if (!controller.signal.aborted) setTrailerLookupLoading(false)
+      }
+    }
+    void loadTrailer()
+    return () => controller.abort()
+  }, [activeDetailsSource, activeTrailerId, activeTrailerKey, activeTrailerType, suppliedTrailerUrl, trailersById, trailerLookupRetry])
 
   const activeDetailsCount = detailsRec
     ? results.length
@@ -1355,9 +1396,16 @@ export default function ResultsPage({
                 )}
 
                 <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
-                  {activeDetailsRec.trailerUrl && (
+                  {trailerLookupLoading && <span role="status">Checking for a trailer...</span>}
+                  {trailerLookupError && (
+                    <span role="alert">
+                      {trailerLookupError}{' '}
+                      <button className={inlineActionClass()} onClick={() => setTrailerLookupRetry(value => value + 1)}>Retry trailer</button>
+                    </span>
+                  )}
+                  {activeTrailerUrl && (
                     <button
-                      onClick={() => openTrailer(activeDetailsRec.trailerUrl!, activeDetailsRec.title)}
+                      onClick={() => openTrailer(activeTrailerUrl, activeDetailsRec.title)}
                       className={buttonClass({ variant: 'secondary', size: 'xs', className: 'gap-1.5' })}
                       aria-label={`Watch trailer for ${activeDetailsRec.title}`}
                     >

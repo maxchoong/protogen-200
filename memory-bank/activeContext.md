@@ -11,23 +11,19 @@ an approximately five-second response target and evaluation before further
 architecture changes. These decisions and targets belong to the
 [engine PRD](prd-conversational-engine.md).
 
-Documentation structure and selective context loading were completed first.
-Original worktree documents were preserved byte-for-byte with hashes and a
-[recovery map](archive/2026-10-16/README.md). Application code and provider
-configuration were not changed by this migration.
-
-A subsequent [code/documentation cross-check](progress.md#codedocumentation-cross-check)
-corrected current guidance and surfaced enforcement, validation, proxy-consent
-and cache gaps. A subsequent local reliability slice implements usable-spec
-checks, conservative failure handling and common candidate constraint gates;
-proxy-consent and cache work remain open.
+Documentation was reorganised with byte-preserved snapshots and a
+[recovery map](archive/2026-10-16/README.md).
+The [code/documentation cross-check](progress.md#codedocumentation-cross-check)
+records corrected guidance and remaining gaps. Subsequent local slices cover
+saved-state protection, candidate gates, catalogue choices and deadlines.
+Proxy-consent and browser-cache work remain open.
 
 ## Resume recommendation work here
 
 Read the [engine design](design-conversational-engine.md) and
 [feature tasks](tasks-conversational-engine.md) before implementation. Phases
-1-2 are implemented; phase 3 has an initial results-first policy, not the full
-catalogue-built option strategy. Implementation is not quality acceptance.
+1-2 and a bounded phase-3 catalogue-choice slice are implemented locally, not the
+full tone/theme and general relaxation strategy. Implementation is not quality acceptance.
 
 The API attempts a full updated request plus operation each turn, validates it,
 overlays it on rule-derived preferences and returns it to the client. Concrete
@@ -45,21 +41,35 @@ Common format/date/year/origin/exclusion gates run before ranking and after
 final enrichment; missing dates are excluded with explicit uncertainty copy.
 Missing language remains permissive, and certification enforcement is incomplete.
 
-The other immediate blocker is **provider reliability and latency**. Gemini
-started responding after the earlier rate limit, then returned timeouts/503s
-and later another 429. A configured key or an earlier successful probe does not
-establish current availability. The cooldown starts after SDK retries finish,
-not at the first failed attempt, and is not a total-turn time budget.
+Structured clarification choices now come from final matching title genres, with
+multiple distinct checked directions required before asking. Each option is
+verified through the real retrieval/ranking gates, including specialised paths.
+Selecting one replays a signed scope-bound change instead of asking the LLM to
+interpret its label again. Empty structured searches offer checked, explicit
+one-dimension widening or a text question; no constraint is silently dropped.
+Stale choices keep the saved request. Token lifetime, process/restart limitations,
+cache bounds and latency caveats belong to the [design](design-conversational-engine.md).
+
+The failed live crime check showed the five-second hard cutoff could prevent
+useful completion after understanding took four seconds. The user approved
+progressive delivery and a **provisional 15-second search ceiling**; five seconds
+is now a soft target. Browser POST SSE reports actual stages, then one terminal
+response/error. JSON callers remain compatible. Required constraint checks stay
+before delivery; initial copy is deterministic and trailers load on details open.
+Route understanding is not followed by legacy LLM parsing. The shared four-second
+LLM window/no retries/cooldown and preview scheduling limits remain. Progress
+never commits state; timeout preserves the original spec. Cancel/reset/unmount
+abort fetch/provider work. Live quality and quota recovery remain unproven;
+see the [delivery design](design-conversational-engine.md#progressive-delivery-refinement-october-16-locally-implemented).
 
 ## Next actions, in order
 
-1. Continue phase 3: build options from matching catalogue data, validate them
-   against the active request and specialised retrieval paths, and record
-   loosening visibly. Keep explicit origin constraints unless the user agrees
-   to widening.
-2. Bound retry/stage latency and retain provider failure evidence. Assess
-   whether any offline follow-up changes can be safely understood; the current
-   conservative policy asks instead of guessing.
+1. When authorised, run a small quota-capped check of direct requests, option
+   selection and follow-ups. Measure completed results and timeouts separately,
+   inspect stage timings and verify deployment/proxy flushing before accepting
+   latency. No further live recommendation calls were made during delivery work.
+2. Complete remaining phase 3 deliberately: calibrate when asking is useful,
+   tone/theme choices, proxy consent and general relaxation records.
 3. Re-evaluate targeted paths and then the full suite when provider health
    permits. Check transcripts: the harness can select the first clarification
    or widening option, so final constraint failures are not always spontaneous
@@ -69,21 +79,23 @@ Other engine gaps (thin Malaysian critics options, Portuguese coverage, widened
 origin balance, horror-comedy and tone conflicts) are owned by feature tasks.
 Safety, frontend/deployed parity and general coverage remain in the
 [general backlog](progress.md#general-backlog), not silently completed.
-Ranking simplification, fact-grounded replies and streaming remain later phases.
+Ranking simplification and full fact-grounded prose remain later phases.
 
 ## Verification and worktree cautions
 
 The [verification ledger](progress.md) owns exact test counts, evaluation scores,
-report names and caveats. The reliability slice uses mocked/local verification
-only, with no Gemini calls. No live run covers it or the final candidate-reuse fix.
-The targeted 90s refinement succeeded; French-more-recent remains unverified
-under healthy LLM conditions. Provider health has not been rechecked since the
-last recorded failure.
+report names and caveats. Reliability implementation tests use mocked/local
+verification. The subsequent user-authorised live check failed on its first
+case and was stopped; no broad evaluation or semantic quality acceptance followed.
+Further provider use must remain bounded. The earlier 90s refinement succeeded;
+French-more-recent remains unverified under healthy LLM conditions.
 
-Recommendation work is uncommitted, mixed with unrelated frontend edits. Do not
-revert or commit them indiscriminately, or assume local changes are deployed.
-Frontend build/lint evidence predates the latest backend-only follow-up and
-does not certify the current dirty frontend worktree. Evaluation JSON files
+The worktree was clean at the start of the catalogue-choice slice; current
+uncommitted edits include that slice and subsequent deadline/cancellation work. Never assume later worktree state or
+deployment parity. Frontend build/lint and eval type-check pass locally. A mocked
+browser check now covers actual progress, terminal-only results, lazy trailers,
+cancel/retry and reset state retention; live/deployed behaviour remains unverified.
+Evaluation JSON files
 other than baseline reports are ignored/local; the persistent ledger retains
 their summaries and caveats.
 

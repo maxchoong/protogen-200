@@ -111,12 +111,12 @@ describe('Creator filmography recommendations', () => {
     expect(explanationsSpy).not.toHaveBeenCalled()
   })
 
-  it('reports LLM stages that contribute to recommendations', async () => {
+  it('returns deterministic explanations without calling optional LLM copy or trailers', async () => {
     jest.mocked(llmClient.isEnabled).mockReturnValue(true)
     jest.spyOn(llmClient, 'parsePreferences').mockResolvedValue({ mood: ['Relaxing'] })
-    jest.spyOn(llmClient, 'generateWhyThisBatch').mockImplementation(async (_description, titles) =>
-      new Map([[titles[0].title, 'A tailored LLM explanation.']])
-    )
+    const explanations = jest.spyOn(llmClient, 'generateWhyThisBatch').mockImplementation(() => new Promise(() => {}))
+    jest.mocked(tmdbClient.getTrailersBatch).mockImplementation(() => new Promise(() => {}))
+    jest.mocked(tmdbClient.getVideos).mockImplementation(() => new Promise(() => {}))
     const llmDiagnostics: LLMUsageDiagnostics = { used: false, stages: [] }
 
     const recommendations = await recommendationEngine.getRecommendations(
@@ -126,11 +126,12 @@ describe('Creator filmography recommendations', () => {
     )
 
     expect(llmDiagnostics.used).toBe(true)
-    expect(llmDiagnostics.stages).toEqual(expect.arrayContaining([
-      'preference parsing',
-      'recommendation explanations'
-    ]))
-    expect(recommendations.some(item => item.whyThis === 'A tailored LLM explanation.')).toBe(true)
+    expect(llmDiagnostics.stages).toEqual(['preference parsing'])
+    expect(recommendations.length).toBeGreaterThan(0)
+    expect(recommendations.every(item => item.whyThis && !item.trailerUrl)).toBe(true)
+    expect(explanations).not.toHaveBeenCalled()
+    expect(tmdbClient.getTrailersBatch).not.toHaveBeenCalled()
+    expect(tmdbClient.getVideos).not.toHaveBeenCalled()
   })
 
   it('reports no LLM usage when the provider is disabled', async () => {

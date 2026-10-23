@@ -1,4 +1,6 @@
 import OpenAI from 'openai'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { throwIfTurnStopped, turnSignal } from '../engine/turnDeadline.js'
 import type {
   ChatCompletion,
   ChatCompletionCreateParamsNonStreaming,
@@ -7,8 +9,26 @@ import type {
 import type { CreatorCredit, CreatorPreference, CreatorRole, LLMPreferenceHints } from '../engine/preferenceParser.js'
 
 const LLM_TIMEOUT_MS = 15000
-const MAX_RETRIES = 2
+export const RECOMMENDATION_LLM_WINDOW_MS = 4000
 const RATE_LIMIT_COOLDOWN_MS = 60_000
+
+export interface LLMCallFailure {
+  stage: string
+  reason: 'deadline' | 'rate_limit' | 'cooldown' | 'timeout' | 'provider_error'
+  status?: number
+  elapsedMs: number
+}
+
+export interface LLMRequestDiagnostics {
+  failures?: LLMCallFailure[]
+  budgetExhausted?: boolean
+}
+
+interface LLMRequestBudget {
+  deadline: number
+  failures: LLMCallFailure[]
+  exhausted: boolean
+}
 
 interface LLMCache {
   [key: string]: {
@@ -41,6 +61,7 @@ export class LLMClient {
   private cache: LLMCache = {}
   private enabled: boolean = false
   private model: string
+  private requestBudget = new AsyncLocalStorage<LLMRequestBudget>()
 
   constructor() {
     const apiKey = process.env.LLM_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim() || ''
@@ -58,7 +79,7 @@ export class LLMClient {
           apiKey,
           baseURL,
           timeout: LLM_TIMEOUT_MS,
-          maxRetries: MAX_RETRIES
+          maxRetries: 0
         })
         this.enabled = true
         console.log(`[LLM] Client configured (${this.model}); connectivity is verified on request.`)
@@ -75,25 +96,77 @@ export class LLMClient {
     }
   }
 
-  /**
-   * Single entry point for completions. After a rate-limit response, calls fail
-   * immediately for a cooldown so every stage falls back without waiting on retries.
-   */
+  withRequestBudget<T>(callback: () => T): T {
+    return this.requestBudget.run({
+      deadline: performance.now() + RECOMMENDATION_LLM_WINDOW_MS, failures: [], exhausted: false
+    }, callback)
+  }
+
+  getRequestDiagnostics(): LLMRequestDiagnostics {
+    const budget = this.requestBudget.getStore()
+    return {
+      ...(budget?.failures.length ? { failures: budget.failures.map(failure => ({ ...failure })) } : {}),
+      ...(budget?.exhausted ? { budgetExhausted: true } : {})
+    }
+  }
+
   private async complete(
+    stage: string,
     body: ChatCompletionCreateParamsNonStreaming,
-    options?: { timeout?: number; maxRetries?: number }
+    options?: { timeout?: number }
   ): Promise<ChatCompletion> {
+    throwIfTurnStopped()
+    const budget = this.requestBudget.getStore()
+    const started = performance.now()
+    const recordFailure = (reason: LLMCallFailure['reason'], status?: number) => {
+      budget?.failures.push({
+        stage, reason, ...(status !== undefined ? { status } : {}),
+        elapsedMs: Math.round(performance.now() - started)
+      })
+      if (budget && reason === 'deadline') budget.exhausted = true
+      console.warn(`[LLM] ${stage}: ${reason}${status !== undefined ? ` (HTTP ${status})` : ''}`)
+    }
     if (Date.now() < this.rateLimitedUntil) {
+      recordFailure('cooldown')
       throw new Error('rate limited; skipping LLM call during cooldown')
     }
+    const remaining = budget ? budget.deadline - started : Infinity
+    if (remaining < 1) {
+      recordFailure('deadline')
+      throw new Error('request LLM window exhausted; skipping provider call')
+    }
+    const stageTimeout = options?.timeout ?? LLM_TIMEOUT_MS
+    const limitedByRequest = remaining <= stageTimeout
+    const timeout = Math.max(1, Math.floor(Math.min(stageTimeout, remaining)))
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeout)
     try {
-      return await (options ? this.client!.chat.completions.create(body, options) : this.client!.chat.completions.create(body))
-    } catch (error: any) {
-      if (error?.status === 429) {
+      const response = await this.client!.chat.completions.create(body, {
+        timeout, maxRetries: 0, signal: turnSignal(controller.signal)
+      })
+      throwIfTurnStopped()
+      // Do not accept late provider output, even if a transport ignored abort.
+      if (controller.signal.aborted || performance.now() >= started + timeout) {
+        throw new Error('completion arrived after its deadline')
+      }
+      return response
+    } catch (error: unknown) {
+      throwIfTurnStopped()
+      const status = error && typeof error === 'object' && 'status' in error && typeof error.status === 'number'
+        ? error.status : undefined
+      if (status === 429) {
         this.rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS
         console.warn(`[LLM] Rate limited; using fallbacks for ${RATE_LIMIT_COOLDOWN_MS / 1000}s`)
       }
+      const deadlineReached = controller.signal.aborted || performance.now() >= started + timeout
+      const timedOut = deadlineReached ||
+        (error instanceof Error && error.name === 'APIConnectionTimeoutError')
+      recordFailure(status === 429 ? 'rate_limit'
+        : ((limitedByRequest && deadlineReached) || (budget && performance.now() >= budget.deadline)) ? 'deadline'
+          : timedOut ? 'timeout' : 'provider_error', status)
       throw error
+    } finally {
+      clearTimeout(timer)
     }
   }
 
@@ -155,7 +228,7 @@ Use null for unknown year bounds. Preserve all relevant details from the full co
         }
       ]
 
-      const response = await this.complete({
+      const response = await this.complete('preference parsing', {
         model: this.model,
         messages,
         temperature: 0.3,
@@ -217,6 +290,7 @@ Use null for unknown year bounds. Preserve all relevant details from the full co
       
       return result
     } catch (error: any) {
+      throwIfTurnStopped()
       console.error('[LLM] Preference parsing error:', error.message)
       return null
     }
@@ -294,13 +368,13 @@ Only include what the user asked for. Use null or [] when unknown.`
     ].join('\n\n')
 
     try {
-      const response = await this.complete({
+      const response = await this.complete('request understanding', {
         model: this.model,
         messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
         temperature: 0.1,
         max_tokens: 700,
         response_format: { type: 'json_object' }
-      }, { timeout: 8000, maxRetries: 1 })
+      }, { timeout: 8000 })
 
       const content = response.choices[0]?.message?.content
       if (!content) return null
@@ -309,6 +383,7 @@ Only include what the user asked for. Use null or [] when unknown.`
       this.setCache(cacheKey, parsed, 3600000)
       return parsed as Record<string, unknown>
     } catch (error: any) {
+      throwIfTurnStopped()
       console.error('[LLM] Request understanding error:', error.message)
       return null
     }
@@ -359,7 +434,7 @@ Why recommend this?`
         }
       ]
 
-      const response = await this.complete({
+      const response = await this.complete('recommendation explanations', {
         model: this.model,
         messages,
         temperature: 0.7,
@@ -374,6 +449,7 @@ Why recommend this?`
 
       return null
     } catch (error: any) {
+      throwIfTurnStopped()
       console.error('[LLM] Why-this generation error:', error.message)
       return null
     }
@@ -471,7 +547,7 @@ Generate explanations as JSON object with numbered keys. Reference the matching 
         }
       ]
 
-      const response = await this.complete({
+      const response = await this.complete('recommendation explanations', {
         model: this.model,
         messages,
         temperature: 0.7,
@@ -498,6 +574,7 @@ Generate explanations as JSON object with numbered keys. Reference the matching 
 
       return result
     } catch (error: any) {
+      throwIfTurnStopped()
       console.error('[LLM] Batch explanation error:', error.message)
       return new Map()
     }
@@ -536,7 +613,7 @@ Generate explanations as JSON object with numbered keys. Reference the matching 
         }
       ]
 
-      const response = await this.complete({
+      const response = await this.complete('synopsis generation', {
         model: this.model,
         messages,
         temperature: 0.6,
@@ -551,6 +628,7 @@ Generate explanations as JSON object with numbered keys. Reference the matching 
 
       return null
     } catch (error: any) {
+      throwIfTurnStopped()
       console.error('[LLM] Synopsis generation error:', error.message)
       return null
     }
@@ -602,7 +680,7 @@ Rules:
         }
       ]
 
-      const response = await this.complete({
+      const response = await this.complete('actor title recovery', {
         model: this.model,
         messages,
         temperature: 0.2,
@@ -624,6 +702,7 @@ Rules:
       this.setCache(cacheKey, deduped, 6 * 60 * 60 * 1000)
       return deduped
     } catch (error: any) {
+      throwIfTurnStopped()
       console.error('[LLM] Actor title seed generation error:', error.message)
       return []
     }
@@ -685,7 +764,7 @@ Guidelines:
         }
       ]
 
-      const response = await this.complete({
+      const response = await this.complete('clarification wording', {
         model: this.model,
         messages,
         temperature: 0.5,
@@ -731,6 +810,7 @@ Guidelines:
       this.setCache(cacheKey, result, 3600000)
       return result
     } catch (err) {
+      throwIfTurnStopped()
       console.warn('[LLM] generateConversationalClarification failed, using fallback:', err)
       return null
     }
@@ -756,7 +836,7 @@ Guidelines:
     }
 
     try {
-      const response = await this.complete({
+      const response = await this.complete('results introduction', {
         model: this.model,
         messages: [
           {
@@ -788,6 +868,7 @@ Guidelines:
       this.setCache(cacheKey, text, 3600000)
       return text
     } catch (err) {
+      throwIfTurnStopped()
       console.warn('[LLM] generateResultsIntro failed, using fallback:', err)
       return null
     }
@@ -797,6 +878,7 @@ Guidelines:
    * Get cached value if still valid
    */
   private getCache(key: string): any | null {
+    throwIfTurnStopped()
     const cached = this.cache[key]
     if (!cached) return null
 
@@ -813,6 +895,7 @@ Guidelines:
    * Set cached value with TTL
    */
   private setCache(key: string, value: any, ttl: number): void {
+    throwIfTurnStopped()
     this.cache[key] = {
       value,
       timestamp: Date.now(),

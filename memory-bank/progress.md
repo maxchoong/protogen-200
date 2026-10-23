@@ -8,13 +8,29 @@ Original detailed checklists remain in the [historical snapshot](archive/2026-10
 
 | Date | Scope | Evidence | Result and boundary |
 |---|---|---|---|
+| October 16, progressive delivery refinement | Critical-path reduction, 15-second ceiling, POST SSE, lazy trailers and timing/eval diagnostics | Full backend Jest suite; backend/frontend `build`/`lint`; separate eval `tsc --noEmit`; `backend/node_modules/.bin/tsx --test frontend/tests/recommendationStream.test.ts`; documentation audit/tests | 497/497 backend tests across 16 suites, 8/8 frontend stream tests and 13/13 documentation tests pass; both builds/lints and eval type-check pass. Tests cover completion after five seconds, exact 15-second timeout, SSE progress before terminal state, one terminal error/timeout, JSON compatibility, disconnect cancellation, fragmented UTF-8/CRLF, malformed/interrupted streams and final constraint gates. A local mock-server eval proves a timed-out follow-up fails even when earlier titles satisfy all content checks; scratch report removed. No new live recommendation/Gemini calls or deployment acceptance. |
+| October 16, progressive delivery refinement | Mocked browser interaction | Temporary local frontend HTTP 200; integrated browser with mocked recommendation/availability/trailer responses | Actual progress visible before any result, checked title shown only after terminal event, zero trailer calls before details and one after open. Cancel aborted a pending refinement; retry sent the same saved spec and added no result round. New-chat reset aborted work and the next request omitted prior state. Browser mocks/page cleared and helper server stopped. This is UI/transport evidence, not semantic quality, live provider speed or proxy-flushing certification. |
+| October 16, 16:09 BST, targeted live check | `gritty-crime`, fresh local backend, sequential concurrency 1 | `npm --prefix backend run eval -- --base http://localhost:3017 --only gritty-crime --concurrency 1 --label deadline-targeted-gritty`; report `2026-10-16T15-09-25-650Z-deadline-targeted-gritty.json` | 0/1 cases passed; one turn, 5,085 ms client latency, explicit `search_timeout`, no results. Gemini `gemini-3.5-flash-lite` understanding hit its 4-second deadline (4,003 ms); legacy preference parsing was skipped without another dispatch because the shared window was exhausted. Logs show fallback TMDB discovery and ranking began before the outer deadline stopped work. No 429/503 was observed; quota reset/provider health are not established by an aborted request. Stopped after this first failure rather than spending quota on the remaining planned cases; temporary backend stopped. No returned titles to assess for semantic quality. |
+| October 16, whole-turn deadline slice | Recommendation deadline, provider bodies/caches, HTTP disconnect and browser abort wiring | `npm --prefix backend test -- --runInBand --silent`; backend/frontend `build`/`lint`; separate eval `tsc --noEmit` as below; documentation tests/audit | 485/485 tests across 15 suites; builds/lints and eval type-check pass. Targeted fake-clock tests verify no reply before 4,999 ms and `search_timeout` at 5,000 ms, preserved original spec, no partial titles/widening, late-result rejection, expired-preview cache protection, body cancellation and clean retries after aborted cache loads. Real local HTTP disconnect and real SDK with mocked fetch are covered. No provider calls, successful browser interaction test, deployment or live quality/latency acceptance. |
+| October 16, latency slice | Shared LLM deadline, SDK transport, preview scheduling and diagnostics | Full backend Jest suite; backend/frontend `build`/`lint`; separate eval `tsc --noEmit` as below | 466/466 tests across 13 suites; builds/lints and eval type-check pass. Real SDK with mocked fetch verifies one dispatch on 429/503 and in-flight abort at the shared deadline. Fake-clock tests cover all completion stages, fractional deadlines, cached answers, concurrent-request isolation, late-output rejection and incomplete catalogue checks. No live provider, browser or deployment verification. |
+| October 16, catalogue-choice slice | Local backend, frontend and replay contract | `npm --prefix backend test -- --runInBand --silent`; backend and frontend `build`/`lint`; from backend, `tsc --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --strict --esModuleInterop --skipLibCheck --resolveJsonModule eval/run.ts` | 448/448 tests across 12 suites; both builds/lints and separate eval type-check pass. Added scoped genre choices, distinct-title thresholds, thin/specialised-path checks, no-LLM/trailer previews, selected widening, stale-token preservation and broad browsing regressions. No live Gemini/catalogue evaluation or deployment acceptance. |
 | October 16, reliability slice | Local backend usable-spec/saved-state and final-candidate gates | `npm --prefix backend test -- --runInBand`; `npm --prefix backend run build`; `npm --prefix backend run lint` | 410/410 tests across 11 suites, build/lint passed. Existing Jest open-handles warning remains. Mocked/local evidence only; no fresh live quality, browser or deployment certification. |
 | October 16, earlier | Local backend, after final candidate-reuse fix | `npm test -- --runInBand`; `npm run lint`; `npm run build` in backend | 375/375 tests, lint and build passed. Superseded locally by the reliability slice below, not by a fresh live-quality evaluation. |
-| Before latest backend-only follow-up | Frontend | Earlier build/lint and browser checks in historical snapshots | No fresh verification of the current dirty frontend worktree; do not infer parity from backend results. |
+| October 16, catalogue-choice slice | Browser interaction attempt | Temporary local frontend HTTP 200; mocked Playwright check attempted | Not verified: shared MCP browser was already in use; separate integrated browser could not reach localhost (`ERR_CONNECTION_REFUSED`). No application interaction assertions completed. Temporary server stopped and isolated page cleared; no provider requests made. |
 | October 16 | Documentation reconciliation | Local-link/fence and documentation diff checks | Passed on the pre-migration docs. No application tests or provider calls made for that refresh. |
 
 Documentation-migration verification is recorded separately below; it must not
 change the date/scope of application or provider verification.
+
+Latest documentation validation: `npm --prefix backend run check:docs`,
+`npm --prefix backend run test:docs` and `git diff --check` pass; all six preserved
+snapshot hashes remain unchanged; documentation tests pass 13/13. Local
+implementation is not live-quality or successful-five-second-response acceptance.
+The latest provisional 15-second server-work ceiling (five-second soft target)
+wraps the four-second LLM window and 1.5-second preview scheduling window; it cancels in-flight catalogue I/O and
+returns an incomplete-search clarification, not a promised recommendation set.
+Token signing currently assumes one issuing process. Existing Jest open-handle warnings are historical,
+not a fresh finding in the latest silent run.
 
 ## Evaluation record
 
@@ -32,7 +48,7 @@ full runs used 1. Initial clarification fell from 40% baseline to 13% in phase2c
 
 Reports in `backend/eval/reports/` (local evidence, not required documentation links):
 
-- `baseline-2026-10-15.json`: baseline in the uncommitted worktree.
+- `baseline-2026-10-15.json`: tracked baseline report.
 - `2026-10-15T13-33-39-549Z-phase2.json`: earlier 60% pass run, contaminated
   by 429s and fallback; not a reliable quality comparison.
 - `2026-10-16T09-32-52-596Z-phase2b.json`: two understanding timeouts, no 429s.
@@ -41,11 +57,17 @@ Reports in `backend/eval/reports/` (local evidence, not required documentation l
 - `2026-10-16T10-12-17-864Z-phase2d-followups.json`: 1/2 cases pass after the
   candidate-reuse fix. 90s sci-fi passes; French follow-up encountered 503/429
   and fell back.
+- `2026-10-16T15-09-25-650Z-deadline-targeted-gritty.json`: user-authorised
+  single-case live check after deadline work; 0/1, explicit incomplete-search
+  reply at 5,085 ms after understanding exhausted its four-second window.
+  The harness calls this an empty-result case, but it is a timeout, not evidence
+  of no catalogue matches. There was no automatic option replay or second turn.
 
 Only baseline reports are eligible for version control; other runs are
 ignored local files. These summaries persist independently of those files.
-No full live evaluation covers the final reuse fix. The provider has not been
-rechecked since the final 503/429; quota reset and continuing health are unknown.
+No full live evaluation covers the final reuse fix or deadline work. The latest
+bounded live check ended at the understanding deadline, without a successful
+LLM response or observed 429/503; quota reset and continuing health are unknown.
 Quality/latency acceptance remains open. Run instructions and harness limitations
 belong to the [backend README](../backend/README.md) and [design](design-conversational-engine.md).
 

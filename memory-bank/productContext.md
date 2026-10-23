@@ -26,7 +26,10 @@ quality and reliability gaps are tracked in [progress](progress.md).
 
 1. Conversation-first flow
    - Users can start broad and refine in plain language.
-   - Concrete validated requests try results first; vague and origin/format-only requests can clarify. Catalogue-built clarification options are planned, not yet implemented.
+   - Concrete validated requests try results first; vague and origin/format-only
+     requests can clarify using checked catalogue genre directions. If useful
+     choices cannot be confirmed, try results rather than fabricate options;
+     see the [engine design](design-conversational-engine.md).
 2. Freeform follow-up refinement
    - No meta-steering choice UI.
    - Follow-up intent is inferred directly from user text.

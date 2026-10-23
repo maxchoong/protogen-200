@@ -1,14 +1,16 @@
-import express, { Express, Request, Response } from 'express'
+import express, { Express, Request, Response, type NextFunction } from 'express'
 import cors from 'cors'
 import 'dotenv/config'
 import { validateConfig } from './config.js'
 import { PreferenceParser } from './engine/preferenceParser.js'
 import { assessSpecTurn, validateSpec, type RequestSpec, type SpecTurn } from './engine/requestSpec.js'
+import { buildCatalogueDirections, buildCatalogueWidening, resolveCatalogueChoice } from './engine/catalogueChoices.js'
 import { recommendationEngine, recordLLMUsage } from './engine/recommendationEngine.js'
 import type { LLMUsageDiagnostics, RequestRankingDiagnostics } from './engine/recommendationEngine.js'
 import { tmdbClient } from './clients/tmdb.js'
 import { streamingClient } from './clients/streaming.js'
 import { llmClient } from './clients/llm.js'
+import { getTurnDiagnostics, reportTurnStage, TurnStoppedError, throwIfTurnStopped, withTurnDeadline, type TurnDiagnostics } from './engine/turnDeadline.js'
 
 export const app: Express = express()
 const port = process.env.PORT || 3000
@@ -43,6 +45,7 @@ interface RecommendationRequest {
   }
   /** The structured request returned with the previous response, sent back unchanged. */
   spec?: unknown
+  selectedOptionToken?: unknown
 }
 
 interface Recommendation {
@@ -81,6 +84,7 @@ interface ClarificationQuestion {
   question: string                      // The clarification question text
   type: 'select' | 'text' | 'boolean'  // Response type
   options?: string[]                    // For 'select' type only
+  optionTokens?: Record<string, string>
 }
 
 interface RequiresClarification {
@@ -100,6 +104,7 @@ interface ApiResponse {
   assistantMessage?: string
   message?: string
   llmDiagnostics?: LLMUsageDiagnostics
+  requestDiagnostics?: TurnDiagnostics
   // Phase 5: Intent metadata (informational)
   detectedIntent?: {
     mode: 'mood' | 'reference' | 'talent' | 'mixed'
@@ -234,7 +239,7 @@ type ClarificationContextInput = RecommendationRequest['clarificationContext']
 
 /**
  * Probes whether a follow-up turn would retrieve enough titles. Unknown
- * availability (TMDB disabled, timeout or error) counts as viable.
+ * availability is not sufficient evidence for offering a directional option.
  */
 const isViableFollowUp = async (
   description: string,
@@ -250,9 +255,16 @@ const isViableFollowUp = async (
       userTurns: [...priorTurns, followUp]
     }
   })
-  const timeout = new Promise<undefined>(resolve => setTimeout(() => resolve(undefined), OPTION_PROBE_TIMEOUT_MS))
-  const count = await Promise.race([recommendationEngine.estimateAvailableTitles(probePreferences), timeout])
-  return count === undefined || count >= MIN_VIABLE_OPTION_TITLES
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const timeout = new Promise<undefined>(resolve => {
+      timer = setTimeout(() => resolve(undefined), OPTION_PROBE_TIMEOUT_MS)
+    })
+    const count = await Promise.race([recommendationEngine.estimateAvailableTitles(probePreferences), timeout])
+    return count !== undefined && count >= MIN_VIABLE_OPTION_TITLES
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 /**
@@ -363,41 +375,21 @@ const describeActiveFilters = (parsedPreferences: ParsedPreferencesSnapshot): st
   return parts.length > 0 ? parts.join(', ') : undefined
 }
 
-const buildAssistantMessage = async (
-  latestMessage: string,
+const buildAssistantMessage = (
   parsedPreferences: ParsedPreferencesSnapshot,
   recommendations: Recommendation[],
-  limit: number,
-  hasConstraints: boolean,
-  llmDiagnostics: LLMUsageDiagnostics
-): Promise<string | undefined> => {
+  limit: number
+): string => {
   const filters = describeActiveFilters(parsedPreferences)
   const change = parsedPreferences.originChangeNote
-  if (!filters && !hasConstraints) {
-    return undefined
-  }
-
-  if (llmClient.isEnabled()) {
-    const intro = await llmClient.generateResultsIntro(
-      latestMessage,
-      filters || 'none beyond the request',
-      recommendations.map(rec => `${rec.title} (${rec.year})`),
-      change
-    )
-    if (intro) {
-      recordLLMUsage(llmDiagnostics, 'results introduction')
-      return intro
-    }
-  }
-
   if (!filters) {
-    return undefined
+    return `Here ${recommendations.length === 1 ? 'is 1 recommendation' : `are ${recommendations.length} recommendations`} based on your request.`
   }
   const noun = parsedPreferences.contentType === 'tv' ? 'series' : parsedPreferences.contentType === 'movie' ? 'films' : 'titles'
   const count = recommendations.length
   const base = `${change ? `${change} ` : ''}Here ${count === 1 ? 'is 1' : `are ${count}`} ${noun} that fit: ${filters}.`
   return count < limit
-    ? `${base} That is everything I found for those filters. Want me to widen the window?`
+    ? `${base} This search returned fewer than ${limit} matches.`
     : base
 }
 
@@ -875,9 +867,25 @@ const understandRequest = async (
   return turn
 }
 
-app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) => {
+function sendRecommendationResponse(res: Response, body: ApiResponse, status = 200): void {
+  if (res.destroyed || res.writableEnded) return
+  if (!res.locals.recommendationStream) {
+    res.status(status).json(body)
+    return
+  }
+  if (!res.headersSent) {
+    res.status(status).set({
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'X-Accel-Buffering': 'no'
+    })
+  }
+  res.end(`event: ${body.success ? 'response' : 'error'}\ndata: ${JSON.stringify(body)}\n\n`)
+}
+
+async function handleRecommendations(req: Request, res: Response<ApiResponse>) {
   try {
-    const { description, preferences, region, clarificationContext, spec: rawPreviousSpec } = req.body as RecommendationRequest
+    const { description, preferences, region, clarificationContext, spec: rawPreviousSpec, selectedOptionToken } = req.body as RecommendationRequest
     const normalizedDescription = (description || '').trim()
     const hasDescription = normalizedDescription.length > 0
     const hasPreferences = !!(
@@ -891,18 +899,18 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
 
     // Validation: allow description-only OR preferences-only flow
     if (!hasDescription && !hasPreferences) {
-      return res.status(400).json({
+      return sendRecommendationResponse(res, {
         success: false,
         message: 'Provide a description or select at least one preference.'
-      })
+      }, 400)
     }
 
     // Validation: if description is provided, it must be at least 3 chars
     if (hasDescription && normalizedDescription.length < 3) {
-      return res.status(400).json({
+      return sendRecommendationResponse(res, {
         success: false,
         message: 'Description must be at least 3 characters.'
-      })
+      }, 400)
     }
 
     // Log the query (anonymized) for debugging
@@ -925,16 +933,33 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
 
     const llmDiagnostics: LLMUsageDiagnostics = { used: false, stages: [] }
     const previousSpec = rawPreviousSpec ? validateSpec(rawPreviousSpec) : undefined
-    const specTurn = await understandRequest(normalizedDescription, clarificationContext, previousSpec, llmDiagnostics)
+    const isFollowUp = (clarificationContext?.clarificationRound ?? 0) > 0
+    reportTurnStage('understanding')
+    const specTurn = selectedOptionToken !== undefined
+      ? isFollowUp
+        ? resolveCatalogueChoice(selectedOptionToken, previousSpec, clarificationContext?.userClarification?.trim() || '', {
+          description: normalizedDescription, region, preferences: preferencesObject, clarificationContext
+        })
+        : undefined
+      : await understandRequest(normalizedDescription, clarificationContext, previousSpec, llmDiagnostics)
     const responseSpec = specTurn?.spec ?? previousSpec
-    const respond = (body: ApiResponse) => res.json({ ...body, spec: responseSpec })
+    const respond = (body: ApiResponse) => {
+      throwIfTurnStopped()
+      return sendRecommendationResponse(res, {
+        ...body, spec: responseSpec,
+        requestDiagnostics: getTurnDiagnostics('completed'),
+        llmDiagnostics: { ...llmDiagnostics, ...llmClient.getRequestDiagnostics() }
+      })
+    }
 
-    if (previousSpec && (clarificationContext?.clarificationRound ?? 0) > 0 && !specTurn) {
+    if ((previousSpec && isFollowUp && !specTurn) || (selectedOptionToken !== undefined && !specTurn)) {
       console.warn('[Server] Follow-up not applied; preserving saved request and asking for clarification')
       return respond({
         success: true,
         requiresClarification: {
-          context: "I couldn't reliably apply that change, so I've kept your previous request unchanged.",
+          context: selectedOptionToken !== undefined
+            ? "That choice is no longer valid for your current request. I haven't changed your request."
+            : "I couldn't reliably apply that change, so I've kept your previous request unchanged.",
           questions: [{
             id: 'request_update_retry',
             question: 'Please restate the full request, including what you want to keep or change, or try again shortly.',
@@ -945,17 +970,23 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
       })
     }
 
-    const parsedPreferences = PreferenceParser.parse({
+    const engineRequest = {
       description: normalizedDescription,
       region,
       preferences: preferencesObject,
       clarificationContext,
       spec: specTurn?.spec,
       previousSpec,
-      specOperation: specTurn?.operation
-    })
+      specOperation: specTurn?.operation,
+      understandingAttempted: true
+    }
+    const parsedPreferences = PreferenceParser.parse(engineRequest)
     const appliedConstraints = buildAppliedConstraints(parsedPreferences, clarificationContext)
     let interpretationNote = buildInterpretationNote(parsedPreferences)
+    const choiceNote = selectedOptionToken !== undefined && specTurn?.operation === 'remove'
+      ? `Widened as requested: ${clarificationContext?.userClarification?.trim()}. Other request settings are unchanged.`
+      : undefined
+    if (choiceNote) interpretationNote = [choiceNote, interpretationNote].filter(Boolean).join(' ')
 
     const explicitUnsupportedSource = detectUnsupportedCriticSource(normalizedDescription)
     if (explicitUnsupportedSource) {
@@ -1008,27 +1039,19 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
     let activeQuestions: ClarificationQuestion[] = []
     let activeContext = 'I can steer this in a few different directions. Choose one, or type your own direction.'
 
-    if (clarificationQuestions && !bypassInitialClarification) {
+    if (clarificationQuestions && !bypassInitialClarification && specTurn) {
+      reportTurnStage('catalogue_choices')
+      const catalogue = await buildCatalogueDirections(engineRequest, recommendationLimit)
+      if (catalogue) {
+        activeQuestions = catalogue.questions
+        activeContext = catalogue.context
+      }
+    } else if (clarificationQuestions && !bypassInitialClarification) {
       console.log(`[${new Date().toISOString()}] Clarification suggested with ${clarificationQuestions.length} questions`)
 
       activeQuestions = clarificationQuestions
 
-      if (llmClient.isEnabled()) {
-        try {
-          const conversational = await llmClient.generateConversationalClarification(
-            normalizedDescription,
-            clarificationQuestions
-          )
-          if (conversational) {
-            recordLLMUsage(llmDiagnostics, 'clarification wording')
-            activeQuestions = conversational.questions
-            activeContext = conversational.context
-          }
-        } catch (err) {
-          console.warn('[Server] LLM conversational clarification failed, using fallback:', err)
-        }
-      }
-
+      reportTurnStage('catalogue_choices')
       let viableQuestions = await filterViableClarificationQuestions(
         activeQuestions,
         normalizedDescription,
@@ -1072,20 +1095,8 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
 
     // Use real recommendation engine
     const rankingDiagnostics: RequestRankingDiagnostics = {}
-    const recommendations = await recommendationEngine.getRecommendations({
-      description: normalizedDescription,
-      region,
-      preferences: preferences ? {
-        genres: preferences.genres,
-        mood: preferences.mood,
-        contentType: preferences.type as 'movie' | 'tv' | 'both' | undefined,
-        maxRating: preferences.maxRating
-      } : undefined,
-      clarificationContext: clarificationContext,
-      spec: specTurn?.spec,
-      previousSpec,
-      specOperation: specTurn?.operation
-    }, recommendationLimit, llmDiagnostics, rankingDiagnostics)
+    reportTurnStage('retrieval')
+    const recommendations = await recommendationEngine.getRecommendations(engineRequest, recommendationLimit, llmDiagnostics, rankingDiagnostics)
     const retrievalDiagnostics = {
       ...recommendationEngine.getLastRetrievalDiagnostics(),
       genreFilterRelaxed: rankingDiagnostics.genreFilterRelaxed,
@@ -1106,14 +1117,14 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
 
     if (recommendations.length === 0) {
       console.log(`[${new Date().toISOString()}] No recommendations; offering validated ways to widen the search`)
-      const clarification = await buildEmptyResultsClarification(
-        parsedPreferences,
-        normalizedDescription,
-        clarificationContext
-      )
+      reportTurnStage('catalogue_choices')
+      const clarification = specTurn
+        ? await buildCatalogueWidening(engineRequest, recommendationLimit)
+        : await buildEmptyResultsClarification(parsedPreferences, normalizedDescription, clarificationContext)
       if (dateEvidenceNote) {
         clarification.context = `I couldn't confirm any matches for that release window. ${dateEvidenceNote}`
       }
+      if (choiceNote) clarification.context = `${choiceNote} ${clarification.context}`
       return respond({
         success: true,
         recommendations: [],
@@ -1187,13 +1198,10 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
       appliedConstraints,
       interpretationNote,
       assistantMessage: recommendations.length > 0
-        ? await buildAssistantMessage(
-            clarificationContext?.userClarification?.trim() || normalizedDescription,
+        ? buildAssistantMessage(
             parsedPreferences,
             recommendations,
-            recommendationLimit,
-            appliedConstraints.length > 0,
-            llmDiagnostics
+            recommendationLimit
           )
         : undefined,
       detectedIntent: parsedPreferences.discoveryMode && parsedPreferences.intentConfidence !== undefined
@@ -1207,11 +1215,81 @@ app.post('/recommendations', async (req: Request, res: Response<ApiResponse>) =>
       llmDiagnostics
     })
   } catch (error) {
+    if (error instanceof TurnStoppedError) return
+    if (res.writableEnded || res.destroyed) {
+      console.warn('[Turn] Recommendation work failed after the response closed')
+      return
+    }
     console.error('Error in /recommendations:', error)
-    res.status(500).json({
+    sendRecommendationResponse(res, {
       success: false,
       message: 'Internal server error'
-    })
+    }, 500)
+  }
+}
+
+app.post('/recommendations', (req: Request, res: Response<ApiResponse>, next: NextFunction) => {
+  res.locals.recommendationStream = req.accepts(['json', 'text/event-stream']) === 'text/event-stream'
+  const disconnected = new AbortController()
+  const onClose = () => {
+    if (!res.writableFinished) disconnected.abort()
+  }
+  res.once('close', onClose)
+  return llmClient.withRequestBudget(() => withTurnDeadline(
+    () => handleRecommendations(req, res),
+    () => {
+      if (res.writableEnded || res.destroyed) return
+      const previousSpec = req.body?.spec ? validateSpec(req.body.spec) : undefined
+      sendRecommendationResponse(res, {
+        success: true,
+        spec: previousSpec,
+        requiresClarification: {
+          context: previousSpec
+            ? "The search ran out of time before I could finish checking it. I've kept your previous request unchanged; this doesn't mean there are no matches."
+            : "The search ran out of time before I could finish checking it. This doesn't mean there are no matches.",
+          questions: [{
+            id: 'search_timeout', type: 'text',
+            question: 'Please try the same request again, or restate the full request including the change you want.'
+          }]
+        },
+        requestDiagnostics: getTurnDiagnostics('timed_out'),
+        llmDiagnostics: { used: false, stages: [], ...llmClient.getRequestDiagnostics() }
+      })
+    },
+    disconnected.signal,
+    progress => {
+      if (!res.locals.recommendationStream || res.destroyed || res.writableEnded) return
+      if (!res.headersSent) {
+        res.set({
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache, no-transform',
+          'X-Accel-Buffering': 'no'
+        })
+        res.flushHeaders()
+      }
+      res.write(`event: progress\ndata: ${JSON.stringify(progress)}\n\n`)
+    }
+  )).catch((error: unknown) => {
+    if (!(error instanceof TurnStoppedError)) next(error)
+  }).finally(() => res.removeListener('close', onClose))
+})
+
+app.get('/trailers/:type/:id', async (req: Request, res: Response) => {
+  const type = req.params.type
+  const id = String(req.params.id)
+  if ((type !== 'movie' && type !== 'tv') || !/^(tt\d{5,}|[1-9]\d*)$/.test(id) ||
+      (!id.startsWith('tt') && !Number.isSafeInteger(Number(id)))) {
+    return res.status(400).json({ success: false, message: 'Invalid trailer identifier.' })
+  }
+  try {
+    const trailerUrl = id.startsWith('tt')
+      ? (await tmdbClient.getTrailersBatch([{ imdbId: id, type }])).get(id)
+      : await tmdbClient.getVideos(Number(id), type).then(videos =>
+        videos[0] ? `https://www.youtube.com/watch?v=${videos[0].key}` : undefined)
+    return res.json({ success: true, trailerUrl: trailerUrl ?? null })
+  } catch (error) {
+    console.error('Error in /trailers/:type/:id:', error)
+    return res.status(500).json({ success: false, message: 'Unable to load the trailer. Please try again.' })
   }
 })
 

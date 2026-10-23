@@ -108,15 +108,29 @@ and template explanations, and no requests are made to the retired service.
   later requests returned timeouts/503s and a subsequent check returned 429.
   Neither a quota reset nor continued availability has been confirmed since
   that final failure. No live provider check is part of the documentation refresh.
-- Structured understanding uses an 8 s per-attempt timeout and one SDK retry;
-  other LLM stages default to 15 s per attempt and two retries.
-- After SDK retries end with a 429, the client starts a process-local 60 s
-  cooldown. Uncached LLM stages then fall back immediately during that cooldown.
-  This does not fail fast on the first 429 attempt or circuit-break timeouts/503s.
-- A turn can call understanding, clarification wording, batch explanations and
-  a results intro; when understanding fails, the older preference-parser call
-  may also run. Caching affects actual usage. Do not use the historical
+- Application LLM completions do not retry automatically. The recommendation
+  route shares one four-second elapsed LLM window across understanding and
+  optional stages, including time spent retrieving between calls. In-flight
+  completions abort at their remaining deadline; later uncached stages skip.
+  Standalone client calls keep 8 s understanding/15 s other-stage limits.
+- The first 429 starts a process-local 60 s cooldown. Uncached LLM stages then
+  fall back immediately; cached output can still contribute. Timeouts/503s
+  do not start that cooldown.
+- Recommendation turns call structured understanding (unless a signed selection
+  bypasses it), with optional actor-title recovery. Legacy parsing is not retried
+  after route understanding; generated clarification/explanations/intros are no
+  longer on this route's critical path. Those client methods remain available to
+  standalone callers/tests. Caching affects actual usage. Do not use the historical
   two-calls-per-query estimate or daily-capacity figures below.
+- API diagnostics record optional stage/reason/status/duration failure evidence
+  and whether the LLM window was exhausted. Evaluation transcripts retain this
+  evidence. Recommendation work also has a provisional 15-second server deadline,
+  shared with catalogue I/O and disconnect cancellation. Expiry returns an
+  incomplete-search clarification and the prior saved request, not partial
+  matches. This is not live successful-response latency/quality acceptance.
+- The browser receives real progress stages over POST server-sent events;
+  five seconds is a soft responsiveness target, not a provider timeout.
+  Completed validated titles do not wait for generated copy or trailers.
 - Fallback keeps core retrieval available but is not yet equivalent to the
   structured path for conversation continuity. See
   [the engine design](../memory-bank/design-conversational-engine.md) and

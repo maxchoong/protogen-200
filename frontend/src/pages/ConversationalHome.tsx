@@ -1,12 +1,14 @@
-import { useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import {
   ClarificationQuestion,
   ConversationController,
   DetectedIntent,
-  LLMUsageDiagnostics
+  LLMUsageDiagnostics,
+  RequestDiagnostics
 } from '../hooks/useConversation'
 import { buttonClass } from '../buttonStyles'
 import './ConversationalHome.css'
+import type { RecommendationProgress } from '../recommendationStream'
 
 interface ConversationalHomeProps {
   conversation: ConversationController
@@ -20,7 +22,10 @@ interface ConversationalHomeProps {
       cumulativeConstraints?: string[]
       userTurns?: string[]
     },
-    spec?: unknown
+    spec?: unknown,
+    selectedOptionToken?: string,
+    signal?: AbortSignal,
+    onProgress?: (progress: RecommendationProgress) => void
   ) => Promise<{
     recommendations?: any[]
     requiresClarification?: {
@@ -38,6 +43,7 @@ interface ConversationalHomeProps {
     appliedConstraints?: string[]
     interpretationNote?: string
     llmDiagnostics?: LLMUsageDiagnostics
+    requestDiagnostics?: RequestDiagnostics
     assistantMessage?: string
     spec?: unknown
     retrievalDiagnostics?: {
@@ -62,6 +68,7 @@ interface ConversationalHomeProps {
       appliedConstraints?: string[]
       interpretationNote?: string
       llmDiagnostics?: LLMUsageDiagnostics
+      requestDiagnostics?: RequestDiagnostics
       retrievalDiagnostics?: {
         tmdbEnabled: boolean
         usedTmdb: boolean
@@ -72,7 +79,7 @@ interface ConversationalHomeProps {
   ) => void
 }
 
-type PendingPhase = 'initial' | 'slow' | 'delayed' | null
+type PendingPhase = 'initial' | 'delayed' | null
 
 const HARD_PIVOT_CUE_PATTERN = /\b(?:instead|actually|forget that|forget this|different direction|switch gears|new direction|not that|start over)\b/i
 
@@ -84,16 +91,31 @@ export default function ConversationalHome({
   const { state } = conversation
   const [inputValue, setInputValue] = useState('')
   const [pendingPhase, setPendingPhase] = useState<PendingPhase>(null)
+  const [progress, setProgress] = useState<RecommendationProgress>()
   const [lastSubmittedText, setLastSubmittedText] = useState('')
   const activeRequestRef = useRef(0)
+  const activeAbortRef = useRef<AbortController>()
+  const lastSubmittedOptionTokenRef = useRef<string>()
   const inFlightRef = useRef(false)
-  const slowTimerRef = useRef<number>()
   const delayedTimerRef = useRef<number>()
 
-  const clearPendingTimers = () => {
-    if (slowTimerRef.current) {
-      window.clearTimeout(slowTimerRef.current)
+  useEffect(() => {
+    if (state.messages.length === 0) {
+      activeRequestRef.current += 1
+      activeAbortRef.current?.abort()
+      inFlightRef.current = false
+      window.clearTimeout(delayedTimerRef.current)
+      setPendingPhase(null)
     }
+  }, [state.messages.length])
+
+  useEffect(() => () => {
+    activeRequestRef.current += 1
+    activeAbortRef.current?.abort()
+    window.clearTimeout(delayedTimerRef.current)
+  }, [])
+
+  const clearPendingTimers = () => {
     if (delayedTimerRef.current) {
       window.clearTimeout(delayedTimerRef.current)
     }
@@ -102,9 +124,9 @@ export default function ConversationalHome({
   const startPendingState = () => {
     clearPendingTimers()
     setPendingPhase('initial')
+    setProgress(undefined)
     conversation.setLoading(true)
-    slowTimerRef.current = window.setTimeout(() => setPendingPhase('slow'), 2000)
-    delayedTimerRef.current = window.setTimeout(() => setPendingPhase('delayed'), 8000)
+    delayedTimerRef.current = window.setTimeout(() => setPendingPhase('delayed'), 5000)
   }
 
   const stopPendingState = () => {
@@ -127,6 +149,13 @@ export default function ConversationalHome({
     const isFollowUp = state.hasCompletedInitialRequest || shouldTreatAsFollowUp
     const baseQuery = state.lastQuery || trimmed
     const submittedAt = Date.now()
+    const pendingMessage = state.messages[state.messages.length - 1]
+    const selectedOptionToken = shouldAppendUserMessage
+      ? pendingMessage?.clarificationQuestions
+          ?.find(question => (!options.questionId || question.id === options.questionId) && question.optionTokens?.[trimmed])
+          ?.optionTokens?.[trimmed]
+      : lastSubmittedOptionTokenRef.current
+    lastSubmittedOptionTokenRef.current = selectedOptionToken
 
     if (shouldAppendUserMessage) {
       const currentMessage = state.messages[state.messages.length - 1]
@@ -146,6 +175,8 @@ export default function ConversationalHome({
 
     const requestId = activeRequestRef.current + 1
     activeRequestRef.current = requestId
+    const controller = new AbortController()
+    activeAbortRef.current = controller
     startPendingState()
 
     const askedQuestionIds = state.messages.flatMap(message =>
@@ -197,7 +228,12 @@ export default function ConversationalHome({
               userTurns
             }
           : undefined,
-        isFollowUp ? state.requestSpec : undefined
+        isFollowUp ? state.requestSpec : undefined,
+        selectedOptionToken,
+        controller.signal,
+        next => {
+          if (requestId === activeRequestRef.current && !controller.signal.aborted) setProgress(next)
+        }
       )
 
       // Ignore stale responses from canceled or superseded requests.
@@ -213,6 +249,7 @@ export default function ConversationalHome({
           text: response.requiresClarification.context,
           timestamp: Date.now(),
           clarificationQuestions: response.requiresClarification.questions,
+          requestDiagnostics: response.requestDiagnostics,
           detectedIntent: response.detectedIntent,
           llmDiagnostics: response.llmDiagnostics
         })
@@ -231,7 +268,8 @@ export default function ConversationalHome({
           recommendations: response.recommendations,
           detectedIntent: response.detectedIntent,
           turnOperation: response.turnOperation,
-          llmDiagnostics: response.llmDiagnostics
+          llmDiagnostics: response.llmDiagnostics,
+          requestDiagnostics: response.requestDiagnostics
         })
 
         conversation.updateClarificationRound(0)
@@ -244,6 +282,7 @@ export default function ConversationalHome({
             appliedConstraints: response.appliedConstraints,
             interpretationNote: response.interpretationNote,
             llmDiagnostics: response.llmDiagnostics,
+            requestDiagnostics: response.requestDiagnostics,
             retrievalDiagnostics: response.retrievalDiagnostics
           })
         }
@@ -276,6 +315,7 @@ export default function ConversationalHome({
       conversation.setError(err instanceof Error ? err.message : 'Something went wrong')
     } finally {
       if (requestId === activeRequestRef.current) {
+        activeAbortRef.current = undefined
         stopPendingState()
       }
     }
@@ -297,6 +337,8 @@ export default function ConversationalHome({
   const handleCancelPending = () => {
     if (!state.isLoading) return
     activeRequestRef.current += 1
+    activeAbortRef.current?.abort()
+    activeAbortRef.current = undefined
     stopPendingState()
     conversation.setError('Request canceled. You can refine your message and try again.')
   }
@@ -316,12 +358,17 @@ export default function ConversationalHome({
   const latestMessage = state.messages[state.messages.length - 1]
   const showClarification =
     latestMessage?.role === 'assistant' && latestMessage?.clarificationQuestions
-  const pendingLabel =
-    pendingPhase === 'delayed'
-      ? 'Still refining your next round of results.'
-      : pendingPhase === 'slow'
-        ? 'Refining your selections.'
-        : 'Finding your best matches.'
+  const progressLabels: Record<RecommendationProgress['stage'], string> = {
+    understanding: 'Understanding your request.',
+    retrieval: 'Searching the catalogue.',
+    ranking: 'Comparing candidate matches.',
+    verification: 'Checking title details against your request.',
+    catalogue_choices: 'Checking useful search directions.'
+  }
+  const pendingLabel = [
+    progress ? progressLabels[progress.stage] : 'Sending your request.',
+    pendingPhase === 'delayed' ? 'This is taking longer than hoped; you can cancel at any time.' : ''
+  ].filter(Boolean).join(' ')
 
   return (
     <div className="conversational-home flex h-full flex-col text-text">
@@ -441,23 +488,21 @@ export default function ConversationalHome({
                   <span className="pending-dot"></span>
                 </div>
 
-                {pendingPhase === 'delayed' && (
-                  <div className="mt-3">
+                <div className="mt-3">
                     <button
                       onClick={handleCancelPending}
                       className={buttonClass({ variant: 'chip', size: 'xs' })}
                     >
                       Cancel curation
                     </button>
-                  </div>
-                )}
+                </div>
               </div>
             </div>
           )}
 
           {state.error && (
             <div className="rounded-lg border px-4 py-3 text-sm [background-color:var(--color-alert-bg)] [border-color:var(--color-alert-border)] [color:var(--color-alert-text)]">
-              <p className="font-medium">Connection issue</p>
+              <p className="font-medium">Request not completed</p>
               <p className="mt-1">{state.error}</p>
               {lastSubmittedText && (
                 <button

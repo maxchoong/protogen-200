@@ -42,7 +42,8 @@ Status: current integration reference; setup commands belong to the READMEs.
 - Retrieve candidate titles using TMDB and/or OMDb strategies
 - Apply content-safety filtering
 - Rank and shape recommendations
-- Enrich recommendation results with trailers; serve availability separately on details-panel open
+- Deliver checked recommendations without optional copy/trailers; load trailers
+  and availability separately on details-panel open
 - Attach applied constraints and interpretation notes for transparent conversational responses
 
 ---
@@ -79,16 +80,27 @@ contract example drifting from structured state and lazy availability.
 ## Recommendation Pipeline
 
 1. Apply basic request input checks (not complete runtime schema validation).
-2. Attempt full-request understanding, gate usable updates and overlay successful output. Failed saved-spec follow-ups preserve state and ask without retrieval; first/legacy requests can use rules. Explicit controls retain precedence.
+2. Resolve signed catalogue selections without repeat understanding; otherwise
+   attempt full-request understanding, gate usable updates and overlay successful
+   output. Failed saved-spec follow-ups/stale selections preserve state and ask
+   without retrieval; first/legacy requests can use rules. Explicit controls retain precedence.
 3. Detect refinement modes (e.g., mainstream paging, critics proxy, genre aliases).
 4. Retrieve candidates from TMDB and/or OMDb depending on intent and provider availability; changed structured scope requires fresh retrieval rather than only re-ranking previous results.
 5. Normalize and enrich candidates (runtime, genres, language, cast/director where available).
 6. Apply metadata-dependent safety filters; see [safety boundaries](systemPatterns.md#validation-and-safety-pattern).
 7. Rank with mode-aware scoring, common date/format/year/origin/language/exclusion gates and relaxable genre matching; missing-language and rating limitations are in the [engine design](design-conversational-engine.md).
-8. Generate "Why this?" explanations using LLM batch mode or fallback templates.
+8. Build deterministic initial "Why this?" explanations; optional LLM copy is not awaited.
 9. Leave availability unfetched in the recommendation response; the frontend requests it by IMDb ID and region when details open.
-10. Fetch trailers using TMDB when possible.
-11. Return recommendations or clarification with the request `spec`, constraints, intent metadata, diagnostics and optional reply/interpretation text. Some result paths omit the intro; the frontend supplies generic text.
+10. Return recommendations/clarification and `spec`, constraints, intent metadata,
+    stage diagnostics and reply/interpretation text. JSON callers keep their
+    contract; browser POST SSE callers receive real progress then one terminal event.
+11. Fetch trailers lazily through `/trailers/:type/:id` when details open.
+
+Structured clarification/widening previews reuse candidate retrieval, ranking
+and final metadata gates, skipping all LLM work and trailer loading. Choices
+are checked and cached rather than inferred from raw discovery totals. Exact
+bounds, token contract and remaining latency limitations belong to the
+[engine design](design-conversational-engine.md#catalogue-choice-slice-october-16-locally-implemented).
 
 ---
 
@@ -114,10 +126,20 @@ contract example drifting from structured state and lazy availability.
 - Gemini is now configured locally via `LLM_API_KEY`, `LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/`, and `LLM_MODEL=gemini-3.5-flash-lite`. Both live smoke-check paths passed October 2, 2026; the 2.5 Flash-Lite model returned 404 despite catalog presence. Keys stay in the ignored local environment file. Restart backend processes after environment changes.
 - Used for:
   - full updated structured request and turn operation
-  - older enhanced preference parsing when no successful spec is available
-  - batch recommendation explanations
-  - clarification wording and results intros
-- Understanding: JSON-object mode, 700 output tokens, 8 s per-attempt timeout, one retry. Other stages default to 15 s per attempt/two retries. A process-local 60 s cooldown follows a completed 429 failure; retries happen before the cooldown starts.
+  - optional actor-title recovery
+  - older preference parsing and copy methods remain for standalone/legacy calls;
+    the route no longer repeats parsing or awaits generated copy
+- Understanding: JSON-object mode, 700 output tokens. Recommendation LLM work
+  shares a four-second elapsed window, with remaining-time cancellation and no
+  automatic SDK retries. Standalone calls retain 8 s understanding/15 s other
+  limits. The first 429 starts a process-local 60 s cooldown; timeout/503 failures
+  do not. Request-local failure evidence is returned and retained in eval
+  transcripts. See the [latency design](design-conversational-engine.md#latency-reliability-slice-october-16-locally-implemented)
+  for LLM-specific limits. Recommendation work now also runs inside the
+  [delivery deadline](design-conversational-engine.md#progressive-delivery-refinement-october-16-locally-implemented):
+  catalogue/LLM I/O shares cancellation and expiry asks without changing saved
+  state. A soft five-second target sits inside a provisional 15-second overall
+  ceiling. Other endpoints retain existing provider timeouts; live acceptance is open.
 - Multiple LLM stages can run per turn. Do not assume two provider requests per query or a fixed daily capacity. Dated provider failures and latency results belong to [progress](progress.md), not a continuing health guarantee.
 - Fallback mode keeps the app usable without a token
 
